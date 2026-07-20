@@ -1,0 +1,7 @@
+<!-- @author kongweiguang -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 沿用应用图标的圆角轮廓与 M↓ 识别符，适合文件树的小尺寸场景。 -->
+  <rect x="2.75" y="2.75" width="18.5" height="18.5" rx="4.65"/>
+  <path d="M6.5 15.75v-7.5l3 3.35 3-3.35v7.5"/>
+  <path d="M16.9 8.25v7.5m-2.35-2.35 2.35 2.35 2.35-2.35"/>
+</svg>

@@ -1,0 +1,37 @@
+# @author kongweiguang
+
+[package]
+name = "gmark-large-document"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chardetng = "0.1"
+crc32fast = "1"
+csv = "1"
+encoding_rs = "0.8"
+file-id = "0.2"
+gmark-recovery-codec = { path = "../gmark-recovery-codec" }
+gpui_sum_tree = "0.2.2"
+lru = "0.18.1"
+memchr = "2"
+regex = "1"
+regex-automata = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "=3.27.0"
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+atomicwrites = "0.4.4"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

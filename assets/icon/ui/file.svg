@@ -1,0 +1,7 @@
+<!-- @author kongweiguang -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 未知文件类型同样使用 gmark 圆角容器，折角负责保留通用文件语义。 -->
+  <rect x="2.75" y="2.75" width="18.5" height="18.5" rx="4.65"/>
+  <path d="M9 7.25h4.5l3 3v6.5H9z"/>
+  <path d="M13.5 7.25v3h3"/>
+</svg>

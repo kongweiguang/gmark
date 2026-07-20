@@ -1,0 +1,4 @@
+# @author kongweiguang
+
+[alias]
+xtask = "run --package xtask --"

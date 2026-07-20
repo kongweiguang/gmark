@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- @author kongweiguang -->
+<installer-gui-script minSpecVersion="1">
+    <title>gmark</title>
+    <welcome>gmark is a source-first Markdown editor built with Rust and GPUI.</welcome>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="10.15"/>
+        </allowed-os-versions>
+    </volume-check>
+    <choices-outline>
+        <line choice="default">
+            <line choice="gmark"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="gmark" title="Install gmark" description="Install gmark to /Applications">
+        <pkg-ref id="com.kongweiguang.gmark"/>
+    </choice>
+    <pkg-ref id="com.kongweiguang.gmark" version="__GMARK_VERSION__" onConclusion="none">#gmark-component.pkg</pkg-ref>
+</installer-gui-script>

@@ -1,0 +1,321 @@
+# @author kongweiguang
+name: Build and Release Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Exact release tag, for example v0.1.0"
+        required: true
+        type: string
+      release_title:
+        description: "Optional release title"
+        required: false
+        type: string
+      release_notes:
+        description: "Optional Markdown release notes"
+        required: false
+        type: string
+      channel:
+        description: "Signed update channel"
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta, nightly]
+      rollout_percent:
+        description: "Percentage of clients allowed to see this update"
+        required: true
+        default: 100
+        type: number
+      paused:
+        description: "Publish the signed update manifest in paused state"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release identity
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup show
+      - name: Match tag, channel, and Cargo version
+        id: identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          package_version="$(cargo metadata --no-deps --locked --format-version 1 \
+            | jq -r '.packages[] | select(.name == "gmark") | .version')"
+          test "v$package_version" = "$RELEASE_TAG"
+          if [[ "$RELEASE_CHANNEL" == stable && "$package_version" == *-* ]]; then
+            echo "stable channel cannot publish a prerelease"; exit 1
+          fi
+          if [[ "$RELEASE_CHANNEL" == beta && "$package_version" != *-* ]]; then
+            echo "beta channel requires a prerelease"; exit 1
+          fi
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Windows release quality gate
+    needs: validate
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-features --locked -j 1
+      - run: cargo test -p gmark-fuzz-support --test corpus_replay --locked -j 1
+      - name: Validate workflows
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+          python scripts/validate-workflows.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+
+  windows:
+    name: Windows x64 Setup EXE
+    needs: [validate, quality]
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Expose update verification key
+        shell: pwsh
+        env:
+          UPDATE_PUBLIC_KEY_BASE64: ${{ vars.GMARK_UPDATE_PUBLIC_KEY_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:UPDATE_PUBLIC_KEY_BASE64)) { throw 'update public key is required' }
+          $key = [Convert]::FromBase64String($env:UPDATE_PUBLIC_KEY_BASE64)
+          if ($key.Length -ne 32) { throw 'Ed25519 public key must be 32 bytes' }
+          "GMARK_UPDATE_PUBLIC_KEY_BASE64=$env:UPDATE_PUBLIC_KEY_BASE64" >> $env:GITHUB_ENV
+      - run: cargo build --release --locked
+      - name: Stage payload
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/payload | Out-Null
+          Copy-Item target/release/gmark.exe dist/payload/gmark.exe
+          Copy-Item assets/icon/gmark.ico dist/payload/gmark.ico
+          Copy-Item README.md,PRIVACY.md,SECURITY.md,LICENSE,NOTICE dist/payload/
+      - name: Install pinned Inno Setup
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 -y --no-progress
+      - name: Compile installer
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'ISCC.exe is missing' }
+          $arguments = @(
+            "/DMyAppVersion=$env:PACKAGE_VERSION"
+            "/DSourceDir=$([IO.Path]::GetFullPath('dist/payload'))"
+            "/DOutputDir=$([IO.Path]::GetFullPath('dist'))"
+            'resources/windows/gmark.iss'
+          )
+          & $compiler $arguments
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
+      - name: Install, reinstall, and uninstall smoke
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/smoke-windows-installer.ps1 -Installer "dist/gmark-v${{ needs.validate.outputs.version }}-windows-x86_64-setup.exe" -ExpectedVersion "${{ needs.validate.outputs.version }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gmark-windows-x86_64-installer
+          path: dist/gmark-v${{ needs.validate.outputs.version }}-windows-x86_64-setup.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64 AppImage and DEB
+    needs: [validate, quality]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake clang libssl-dev \
+            libfontconfig1-dev libfreetype6-dev libx11-dev libxcb1-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxdamage-dev libxfixes-dev libxrender-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev \
+            libvulkan-dev desktop-file-utils
+      - name: Expose update verification key
+        env:
+          UPDATE_PUBLIC_KEY_BASE64: ${{ vars.GMARK_UPDATE_PUBLIC_KEY_BASE64 }}
+        run: |
+          test "$(printf '%s' "$UPDATE_PUBLIC_KEY_BASE64" | base64 --decode | wc -c)" -eq 32
+          echo "GMARK_UPDATE_PUBLIC_KEY_BASE64=$UPDATE_PUBLIC_KEY_BASE64" >> "$GITHUB_ENV"
+      - run: cargo build --release --locked
+      - name: Build installable packages
+        run: bash scripts/package-linux-installers.sh "${{ needs.validate.outputs.version }}" dist
+      - name: Install lifecycle smoke
+        run: sudo -n true && bash scripts/smoke-linux-installers.sh "dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.AppImage" "dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.deb" "${{ needs.validate.outputs.version }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gmark-linux-x86_64-installers
+          path: |
+            dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.AppImage
+            dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.deb
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }} DMG
+    needs: [validate, quality]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            os: macos-15
+          - arch: x86_64
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-${{ matrix.arch }}
+      - name: Expose update verification key
+        shell: bash
+        env:
+          UPDATE_PUBLIC_KEY_BASE64: ${{ vars.GMARK_UPDATE_PUBLIC_KEY_BASE64 }}
+        run: |
+          test "$(printf '%s' "$UPDATE_PUBLIC_KEY_BASE64" | base64 --decode | wc -c)" -eq 32
+          echo "GMARK_UPDATE_PUBLIC_KEY_BASE64=$UPDATE_PUBLIC_KEY_BASE64" >> "$GITHUB_ENV"
+      - run: cargo build --release --locked
+      - name: Build unsigned installable DMG
+        run: bash scripts/package-macos-dmg.sh "${{ needs.validate.outputs.version }}" "${{ matrix.arch }}" "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg"
+      - name: Mount and verify DMG
+        run: bash scripts/smoke-macos-dmg.sh "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg" "${{ needs.validate.outputs.version }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gmark-macos-${{ matrix.arch }}-installer
+          path: dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish installers and signed updater manifest
+    needs: [validate, windows, linux, macos]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: gmark-*-installer*
+          path: dist
+          merge-multiple: true
+      - name: Verify installer set and create checksums
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "gmark-v$VERSION-windows-x86_64-setup.exe"
+            "gmark-v$VERSION-macos-aarch64.dmg"
+            "gmark-v$VERSION-macos-x86_64.dmg"
+            "gmark-v$VERSION-linux-x86_64.AppImage"
+            "gmark-v$VERSION-linux-x86_64.deb"
+          )
+          for file in "${expected[@]}"; do test -f "dist/$file"; done
+          (cd dist && sha256sum "${expected[@]}" > checksums-gmark-installers.txt)
+      - name: Create release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          current="$(git rev-parse HEAD)"
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$current"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$RELEASE_TAG" -m "${RELEASE_TITLE:-gmark $RELEASE_TAG}" "$current"
+            git push origin "$RELEASE_TAG"
+          fi
+      - name: Create and verify signed manifests
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          ROLLOUT_PERCENT: ${{ inputs.rollout_percent }}
+          PAUSED: ${{ inputs.paused }}
+          UPDATE_PRIVATE_KEY_PEM_BASE64: ${{ secrets.GMARK_UPDATE_PRIVATE_KEY_PEM_BASE64 }}
+          UPDATE_PUBLIC_KEY_BASE64: ${{ vars.GMARK_UPDATE_PUBLIC_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$UPDATE_PRIVATE_KEY_PEM_BASE64"
+          test -n "$UPDATE_PUBLIC_KEY_BASE64"
+          private_key="$RUNNER_TEMP/gmark-update-private.pem"
+          trap 'rm -f "$private_key"' EXIT
+          printf '%s' "$UPDATE_PRIVATE_KEY_PEM_BASE64" | base64 --decode > "$private_key"
+          chmod 600 "$private_key"
+          common=(--version "$PACKAGE_VERSION" --release-tag "$RELEASE_TAG" --dist dist)
+          update=("${common[@]}" --private-key "$private_key" --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" --output dist/update-manifest.json --rollout-percent "$ROLLOUT_PERCENT")
+          release=(create "${common[@]}" --channel "$RELEASE_CHANNEL" --private-key "$private_key" --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" --output dist/release-artifacts.json --rollout-percent "$ROLLOUT_PERCENT")
+          if [[ "$PAUSED" == true ]]; then update+=(--paused); release+=(--paused); fi
+          python scripts/create-update-manifest.py "${update[@]}"
+          python scripts/verify-update-manifest.py --manifest dist/update-manifest.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --expected-rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
+          python scripts/release-artifact-manifest.py "${release[@]}"
+          python scripts/release-artifact-manifest.py verify --manifest dist/release-artifacts.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --channel "$RELEASE_CHANNEL" --rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
+      - name: Publish or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+          USER_NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<'EOF'
+          ## Installers
+
+          - Windows x64: run the Setup EXE.
+          - macOS: open the DMG and drag gmark to Applications. These builds are unsigned,
+            so macOS requires manual approval in Privacy & Security.
+          - Linux x64: use the AppImage or install the DEB.
+
+          gmark verifies signed update manifests and installer hashes before starting an update.
+          Windows installers are currently unsigned and may trigger SmartScreen.
+          gmark is open source under GPL-3.0-or-later.
+          EOF
+          if [[ -n "$USER_NOTES" ]]; then printf '\n%s\n' "$USER_NOTES" >> "$notes"; fi
+          title="${RELEASE_TITLE:-gmark $RELEASE_TAG}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+            gh release edit "$RELEASE_TAG" --title "$title" --notes-file "$notes"
+          else
+            args=("$RELEASE_TAG" dist/* --title "$title" --notes-file "$notes" --verify-tag)
+            if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
+            gh release create "${args[@]}"
+          fi

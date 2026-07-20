@@ -1,0 +1,41 @@
+# @author kongweiguang
+
+[package]
+name = "gmark-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+gmark-fuzz-support = { path = "../crates/gmark-fuzz-support" }
+libfuzzer-sys = "0.4"
+pulldown-cmark = "=0.13.4"
+
+[[bin]]
+name = "source_document_transactions"
+path = "fuzz_targets/source_document_transactions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "markdown_parser"
+path = "fuzz_targets/markdown_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "recovery_journal_frames"
+path = "fuzz_targets/recovery_journal_frames.rs"
+test = false
+doc = false
+bench = false

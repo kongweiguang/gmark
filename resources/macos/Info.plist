@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- @author kongweiguang -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>gmark</string>
+  <key>CFBundleExecutable</key>
+  <string>gmark</string>
+  <key>CFBundleIconFile</key>
+  <string>gmark</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.kongweiguang.gmark</string>
+  <key>CFBundleName</key>
+  <string>gmark</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © 2026 kongweiguang</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>10.15</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Markdown Document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>net.daringfireball.markdown</string>
+        <string>public.plain-text</string>
+        <string>public.json</string>
+        <string>public.comma-separated-values-text</string>
+        <string>public.tab-separated-values-text</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>md</string>
+        <string>markdown</string>
+        <string>txt</string>
+        <string>log</string>
+        <string>json</string>
+        <string>jsonl</string>
+        <string>ndjson</string>
+        <string>csv</string>
+        <string>tsv</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

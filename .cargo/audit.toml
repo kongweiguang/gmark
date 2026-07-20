@@ -1,0 +1,12 @@
+# @author kongweiguang
+
+[advisories]
+# 这两个 advisory 当前只命中 xcb build script 与 wayland-scanner proc-macro。
+# scripts/verify-audit-exceptions.py 在 cargo audit 前固定验证依赖拓扑，防止例外扩散到运行时。
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+informational_warnings = ["unmaintained", "unsound"]
+severity_threshold = "low"
+
+[yanked]
+enabled = true
+update_index = true

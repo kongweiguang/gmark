@@ -1,0 +1,20 @@
+# @author kongweiguang
+
+/target
+.DS_Store
+/dist
+.idea/
+.vscode/
+.updeng/
+.agents/
+.codegraph/
+.env
+*.log
+*.tmp
+__pycache__/
+*.py[cod]
+
+/.agents
+/.codex
+/docs
+AGENTS.md

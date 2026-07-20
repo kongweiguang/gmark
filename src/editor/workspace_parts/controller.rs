@@ -1,0 +1,427 @@
+// @author kongweiguang
+
+use super::*;
+
+impl Editor {
+    pub(in crate::editor) fn workspace_docked_open_preference(&self) -> bool {
+        self.workspace.docked_open_preference.unwrap_or(true)
+    }
+
+    pub(in crate::editor) fn restore_workspace_docked_open_preference(
+        &mut self,
+        open: Option<bool>,
+    ) {
+        let Some(open) = open else {
+            return;
+        };
+        self.workspace.docked_open_preference = Some(open);
+        if self.workspace.compact_layout != Some(true) {
+            self.workspace.is_open = open;
+        }
+    }
+
+    pub(in crate::editor) fn sync_workspace_visibility_for_viewport(
+        &mut self,
+        viewport_width: f32,
+    ) {
+        let compact = workspace_uses_overlay(viewport_width);
+        if self.workspace.compact_layout == Some(compact) {
+            return;
+        }
+
+        self.workspace.compact_layout = Some(compact);
+        self.workspace.is_open = if compact {
+            false
+        } else {
+            self.workspace_docked_open_preference()
+        };
+    }
+
+    pub(in crate::editor) fn workspace_panel_width(&self) -> Option<f32> {
+        self.workspace.panel_width
+    }
+
+    pub(in crate::editor) fn restore_workspace_panel_width(&mut self, width: Option<f32>) {
+        self.workspace.panel_width = width
+            .filter(|width| width.is_finite())
+            .map(|width| width.clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH));
+        self.workspace.resize_session = None;
+    }
+
+    pub(super) fn start_workspace_resize(
+        &mut self,
+        pointer_x: Pixels,
+        panel_width: f32,
+        position: WorkspaceSidebarPosition,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.resize_session = Some(WorkspaceResizeSession {
+            start_x: pointer_x,
+            start_width: panel_width,
+            direction: if position == WorkspaceSidebarPosition::Left {
+                1.0
+            } else {
+                -1.0
+            },
+        });
+        cx.notify();
+    }
+
+    pub(super) fn ensure_workspace_resize_focus_handle(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
+        self.workspace
+            .resize_focus_handle
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
+    pub(super) fn ensure_workspace_header_focus_handles(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> [FocusHandle; 3] {
+        if self.workspace.header_focus_handles.is_none() {
+            self.workspace.header_focus_handles = Some(std::array::from_fn(|_| cx.focus_handle()));
+        }
+        self.workspace
+            .header_focus_handles
+            .as_ref()
+            .expect("workspace header focus handles must be initialized")
+            .clone()
+    }
+
+    pub(super) fn on_workspace_resize_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        rendered_width: f32,
+        position: WorkspaceSidebarPosition,
+        cx: &mut Context<Self>,
+    ) {
+        let step = if event.keystroke.modifiers.shift {
+            WORKSPACE_RESIZE_KEYBOARD_LARGE_STEP
+        } else {
+            WORKSPACE_RESIZE_KEYBOARD_STEP
+        };
+        let current = self.workspace.panel_width.unwrap_or(rendered_width);
+        let next = match (event.keystroke.key.as_str(), position) {
+            ("left", WorkspaceSidebarPosition::Left)
+            | ("right", WorkspaceSidebarPosition::Right) => {
+                Some((current - step).clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH))
+            }
+            ("right", WorkspaceSidebarPosition::Left)
+            | ("left", WorkspaceSidebarPosition::Right) => {
+                Some((current + step).clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH))
+            }
+            ("home", _) => Some(WORKSPACE_PANEL_MIN_WIDTH),
+            ("end", _) => Some(WORKSPACE_PANEL_MAX_WIDTH),
+            // 自动宽度继续由 viewport ratio 算法决定，窗口缩放时能自然适配。
+            ("enter", _) => None,
+            _ => return,
+        };
+        if self.workspace.panel_width != next {
+            self.workspace.panel_width = next;
+            self.workspace.resize_session = None;
+            self.schedule_workspace_session_save(cx);
+            cx.notify();
+        }
+        cx.stop_propagation();
+    }
+
+    pub(in crate::editor) fn on_workspace_resize_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.workspace.resize_session else {
+            return;
+        };
+        let width = (session.start_width
+            + f32::from(event.position.x - session.start_x) * session.direction)
+            .clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH);
+        if self.workspace.panel_width != Some(width) {
+            self.workspace.panel_width = Some(width);
+            cx.notify();
+        }
+        cx.stop_propagation();
+    }
+
+    pub(in crate::editor) fn on_workspace_resize_mouse_up(
+        &mut self,
+        _event: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace.resize_session.take().is_some() {
+            // 拖动只更新内存；释放时保存一次，避免高频写入会话文件。
+            self.schedule_workspace_session_save(cx);
+            cx.notify();
+            cx.stop_propagation();
+        }
+    }
+
+    pub(super) fn set_workspace_tooltip_hover(
+        &mut self,
+        id: &'static str,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.tooltip_task = None;
+        self.workspace.tooltip_hovered = hovered.then_some(id);
+        self.workspace.tooltip_visible = None;
+        if hovered {
+            self.workspace.tooltip_task = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TOOLTIP_DELAY).await;
+                let _ = this.update(cx, |editor, cx| {
+                    if editor.workspace.tooltip_hovered == Some(id) {
+                        editor.workspace.tooltip_visible = Some(id);
+                        editor.workspace.tooltip_task = None;
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        cx.notify();
+    }
+
+    pub(in crate::editor) fn set_workspace_operation_error(
+        &mut self,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.operation_error = Some(error);
+        self.workspace.is_open = true;
+        cx.notify();
+    }
+
+    pub(in crate::editor) fn workspace_can_undo_file_operation(&self) -> bool {
+        self.workspace.undo_file_operation.is_some() && self.workspace.file_operation_task.is_none()
+    }
+
+    pub(in crate::editor) fn workspace_context_target_is_root(&self) -> bool {
+        matches!(
+            &self.context_menu,
+            Some(ContextMenuState::Workspace { path, .. })
+                if self.workspace.root.as_ref() == Some(path)
+        )
+    }
+
+    pub(crate) fn toggle_workspace_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let compact = workspace_uses_overlay(f32::from(window.viewport_size().width));
+        if self.workspace.is_open {
+            self.workspace.is_open = false;
+            self.focus_editor_after_workspace(window, cx);
+        } else {
+            self.close_menu_bar(cx);
+            self.dismiss_contextual_overlays(cx);
+            self.workspace.is_open = true;
+            self.sync_workspace_models(cx);
+            self.workspace.keyboard_zone = WorkspaceKeyboardZone::Tabs;
+            self.ensure_workspace_focus_handle(cx).focus(window);
+        }
+        if !compact {
+            self.workspace.docked_open_preference = Some(self.workspace.is_open);
+            self.schedule_workspace_session_save(cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn ensure_workspace_focus_handle(&mut self, cx: &mut Context<Self>) -> FocusHandle {
+        self.workspace
+            .focus_handle
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
+    pub(super) fn focus_editor_after_workspace(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self
+            .active_entity_id
+            .and_then(|id| self.focusable_entity_by_id(id))
+            .or_else(|| {
+                self.first_focusable_entity_id(cx)
+                    .and_then(|id| self.focusable_entity_by_id(id))
+            });
+        if let Some(target) = target {
+            target.read(cx).focus_handle.focus(window);
+        }
+    }
+
+    pub(crate) fn on_toggle_workspace_action(
+        &mut self,
+        _: &crate::components::ToggleWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_workspace_drawer(window, cx);
+    }
+
+    pub(crate) fn on_quick_open_action(
+        &mut self,
+        _: &crate::components::QuickOpen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_menu_bar(cx);
+        self.dismiss_contextual_overlays(cx);
+        self.sync_workspace_file_tree(cx);
+        let input = cx.new(|cx| {
+            let mut block = Block::with_record(cx, BlockRecord::paragraph(String::new()));
+            block.set_source_raw_mode();
+            block
+        });
+        cx.subscribe(&input, Self::on_quick_open_input_event)
+            .detach();
+        input.read(cx).focus_handle.focus(window);
+        self.workspace.quick_open = Some(QuickOpenState {
+            input,
+            results: Vec::new(),
+            selected: 0,
+            running: false,
+            generation: 0,
+            task: None,
+        });
+        self.schedule_quick_open(cx);
+        cx.notify();
+    }
+
+    pub(super) fn on_quick_open_input_event(
+        &mut self,
+        _: Entity<Block>,
+        event: &BlockEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, BlockEvent::Changed) {
+            self.schedule_quick_open(cx);
+        }
+    }
+
+    pub(super) fn schedule_quick_open(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.workspace.quick_open.as_mut() else {
+            return;
+        };
+        state.generation = state.generation.wrapping_add(1);
+        state.task = None;
+        state.running = true;
+        let generation = state.generation;
+        let query = state.input.read(cx).display_text().trim().to_owned();
+        let Some(root) = self.workspace.root.clone() else {
+            state.results.clear();
+            state.running = false;
+            return;
+        };
+        let mut paths = Vec::new();
+        if let Some(tree) = self.workspace.file_tree.as_ref() {
+            collect_markdown_paths(tree, &mut paths);
+        }
+        if paths.is_empty() && self.workspace.file_scanning {
+            cx.notify();
+            return;
+        }
+        state.task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            cx.background_executor().timer(QUICK_OPEN_DEBOUNCE).await;
+            let results = cx
+                .background_spawn(async move { rank_quick_open_paths(&root, paths, &query) })
+                .await;
+            let _ = this.update(cx, |editor, cx| {
+                let Some(state) = editor.workspace.quick_open.as_mut() else {
+                    return;
+                };
+                if state.generation != generation {
+                    return;
+                }
+                state.task = None;
+                state.running = false;
+                state.results = results;
+                state.selected = 0;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    pub(in crate::editor) fn handle_quick_open_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(state) = self.workspace.quick_open.as_mut() else {
+            return false;
+        };
+        match event.keystroke.key.as_str() {
+            "up" => state.selected = state.selected.saturating_sub(1),
+            "down" => {
+                state.selected = (state.selected + 1).min(state.results.len().saturating_sub(1));
+            }
+            "enter" => {
+                let path = state
+                    .results
+                    .get(state.selected)
+                    .map(|result| result.path.clone());
+                self.workspace.quick_open = None;
+                if let Some(path) = path {
+                    self.open_workspace_file(path, window, cx);
+                }
+            }
+            "escape" => self.workspace.quick_open = None,
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
+    pub(in crate::editor) fn handle_workspace_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.workspace.is_open || self.workspace.operation_dialog.is_some() {
+            return false;
+        }
+        let panel_focused = self
+            .workspace
+            .focus_handle
+            .as_ref()
+            .is_some_and(|focus| focus.is_focused(window));
+        let search_focused = self
+            .workspace
+            .search_input
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle.is_focused(window));
+        if !panel_focused && !search_focused {
+            return false;
+        }
+
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.alt || modifiers.function {
+            return false;
+        }
+        let key = event.keystroke.key.as_str();
+        if search_focused {
+            return self.handle_workspace_search_input_key(key, modifiers.shift, window, cx);
+        }
+
+        let handled = match self.workspace.keyboard_zone {
+            WorkspaceKeyboardZone::Tabs => {
+                self.handle_workspace_tabs_key(key, modifiers.shift, window, cx)
+            }
+            WorkspaceKeyboardZone::Body => self.handle_workspace_body_key(key, window, cx),
+            WorkspaceKeyboardZone::SearchOptions => {
+                self.handle_workspace_search_options_key(key, modifiers.shift, window, cx)
+            }
+            WorkspaceKeyboardZone::SearchResults => {
+                self.handle_workspace_search_results_key(key, modifiers.shift, window, cx)
+            }
+        };
+        if handled {
+            cx.notify();
+        }
+        handled
+    }
+}

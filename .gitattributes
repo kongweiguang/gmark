@@ -1,0 +1,9 @@
+# @author kongweiguang
+
+# Rustfmt and cross-platform packaging require deterministic checkout bytes.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
+*.pdf binary

@@ -1,0 +1,149 @@
+// @author kongweiguang
+
+use super::Block;
+use crate::components::{BlockKind, BlockRecord, InlineTextTree, PastedImageSource};
+use gpui::{AppContext, TestAppContext};
+use std::fs;
+
+fn temp_image_path(name: &str) -> std::path::PathBuf {
+    let root =
+        std::env::temp_dir().join(format!("gmark-paste-image-path-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("temp image dir should exist");
+    let path = root.join(name);
+    fs::write(
+        &path,
+        b"not a real image; extension is enough for paste routing",
+    )
+    .expect("temp image should be written");
+    path
+}
+
+fn remove_temp_image(path: &std::path::Path) {
+    let _ = path.parent().map(fs::remove_dir_all);
+}
+
+#[gpui::test]
+async fn append_column_button_stays_visible_while_crossing_hover_gap(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
+
+    block.update(cx, |block, cx| {
+        block.set_table_append_column_hover_part(Some(true), None, None, cx);
+        assert!(block.table_append_column_hovered);
+
+        block.set_table_append_column_hover_part(Some(false), None, Some(true), cx);
+        assert!(block.table_append_column_hovered);
+        assert!(!block.table_append_column_edge_hovered);
+        assert!(!block.table_append_column_zone_hovered);
+        assert!(block.table_append_column_button_hovered);
+        assert!(block.table_append_column_close_task.is_none());
+    });
+}
+
+#[test]
+fn paste_image_text_accepts_plain_local_image_path() {
+    let path = temp_image_path("copied.png");
+    let text = path.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    assert!(
+        text.contains(':'),
+        "test should exercise Windows drive-letter paths"
+    );
+
+    let source = Block::pasted_image_source_from_text(&text);
+
+    assert_eq!(source, Some(PastedImageSource::LocalPath(path.clone())));
+    remove_temp_image(&path);
+}
+
+#[test]
+fn paste_image_text_accepts_quoted_local_image_path() {
+    let path = temp_image_path("quoted image.png");
+    let text = format!("\"{}\"", path.display());
+
+    let source = Block::pasted_image_source_from_text(&text);
+
+    assert_eq!(source, Some(PastedImageSource::LocalPath(path.clone())));
+    remove_temp_image(&path);
+}
+
+#[test]
+fn paste_image_text_accepts_file_url() {
+    let path = temp_image_path("url image.png");
+    let url = url::Url::from_file_path(&path).expect("temp image path should form file URL");
+
+    let source = Block::pasted_image_source_from_text(url.as_str());
+
+    assert_eq!(source, Some(PastedImageSource::LocalPath(path.clone())));
+    remove_temp_image(&path);
+}
+
+#[test]
+fn paste_image_text_rejects_non_image_path() {
+    let path = temp_image_path("notes.txt");
+    let text = path.to_string_lossy().to_string();
+
+    let source = Block::pasted_image_source_from_text(&text);
+
+    assert_eq!(source, None);
+    remove_temp_image(&path);
+}
+
+#[gpui::test]
+async fn append_row_button_stays_visible_while_crossing_hover_gap(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
+
+    block.update(cx, |block, cx| {
+        block.set_table_append_row_hover_part(Some(true), None, None, cx);
+        assert!(block.table_append_row_hovered);
+
+        block.set_table_append_row_hover_part(Some(false), None, Some(true), cx);
+        assert!(block.table_append_row_hovered);
+        assert!(!block.table_append_row_edge_hovered);
+        assert!(!block.table_append_row_zone_hovered);
+        assert!(block.table_append_row_button_hovered);
+        assert!(block.table_append_row_close_task.is_none());
+    });
+}
+
+#[gpui::test]
+async fn column_edge_hover_reveals_only_column_append_control(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
+
+    block.update(cx, |block, cx| {
+        block.set_table_append_column_hover_part(Some(true), None, None, cx);
+        assert!(block.table_append_column_edge_hovered);
+        assert!(block.table_append_column_hovered);
+        assert!(!block.table_append_row_hovered);
+        assert!(block.table_append_column_close_task.is_none());
+        assert!(block.table_append_row_close_task.is_none());
+    });
+}
+
+#[gpui::test]
+async fn row_edge_hover_reveals_only_row_append_control(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
+
+    block.update(cx, |block, cx| {
+        block.set_table_append_row_hover_part(Some(true), None, None, cx);
+        assert!(block.table_append_row_edge_hovered);
+        assert!(block.table_append_row_hovered);
+        assert!(!block.table_append_column_hovered);
+        assert!(block.table_append_column_close_task.is_none());
+        assert!(block.table_append_row_close_task.is_none());
+    });
+}
+
+#[gpui::test]
+async fn multiline_quote_is_not_treated_as_leaf(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
+
+    block.update(cx, |block, cx| {
+        block.record.kind = BlockKind::Quote;
+        block.record.set_title(InlineTextTree::plain("first\n"));
+        block.sync_edit_mode_from_kind();
+        block.sync_render_cache();
+        cx.notify();
+
+        assert!(!block.is_leaf_quote());
+    });
+}
