@@ -43,7 +43,7 @@ try {
     Invoke-HiddenProcess -FilePath $installerPath -ArgumentList $installArguments
 
     $executable = Join-Path $installDir 'gmark.exe'
-    foreach ($relative in @('gmark.exe', 'README.md', 'PRIVACY.md', 'SECURITY.md', 'LICENSE', 'NOTICE')) {
+    foreach ($relative in @('gmark.exe', 'README.md', 'LICENSE')) {
         $path = Join-Path $installDir $relative
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Installed payload is missing: $relative"

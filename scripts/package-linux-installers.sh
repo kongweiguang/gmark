@@ -36,7 +36,7 @@ install -Dm644 "$ROOT/resources/linux/icons/hicolor/512x512/apps/com.kongweiguan
 ln -s usr/bin/gmark "$APPDIR/AppRun"
 ln -s usr/share/applications/com.kongweiguang.gmark.desktop "$APPDIR/gmark.desktop"
 ln -s usr/share/icons/hicolor/512x512/apps/com.kongweiguang.gmark.png "$APPDIR/com.kongweiguang.gmark.png"
-for legal in README.md PRIVACY.md SECURITY.md LICENSE NOTICE; do
+for legal in README.md LICENSE; do
     install -Dm644 "$ROOT/$legal" "$APPDIR/usr/share/doc/gmark/$legal"
 done
 
