@@ -113,7 +113,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/payload | Out-Null
           Copy-Item target/release/gmark.exe dist/payload/gmark.exe
           Copy-Item assets/icon/gmark.ico dist/payload/gmark.ico
-          Copy-Item README.md,PRIVACY.md,SECURITY.md,LICENSE,NOTICE dist/payload/
+          Copy-Item README.md,LICENSE dist/payload/
       - name: Install pinned Inno Setup
         shell: pwsh
         run: choco install innosetup --version=6.7.1 -y --no-progress

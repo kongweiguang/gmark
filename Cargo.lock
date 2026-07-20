@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "gmark"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4189,7 +4189,7 @@ dependencies = [
 
 [[package]]
 name = "gmark-document"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "rope",
  "tempfile",
@@ -4198,7 +4198,7 @@ dependencies = [
 
 [[package]]
 name = "gmark-fuzz-support"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "gmark-document",
  "gmark-recovery-codec",
@@ -4206,7 +4206,7 @@ dependencies = [
 
 [[package]]
 name = "gmark-large-document"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "atomicwrites",
  "chardetng",
@@ -4228,7 +4228,7 @@ dependencies = [
 
 [[package]]
 name = "gmark-recovery-codec"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "crc32fast",
  "thiserror 2.0.19",
