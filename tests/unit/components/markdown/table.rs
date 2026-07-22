@@ -3,7 +3,7 @@
 use super::{
     TableColumnAlignment, TableColumnLayout, TableData, collect_pipeless_table_region,
     collect_root_table_candidate_region, is_root_table_candidate_line, parse_root_table_region,
-    serialize_table_markdown_lines,
+    parse_table_fragment_rows, serialize_table_markdown_lines,
 };
 use crate::components::InlineTextTree;
 
@@ -158,6 +158,28 @@ fn detects_root_table_candidate_runs() {
     ];
     assert!(is_root_table_candidate_line(&lines[0]));
     assert_eq!(collect_root_table_candidate_region(&lines, 0), 3);
+}
+
+#[test]
+fn parses_compatible_table_fragment_rows_without_normalizing_width() {
+    let lines = vec![
+        "| Alice | `A | B` |".to_string(),
+        "| Bob | escaped \\| pipe |".to_string(),
+    ];
+    let rows = parse_table_fragment_rows(&lines, 2).expect("compatible fragment");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][1].serialize_markdown(), "`A | B`");
+    assert_eq!(rows[1][1].visible_text(), "escaped | pipe");
+}
+
+#[test]
+fn rejects_table_fragments_with_delimiters_or_mismatched_width() {
+    assert!(
+        parse_table_fragment_rows(&["| --- | --- |".to_string(), "| a | b |".to_string()], 2,)
+            .is_none()
+    );
+    assert!(parse_table_fragment_rows(&["| a | b | c |".to_string()], 2).is_none());
+    assert!(parse_table_fragment_rows(&["ordinary prose".to_string()], 2).is_none());
 }
 
 #[test]
@@ -374,4 +396,58 @@ fn remove_column_preserves_at_least_one_column() {
     assert_eq!(table.column_count(), 1);
     table.remove_column(0);
     assert_eq!(table.column_count(), 1);
+}
+
+#[test]
+fn insert_and_duplicate_visual_rows_preserve_shape_and_content() {
+    let mut table = parse_root_table_region(&[
+        "| A | B |".to_string(),
+        "| --- | --- |".to_string(),
+        "| 1 | 2 |".to_string(),
+    ])
+    .expect("valid table");
+    assert!(table.insert_empty_visual_row(1));
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.rows[0][0].visible_text(), "");
+    assert!(table.duplicate_visual_row(2));
+    assert_eq!(table.rows[2][0].visible_text(), "1");
+    assert_eq!(table.rows[2][1].visible_text(), "2");
+}
+
+#[test]
+fn insert_and_duplicate_columns_copy_alignment_and_cells() {
+    let mut table = parse_root_table_region(&[
+        "| A | B |".to_string(),
+        "| :--- | ---: |".to_string(),
+        "| 1 | 2 |".to_string(),
+    ])
+    .expect("valid table");
+    assert!(table.insert_empty_column(1, TableColumnAlignment::Center));
+    assert_eq!(table.header[1].visible_text(), "");
+    assert_eq!(table.alignments[1], TableColumnAlignment::Center);
+    assert!(table.duplicate_column(2));
+    assert_eq!(table.header[3].visible_text(), "B");
+    assert_eq!(table.rows[0][3].visible_text(), "2");
+    assert_eq!(table.alignments[3], TableColumnAlignment::Right);
+}
+
+#[test]
+fn clear_cell_rectangle_keeps_structure() {
+    let mut table = parse_root_table_region(&[
+        "| A | B |".to_string(),
+        "| --- | --- |".to_string(),
+        "| 1 | 2 |".to_string(),
+        "| 3 | 4 |".to_string(),
+    ])
+    .expect("valid table");
+    assert!(table.clear_cell_rectangle(1..=2, 0..=1));
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.column_count(), 2);
+    assert!(
+        table
+            .rows
+            .iter()
+            .flatten()
+            .all(|cell| cell.visible_text().is_empty())
+    );
 }

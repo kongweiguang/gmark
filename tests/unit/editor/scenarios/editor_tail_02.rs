@@ -166,6 +166,58 @@ async fn ctrl_a_selects_entire_source_document_in_source_mode(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+async fn source_mode_keyboard_copy_cut_paste_and_history_match_text_editor(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha beta".to_string(), None));
+
+    editor.update(visual, |editor, cx| {
+        editor.set_view_mode(ViewMode::Source, cx);
+        let source = editor.document.visible_blocks()[0].entity.clone();
+        editor.focus_block(source.entity_id());
+        source.update(cx, |block, _cx| block.selected_range = 0..5);
+    });
+    redraw(visual);
+
+    visual.simulate_keystrokes("ctrl-c");
+    assert_eq!(
+        visual.read_from_clipboard().and_then(|item| item.text()),
+        Some("alpha".to_owned())
+    );
+
+    visual.simulate_keystrokes("ctrl-x");
+    redraw(visual);
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(editor.document.raw_source_text(cx), " beta");
+        assert_eq!(editor.source_document.text(), " beta");
+    });
+
+    visual.write_to_clipboard(gpui::ClipboardItem::new_string("gamma\nline".to_owned()));
+    visual.simulate_keystrokes("ctrl-v");
+    redraw(visual);
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(editor.document.raw_source_text(cx), "gamma\nline beta");
+        assert_eq!(editor.source_document.text(), "gamma\nline beta");
+    });
+
+    visual.simulate_keystrokes("ctrl-z");
+    redraw(visual);
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(editor.document.raw_source_text(cx), " beta");
+        assert_eq!(editor.source_document.text(), " beta");
+    });
+
+    visual.simulate_keystrokes("ctrl-y");
+    redraw(visual);
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(editor.document.raw_source_text(cx), "gamma\nline beta");
+        assert_eq!(editor.source_document.text(), "gamma\nline beta");
+    });
+}
+
+#[gpui::test]
 async fn ctrl_a_selects_only_focused_block_text_in_rendered_mode(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let (editor, cx) = cx.add_window_view(|_window, cx| {

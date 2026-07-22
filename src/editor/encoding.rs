@@ -20,6 +20,9 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(view) = self.document_host.clone() {
+            view.update(cx, |view, cx| view.convert_source_encoding_to_utf8(cx));
+        }
         self.source_encoding = crate::document_io::DocumentEncoding::Utf8;
         self.show_encoding_conversion_dialog = false;
         self.set_view_mode(ViewMode::Rendered, cx);

@@ -79,10 +79,10 @@ fn light_theme_exports_light_color_scheme() {
     let html = render_html("# Title\n\ntext", &Theme::light_theme(), "Doc");
 
     assert!(html.contains("color-scheme: light;"));
-    assert!(html.contains("--vlt-bg: rgba(255,255,255,1.000);"));
+    assert!(html.contains("--vlt-bg: rgba(247,248,243,1.000);"));
     assert!(html.contains("--vlt-text: rgba(29,29,31,1.000);"));
     assert!(html.contains("--vlt-link: rgba(10,102,194,1.000);"));
-    assert!(html.contains("--vlt-code-bg: rgba(245,245,247,1.000);"));
+    assert!(html.contains("--vlt-code-bg: rgba(240,242,236,1.000);"));
     assert!(!html.contains("color-scheme: dark;"));
 }
 

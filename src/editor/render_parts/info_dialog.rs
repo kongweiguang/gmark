@@ -19,7 +19,6 @@ impl Editor {
             format!("gmark {}", env!("CARGO_PKG_VERSION")),
             strings.help_about_message.clone(),
             format!("{}: {}", strings.help_about_github_label, ABOUT_GITHUB_URL),
-            strings.help_about_star_message.clone(),
         ]
     }
 
@@ -83,7 +82,6 @@ impl Editor {
                                 }),
                         ),
                 )
-                .child(body_style(div()).child(strings.help_about_star_message.clone()))
                 .into_any_element(),
         }
     }
@@ -113,7 +111,9 @@ impl Editor {
                 .flex()
                 .justify_center()
                 .child(
+                    // 信息弹框内容短而固定，直接给足阅读高度，避免用户为最后一行滚动。
                     dialog_panel("info-dialog", d.dialog_width, theme)
+                        .min_h(px(304.0))
                         .child(
                             dialog_content("info-dialog-content", theme)
                                 .child(dialog_title_with_icon(

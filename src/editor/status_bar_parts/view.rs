@@ -17,7 +17,7 @@ pub(super) fn render_overflow_text(id: &'static str, label: String, theme: &Them
 
 pub(super) fn render_large_overflow_action(
     id: &'static str,
-    label: &'static str,
+    label: String,
     active: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
@@ -326,7 +326,8 @@ pub(super) fn render_sidebar_toggle(
 pub(super) fn render_mode_switch(
     state: &mut StatusBarState,
     view_mode: super::ViewMode,
-    source_only: bool,
+    available_modes: &[super::ViewMode],
+    json_document: bool,
     theme: &Theme,
     strings: &I18nStrings,
     cx: &mut Context<Editor>,
@@ -341,56 +342,28 @@ pub(super) fn render_mode_switch(
         .expect("status mode focus handles must be initialized")
         .clone();
 
-    let segments = if source_only {
-        vec![render_mode_segment(
-            state,
-            super::ViewMode::Source,
-            super::ViewMode::Source,
-            &strings.status_bar_mode_source,
-            focus_handles[1].clone(),
-            theme,
-            cx,
-        )]
-    } else {
-        vec![
+    let segments = available_modes
+        .iter()
+        .copied()
+        .map(|mode| {
+            let (label, focus) = match mode {
+                super::ViewMode::Rendered if json_document => (&strings.json_graph_live_edit, 0),
+                super::ViewMode::Rendered => (&strings.status_bar_mode_rendered, 0),
+                super::ViewMode::Source => (&strings.status_bar_mode_source, 1),
+                super::ViewMode::Split => (&strings.status_bar_mode_split, 2),
+                super::ViewMode::Preview => (&strings.status_bar_mode_preview, 3),
+            };
             render_mode_segment(
                 state,
                 view_mode,
-                super::ViewMode::Rendered,
-                &strings.status_bar_mode_rendered,
-                focus_handles[0].clone(),
+                mode,
+                label,
+                focus_handles[focus].clone(),
                 theme,
                 cx,
-            ),
-            render_mode_segment(
-                state,
-                view_mode,
-                super::ViewMode::Source,
-                &strings.status_bar_mode_source,
-                focus_handles[1].clone(),
-                theme,
-                cx,
-            ),
-            render_mode_segment(
-                state,
-                view_mode,
-                super::ViewMode::Split,
-                &strings.status_bar_mode_split,
-                focus_handles[2].clone(),
-                theme,
-                cx,
-            ),
-            render_mode_segment(
-                state,
-                view_mode,
-                super::ViewMode::Preview,
-                &strings.status_bar_mode_preview,
-                focus_handles[3].clone(),
-                theme,
-                cx,
-            ),
-        ]
-    };
+            )
+        })
+        .collect::<Vec<_>>();
 
     div()
         .id("status-bar-mode-switch")
@@ -482,12 +455,12 @@ fn render_mode_segment(
         }))
         .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
             pointer_focus_handle.focus(window);
-            editor.set_view_mode(mode, cx);
+            editor.activate_status_view_mode(mode, window, cx);
         }))
         .on_key_down(
-            cx.listener(move |editor, event: &KeyDownEvent, _window, cx| {
+            cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    editor.set_view_mode(mode, cx);
+                    editor.activate_status_view_mode(mode, window, cx);
                     cx.stop_propagation();
                 }
             }),

@@ -205,6 +205,7 @@ impl Render for Block {
                 self.cursor_blink_task = None;
             }
             let compact_source_host = self.compact_source_host();
+            let source_text_size = self.host_text_size().unwrap_or(t.text_size);
             let source_padding = if compact_source_host {
                 0.0
             } else {
@@ -223,14 +224,13 @@ impl Render for Block {
                 .when(compact_source_host, |base| {
                     base.min_h(px(0.0)).py(px(0.0)).rounded(px(0.0))
                 })
-                .text_size(px(t.text_size))
+                .font_family(crate::document_host::source_monospace_font_family())
+                .text_size(px(source_text_size))
                 .text_color(c.text_default)
                 .line_height(rems(t.text_line_height));
 
             let source_base = if self.kind() == BlockKind::Comment {
                 source_base.bg(c.comment_bg).rounded_sm()
-            } else if focused && !compact_source_host {
-                source_base.bg(c.source_mode_block_bg).rounded_sm()
             } else {
                 source_base
             };
@@ -244,7 +244,32 @@ impl Render for Block {
                 ),
                 None => BlockTextElement::new(cx.entity(), is_placeholder),
             };
-            return source_base.child(text).into_any_element();
+            let source_editor = source_base.child(text);
+            if focused && matches!(self.kind(), BlockKind::MathBlock | BlockKind::MermaidBlock) {
+                let preview = match self.kind() {
+                    BlockKind::MathBlock => self.render_math_content(&theme, cx),
+                    BlockKind::MermaidBlock => self.render_mermaid_content(&theme, window, cx),
+                    _ => unreachable!("guarded complex preview kind"),
+                };
+                return div()
+                    .debug_selector(|| "complex-source-live-preview".to_owned())
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(source_editor)
+                    .child(
+                        div()
+                            .debug_selector(|| "complex-source-live-preview-result".to_owned())
+                            .w_full()
+                            .border_t_1()
+                            .border_color(c.dialog_border)
+                            .pt(px(8.0))
+                            .child(preview),
+                    )
+                    .into_any_element();
+            }
+            return source_editor.into_any_element();
         }
 
         let focused_base = self.render_shell(
@@ -577,7 +602,7 @@ impl Render for Block {
                 let child = if focused {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
-                    self.render_math_content(&theme)
+                    self.render_math_content(&theme, cx)
                 };
                 focused_base.w_full().child(child).into_any_element()
             }
@@ -589,7 +614,7 @@ impl Render for Block {
                 let child = if focused {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
-                    self.render_mermaid_content(&theme, window)
+                    self.render_mermaid_content(&theme, window, cx)
                 };
                 focused_base.w_full().child(child).into_any_element()
             }

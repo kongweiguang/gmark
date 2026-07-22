@@ -13,16 +13,17 @@ use gpui::*;
 use crate::components::{
     AddLanguageConfig, AddThemeConfig, BlockKind, BoldSelection, CheckForUpdates, CloseTab,
     CloseWindow, CodeSelection, CommandPalette, Copy, CopyAsMarkdown, Cut, EditingCommandHistory,
-    ExportHtml, ExportImage, ExportPdf, FindInDocument, FindNext, FindPrevious, InstallCliTool,
-    ItalicSelection, LinkSelection, NewTab, NewWindow, NextTab, NoRecentFiles,
-    NormalizeLineEndingsCr, NormalizeLineEndingsCrLf, NormalizeLineEndingsLf, OpenCrashReports,
-    OpenFile, OpenFolder, OpenPreferences, OpenPrivacyPolicy, OpenRecentFile, Paste,
-    PasteAsPlainText, PreviousTab, QuickOpen, QuitApplication, Redo, ReopenClosedTab,
-    ReplaceInDocument, SaveDocument, SaveDocumentAs, SelectAll, SelectLanguage, SelectTheme,
-    SetBulletedList, SetCodeBlock, SetHeading1, SetHeading2, SetHeading3, SetNumberedList,
-    SetParagraph, SetQuote, SetTaskList, ShowAbout, StrikethroughSelection, ToggleFocusMode,
-    ToggleTypewriterMode, ToggleViewMode, ToggleWorkspace, UnderlineSelection, Undo,
-    UninstallCliTool,
+    ExportHtml, ExportImage, ExportPdf, FindInDocument, FindNext, FindPrevious, HighlightSelection,
+    InlineMathSelection, InstallCliTool, ItalicSelection, LinkSelection, NewTab, NewWindow,
+    NextTab, NoRecentFiles, NormalizeLineEndingsCr, NormalizeLineEndingsCrLf,
+    NormalizeLineEndingsLf, OpenCrashReports, OpenFile, OpenFolder, OpenPreferences,
+    OpenPrivacyPolicy, OpenRecentFile, OpenSafeSource, Paste, PasteAsPlainText, PreviousTab,
+    QuickOpen, QuitApplication, Redo, ReopenClosedTab, ReplaceInDocument, SaveDocument,
+    SaveDocumentAs, SelectAll, SelectLanguage, SelectTheme, SetBulletedList, SetCodeBlock,
+    SetHeading1, SetHeading2, SetHeading3, SetHeading4, SetHeading5, SetHeading6, SetNumberedList,
+    SetParagraph, SetQuote, SetTaskList, ShowAbout, StrikethroughSelection, SubscriptSelection,
+    SuperscriptSelection, ToggleFocusMode, ToggleTypewriterMode, ToggleViewMode, ToggleWorkspace,
+    UnderlineSelection, Undo, UninstallCliTool,
 };
 use crate::config::{
     apply_configured_language, apply_configured_theme, import_language_config_and_select,
@@ -49,6 +50,7 @@ pub(crate) fn menu_action_icon(action: &dyn Action) -> Option<&'static str> {
     } else if action.is::<CloseTab>() || action.is::<CloseWindow>() {
         Some("icon/ui/close.svg")
     } else if action.is::<OpenFile>()
+        || action.is::<OpenSafeSource>()
         || action.is::<OpenRecentFile>()
         || action.is::<NoRecentFiles>()
     {
@@ -158,6 +160,9 @@ pub(crate) fn open_editor_window(
         crate::document_io::OpenedMarkdown {
             text: markdown,
             encoding: crate::document_io::DocumentEncoding::Utf8,
+            text_encoding: gmark_document_core::TextEncoding::Utf8 { bom: false },
+            file_identity: None,
+            loading_limits: gmark_document_core::LoadingPolicy::default().effective_limits(),
         },
         file_path,
     )
@@ -174,10 +179,10 @@ pub(crate) fn open_decoded_editor_window(
 fn open_large_editor_window(
     cx: &mut App,
     path: PathBuf,
-    probe: gmark_large_document::OpenProbe,
+    probe: gmark_paged_document::OpenProbe,
     restored_bounds: Option<WindowBounds>,
 ) -> anyhow::Result<WindowHandle<Editor>> {
-    let source = gmark_large_document::FileSource::open(&path)
+    let source = gmark_paged_document::FileSource::open(&path)
         .map_err(|error| anyhow::anyhow!("failed to open '{}': {error}", path.display()))?;
     let title = window_title(Some(&path));
     let options = restored_bounds.map_or_else(
@@ -189,7 +194,7 @@ fn open_large_editor_window(
     );
     let handle = cx
         .open_window(options, move |window, cx| {
-            let editor = cx.new(move |cx| Editor::from_large_file(cx, path, probe, source));
+            let editor = cx.new(move |cx| Editor::from_source_backed_file(cx, path, probe, source));
             editor.update(cx, |editor, cx| {
                 editor.install_accessibility_bridge(window, cx)
             });
@@ -236,6 +241,31 @@ fn open_decoded_editor_window_with_bounds(
         })
         .expect("newly opened editor window should be updateable");
 
+    handle
+}
+
+fn open_file_failure_window(cx: &mut App, path: PathBuf, reason: String) -> WindowHandle<Editor> {
+    let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
+    let title = window_title(Some(&path));
+    let handle = cx
+        .open_window(gmark_window_options(title, bounds), move |window, cx| {
+            let editor = cx.new(move |cx| {
+                let mut editor = Editor::from_markdown(cx, String::new(), None);
+                editor.install_initial_file_open_failure(path, reason, cx);
+                editor
+            });
+            editor.update(cx, |editor, cx| {
+                editor.install_accessibility_bridge(window, cx)
+            });
+            editor
+        })
+        .expect("file failure window should open");
+    handle
+        .update(cx, |editor, window, cx| {
+            window.activate_window();
+            editor.force_install_close_guard(cx, window);
+        })
+        .expect("file failure window should be updateable");
     handle
 }
 
@@ -286,22 +316,22 @@ pub(crate) fn open_recovered_editor_tabs_window(
     Some(handle)
 }
 
-pub(crate) fn open_large_recovery_window(
+pub(crate) fn open_paged_recovery_window(
     cx: &mut App,
     journal_path: PathBuf,
 ) -> anyhow::Result<(WindowHandle<Editor>, PathBuf)> {
-    let base = gmark_large_document::inspect_large_recovery_base(&journal_path)
+    let base = gmark_paged_document::inspect_paged_recovery_base(&journal_path)
         .map_err(|error| anyhow::anyhow!("failed to inspect large recovery: {error}"))?;
     let path = base.path;
     let probe =
-        gmark_large_document::probe_file(&path, gmark_large_document::ProbeOptions::default())
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
             .map_err(|error| {
                 anyhow::anyhow!(
                     "failed to probe recovered large file '{}': {error}",
                     path.display()
                 )
             })?;
-    let source = gmark_large_document::FileSource::open(&path).map_err(|error| {
+    let source = gmark_paged_document::FileSource::open(&path).map_err(|error| {
         anyhow::anyhow!(
             "failed to open recovered large file '{}': {error}",
             path.display()
@@ -313,7 +343,7 @@ pub(crate) fn open_large_recovery_window(
     let handle = cx
         .open_window(gmark_window_options(title, bounds), move |window, cx| {
             let editor = cx
-                .new(move |cx| Editor::from_large_recovery(cx, path, probe, source, journal_path));
+                .new(move |cx| Editor::from_paged_recovery(cx, path, probe, source, journal_path));
             editor.update(cx, |editor, cx| {
                 editor.install_accessibility_bridge(window, cx)
             });
@@ -331,7 +361,37 @@ pub(crate) fn open_large_recovery_window(
 }
 
 pub(crate) fn open_file_in_new_window(cx: &mut App, path: &Path) -> anyhow::Result<()> {
-    match crate::document_io::open_document(path)? {
+    open_file_in_new_window_with_policy(cx, path, None)
+}
+
+pub(crate) fn open_file_in_safe_source_window(cx: &mut App, path: &Path) -> anyhow::Result<()> {
+    open_file_in_new_window_with_policy(
+        cx,
+        path,
+        Some(gmark_document_core::LoadingPolicy {
+            force_safe_source: true,
+            ..gmark_document_core::LoadingPolicy::default()
+        }),
+    )
+}
+
+fn open_file_in_new_window_with_policy(
+    cx: &mut App,
+    path: &Path,
+    policy: Option<gmark_document_core::LoadingPolicy>,
+) -> anyhow::Result<()> {
+    let opened = match match policy {
+        Some(policy) => crate::document_io::open_document_with_policy(path, policy),
+        None => crate::document_io::open_document(path),
+    } {
+        Ok(opened) => opened,
+        Err(error) => {
+            open_file_failure_window(cx, path.to_path_buf(), error.to_string());
+            record_recent_file_and_refresh(path, cx);
+            return Ok(());
+        }
+    };
+    match opened {
         crate::document_io::OpenedDocument::Resident(opened) => {
             let handle = open_decoded_editor_window(cx, opened, Some(path.to_path_buf()));
             if !crate::document_io::is_markdown_path(path) {
@@ -340,7 +400,8 @@ pub(crate) fn open_file_in_new_window(cx: &mut App, path: &Path) -> anyhow::Resu
                 });
             }
         }
-        crate::document_io::OpenedDocument::Large(probe) => {
+        crate::document_io::OpenedDocument::ResidentFormat(probe)
+        | crate::document_io::OpenedDocument::Paged(probe) => {
             open_large_editor_window(cx, path.to_path_buf(), probe, None)?;
         }
     }
@@ -396,7 +457,8 @@ pub(crate) fn open_workspace_session_window(
                 window_bounds,
             )
         }
-        crate::document_io::OpenedDocument::Large(probe) => {
+        crate::document_io::OpenedDocument::ResidentFormat(probe)
+        | crate::document_io::OpenedDocument::Paged(probe) => {
             match open_large_editor_window(cx, first.path.clone(), probe.clone(), window_bounds) {
                 Ok(handle) => handle,
                 Err(error) => {
@@ -520,7 +582,8 @@ pub(crate) use menus::{init, install_menus};
 use menus::{
     prompt_and_import_language_config, prompt_and_import_language_config_with_error_window,
     prompt_and_import_theme_config, prompt_and_import_theme_config_with_error_window,
-    prompt_and_open_files, prompt_and_open_files_with_error_window,
+    prompt_and_open_files, prompt_and_open_files_with_error_window, prompt_and_open_safe_source,
+    prompt_and_open_safe_source_with_error_window,
 };
 #[cfg(test)]
 #[path = "../tests/unit/app_menu.rs"]

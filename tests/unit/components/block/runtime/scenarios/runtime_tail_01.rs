@@ -196,6 +196,21 @@ async fn code_block_cache_builds_rust_highlight_spans(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn source_document_mode_enables_markdown_highlighting(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(cx, BlockRecord::paragraph("# Heading\n\n`code`"));
+        block.set_source_document_mode();
+        block
+    });
+
+    let highlight = block
+        .read_with(cx, |block, _cx| block.code_highlight_result().cloned())
+        .expect("source document should cache markdown highlighting");
+    assert_eq!(highlight.language, CodeLanguageKey::Markdown);
+    assert!(!highlight.spans.is_empty());
+}
+
+#[gpui::test]
 async fn code_block_cache_updates_when_language_changes(cx: &mut TestAppContext) {
     let block = cx.new(|cx| {
         Block::with_record(
@@ -742,4 +757,3 @@ async fn typing_destination_into_empty_link_parens_keeps_caret_inside(cx: &mut T
         assert_eq!(block.selected_range, close..close);
     });
 }
-

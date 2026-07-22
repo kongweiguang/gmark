@@ -147,6 +147,9 @@ async fn slash_commands_emit_expected_source_and_caret(cx: &mut TestAppContext) 
             "### ",
             0,
         ),
+        ("/h4", SlashCommand::Heading4, BlockKind::Heading { level: 4 }, "#### ", 0),
+        ("/h5", SlashCommand::Heading5, BlockKind::Heading { level: 5 }, "##### ", 0),
+        ("/h6", SlashCommand::Heading6, BlockKind::Heading { level: 6 }, "###### ", 0),
         (
             "/lb",
             SlashCommand::BulletedList,
@@ -191,6 +194,13 @@ async fn slash_commands_emit_expected_source_and_caret(cx: &mut TestAppContext) 
             3,
         ),
         (
+            "/mermaid",
+            SlashCommand::Mermaid,
+            BlockKind::MermaidBlock,
+            "```mermaid\nflowchart TD\n    A --> B\n```\n\n",
+            "```mermaid\n".len(),
+        ),
+        (
             "/divider",
             SlashCommand::HorizontalRule,
             BlockKind::Separator,
@@ -214,7 +224,10 @@ async fn slash_commands_emit_expected_source_and_caret(cx: &mut TestAppContext) 
             );
             let result_block = if matches!(
                 command,
-                SlashCommand::Image | SlashCommand::Math | SlashCommand::HorizontalRule
+                SlashCommand::Image
+                    | SlashCommand::Math
+                    | SlashCommand::Mermaid
+                    | SlashCommand::HorizontalRule
             ) {
                 editor.document.first_root().expect("inserted root").clone()
             } else {
@@ -233,6 +246,30 @@ async fn slash_commands_emit_expected_source_and_caret(cx: &mut TestAppContext) 
             );
         });
     }
+}
+
+#[gpui::test]
+async fn slash_footnote_reference_creates_definition_in_one_undo_step(
+    cx: &mut TestAppContext,
+) {
+    let query = "/footnote";
+    let editor = cx.new(|cx| Editor::from_markdown(cx, query.to_owned(), None));
+    editor.update(cx, |editor, cx| {
+        let block = editor.document.first_root().expect("root").clone();
+        block.update(cx, |block, cx| block.move_to(block.visible_len(), cx));
+        editor.on_block_event(
+            block,
+            &BlockEvent::RequestSlashCommand {
+                command: SlashCommand::FootnoteReference,
+                trigger_range: 0..query.len(),
+            },
+            cx,
+        );
+        let source = editor.source_document.text();
+        assert!(source.starts_with("[^note-1]"), "{source:?}");
+        assert!(source.contains("[^note-1]:"), "{source:?}");
+        assert_eq!(editor.undo_history.len(), 1);
+    });
 }
 
 #[gpui::test]

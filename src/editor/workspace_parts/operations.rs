@@ -29,6 +29,7 @@ impl Editor {
                     self.apply_selection_snapshot_in_current_mode(selection, cx);
                 }
             } else if next_path != active_path {
+                self.document_kind = DocumentKind::from_path(&next_path);
                 self.file_path = Some(next_path.clone());
                 self.saved_file_fingerprint = crate::recovery::fingerprint_file(&next_path).ok();
                 self.pending_window_title_refresh = true;
@@ -201,8 +202,6 @@ impl Editor {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .border_b(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
                         .child(tab(
                             strings.workspace_tab_files.clone(),
                             FILES_TAB_ICON,

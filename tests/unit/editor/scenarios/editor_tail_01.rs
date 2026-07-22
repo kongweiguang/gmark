@@ -348,6 +348,53 @@ async fn inserting_table_at_document_end_adds_trailing_paragraph(cx: &mut TestAp
 }
 
 #[gpui::test]
+async fn clicking_inserted_table_cell_focuses_it_for_text_input(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, String::new(), None));
+
+    visual.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.table_insert_dialog = Some(super::context_menu::TableInsertDialogState {
+                target: super::context_menu::TableInsertTarget::Append,
+                body_rows: 2,
+                columns: 2,
+            });
+            editor.on_confirm_table_insert_dialog(&ClickEvent::default(), window, cx);
+        });
+    });
+    redraw(visual);
+
+    let target_cell = editor.read_with(visual, |editor, cx| {
+        editor.document.visible_blocks()[0]
+            .entity
+            .read(cx)
+            .table_runtime
+            .as_ref()
+            .expect("inserted table runtime")
+            .rows[1][1]
+            .clone()
+    });
+    let table = visual.debug_bounds("table-surface").expect("table surface");
+    let target = point(
+        table.left() + table.size.width * 0.75,
+        table.top() + table.size.height * (5.0 / 6.0),
+    );
+    visual.simulate_mouse_down(target, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    redraw(visual);
+
+    editor.read_with(visual, |editor, _cx| {
+        assert_eq!(editor.active_entity_id, Some(target_cell.entity_id()));
+    });
+    visual.simulate_keystrokes("x");
+    redraw(visual);
+    target_cell.read_with(visual, |cell, _cx| {
+        assert_eq!(cell.display_text(), "x");
+    });
+}
+
+#[gpui::test]
 async fn ctrl_enter_exits_focused_math_block(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let (editor, cx) =
@@ -388,6 +435,11 @@ async fn complex_render_failure_keeps_last_successful_math_and_mermaid_svg(
         let paragraph = editor.document.visible_blocks()[2].entity.clone();
         editor.focus_block(paragraph.entity_id());
     });
+    redraw(visual_cx);
+    visual_cx
+        .executor()
+        .advance_clock(Duration::from_millis(300));
+    visual_cx.run_until_parked();
     redraw(visual_cx);
     assert!(visual_cx.debug_bounds("math-rendered-content").is_some());
     assert!(visual_cx.debug_bounds("mermaid-rendered-content").is_some());
@@ -433,6 +485,11 @@ async fn complex_render_failure_keeps_last_successful_math_and_mermaid_svg(
         editor.focus_block(paragraph.entity_id());
     });
     redraw(visual_cx);
+    visual_cx
+        .executor()
+        .advance_clock(Duration::from_millis(300));
+    visual_cx.run_until_parked();
+    redraw(visual_cx);
     assert!(visual_cx.debug_bounds("math-render-fallback").is_some());
     assert!(visual_cx.debug_bounds("math-render-warning").is_some());
     editor.read_with(visual_cx, |editor, cx| {
@@ -468,6 +525,11 @@ async fn complex_render_failure_keeps_last_successful_math_and_mermaid_svg(
         editor.focus_block(paragraph.entity_id());
     });
     redraw(visual_cx);
+    visual_cx
+        .executor()
+        .advance_clock(Duration::from_millis(300));
+    visual_cx.run_until_parked();
+    redraw(visual_cx);
     assert!(visual_cx.debug_bounds("mermaid-render-fallback").is_some());
     assert!(visual_cx.debug_bounds("mermaid-render-warning").is_some());
     editor.read_with(visual_cx, |editor, cx| {
@@ -502,7 +564,10 @@ async fn complex_render_failure_keeps_last_successful_math_and_mermaid_svg(
             assert_eq!(warning.size.height, px(22.0));
             assert_eq!(icon.size, size(px(14.0), px(14.0)));
             assert!(warning.left() >= content.left());
-            assert!(warning.right() <= content.right());
+            assert!(
+                warning.right() <= content.right(),
+                "{selector}: warning={warning:?}, content={content:?}"
+            );
             assert!(icon.left() >= warning.left());
             assert!(icon.right() <= warning.right());
             assert!(icon.top() >= warning.top());
@@ -515,6 +580,11 @@ async fn complex_render_failure_keeps_last_successful_math_and_mermaid_svg(
         let paragraph = editor.document.visible_blocks()[2].entity.clone();
         editor.focus_block(paragraph.entity_id());
     });
+    redraw(visual_cx);
+    visual_cx
+        .executor()
+        .advance_clock(Duration::from_millis(300));
+    visual_cx.run_until_parked();
     redraw(visual_cx);
     editor.read_with(visual_cx, |editor, cx| {
         assert!(
@@ -707,4 +777,3 @@ async fn toggle_view_mode_preserves_callout_table_cell_position(cx: &mut TestApp
         assert_eq!(editor.pending_focus, Some(restored_cell.entity_id()));
     });
 }
-

@@ -294,7 +294,7 @@ async fn gpui_pipeline_10mib_release_benchmark(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn far_focused_row_does_not_expand_virtualized_scroll_window(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
-    let markdown = (0..500)
+    let markdown = (0..super::render::RENDER_ROW_VIRTUALIZATION_THRESHOLD + 250)
         .map(|index| format!("paragraph {index}"))
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -315,7 +315,9 @@ async fn far_focused_row_does_not_expand_virtualized_scroll_window(cx: &mut Test
         let (start, end) = editor.prev_render_window.expect("render window");
         assert!(
             start > 0,
-            "far focus must not pin the mounted run to row zero"
+            "far focus must not pin the mounted run to row zero; offset={:?}, max={:?}, window={start}..{end}",
+            editor.scroll_handle.offset(),
+            editor.scroll_handle.max_offset(),
         );
         assert!(end - start < 200, "scroll window must remain bounded");
     });
@@ -703,4 +705,3 @@ async fn virtualized_cross_region_replace_preserves_unmounted_source_and_undo_re
         assert_eq!(editor.source_document.text(), expected);
     });
 }
-

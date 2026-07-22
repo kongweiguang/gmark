@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use gpui::*;
 
-use super::{Editor, ViewMode};
+use super::{DocumentKind, Editor, ViewMode};
 use crate::i18n::I18nManager;
 
 impl Editor {
@@ -35,7 +35,7 @@ impl Editor {
         };
 
         if crate::document_io::open_document(&path)
-            .is_ok_and(|opened| matches!(opened, crate::document_io::OpenedDocument::Large(_)))
+            .is_ok_and(|opened| matches!(opened, crate::document_io::OpenedDocument::Paged(_)))
         {
             cx.spawn(async move |_editor, cx| {
                 let _ = cx.update(move |cx| {
@@ -64,7 +64,7 @@ impl Editor {
         self.hide_info_dialog(cx);
         self.dismiss_contextual_overlays(cx);
 
-        if self.document_dirty {
+        if self.is_document_dirty() {
             self.pending_drop_replace_path = Some(path);
             self.pending_drop_replace_after_save = false;
             if !self.show_drop_replace_dialog {
@@ -123,6 +123,10 @@ impl Editor {
         self.external_conflict_preview = None;
         self.external_conflict_restore_focus = None;
         self.allow_external_overwrite_once = false;
+        self.document_kind = file_path
+            .as_deref()
+            .map(DocumentKind::from_path)
+            .unwrap_or(DocumentKind::Markdown);
         self.file_path = file_path;
         self.view_mode = ViewMode::Rendered;
         self.split_preview = None;
@@ -130,7 +134,7 @@ impl Editor {
         self.projection_cache_scheduled_revision = None;
         self.split_projection_task = None;
         self.split_projection_scheduled_revision = None;
-        self.source_document = gmark_document::SourceDocument::new(&markdown);
+        self.source_document = gmark_document::SourceDocument::new(&markdown).into();
         let normalized = self.source_document.text();
         self.projection_cache = None;
         self.table_cells.clear();
@@ -279,6 +283,7 @@ impl Editor {
         };
         let (markdown, source_format, bytes) = self.serialized_document_bytes(cx);
         let (default_dir, suggested_name) = self.save_dialog_defaults();
+        let document_kind = self.document_kind;
         let prompt = cx.prompt_for_new_path(&default_dir, suggested_name.as_deref());
         let weak_editor = cx.entity().downgrade();
         let weak_editor_for_cancel = weak_editor.clone();
@@ -318,9 +323,7 @@ impl Editor {
                 }
             };
 
-            if save_path.extension().is_none() {
-                save_path.set_extension("md");
-            }
+            document_kind.apply_default_extension(&mut save_path);
 
             if let Err(err) = gmark_document::atomic_write(&save_path, &bytes) {
                 let _ = weak_editor_for_write_error.update(cx, |this, cx| {

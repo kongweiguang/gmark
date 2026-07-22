@@ -110,6 +110,10 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
     assert!(dialog.right() <= overlay.right());
     assert!(dialog.top() >= overlay.top());
     assert!(dialog.bottom() <= overlay.bottom());
+    assert!(
+        f32::from(dialog.size.width) >= 520.0,
+        "standard dialogs should leave enough horizontal room for short content"
+    );
     let message = visual_cx
         .debug_bounds("unsaved-changes-message")
         .expect("unsaved changes body");
@@ -130,7 +134,7 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
         assert_eq!(f32::from(action.size.height), 36.0, "{selector} height");
         assert!(
             action.bottom() <= dialog.bottom(),
-            "{selector} escaped bottom"
+            "{selector} escaped bottom: action={action:?}, dialog={dialog:?}"
         );
     }
 
@@ -191,6 +195,7 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
     assert!(dismiss.left() >= dialog.left());
     assert!(dismiss.right() <= dialog.right());
     assert_eq!(f32::from(dismiss.size.height), 36.0);
+    assert!(visual_cx.debug_bounds("about-star-message").is_none());
 
     editor.update(visual_cx, |editor, cx| {
         editor.info_dialog = None;
@@ -302,7 +307,7 @@ async fn recovery_debounce_persists_latest_dirty_revision_off_ui_thread(cx: &mut
                 vec![gmark_document::TextEdit::new(end..end, " latest")],
             ))
             .unwrap();
-        editor.document_dirty = true;
+        editor.set_document_dirty_for_test(true);
         editor.schedule_recovery_journal(cx);
     });
     visual_cx.run_until_parked();
@@ -382,18 +387,18 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
         .map(|line| format!("large document line {line}\n"))
         .collect::<String>();
     fs::write(&path, text).expect("large document fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large document probe");
-    assert_eq!(probe.strategy, gmark_large_document::OpenStrategy::Large);
-    let source = gmark_large_document::FileSource::open(&path).expect("large document source");
+    assert_eq!(probe.strategy, gmark_paged_document::OpenStrategy::Paged);
+    let source = gmark_paged_document::FileSource::open(&path).expect("large document source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
 
     for viewport in [size(px(1180.0), px(780.0)), size(px(720.0), px(520.0))] {
         visual.simulate_resize(viewport);
@@ -407,10 +412,10 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
         });
         let shell = visual.debug_bounds("editor-main-content").unwrap();
         let content = visual.debug_bounds("editor-content").unwrap();
-        let large_content = visual.debug_bounds("large-document-tab-content").unwrap();
+        let large_content = visual.debug_bounds("document-host-tab-content").unwrap();
         let tab_strip = visual.debug_bounds("document-tab-strip").unwrap();
         let status_bar = visual.debug_bounds("status-bar").unwrap();
-        let large_status = visual.debug_bounds("status-bar-large-file-status").unwrap();
+        let large_status = visual.debug_bounds("status-bar-document-host-status").unwrap();
 
         // Windows/macOS 使用应用内标题栏；Linux/FreeBSD 的客户端装饰由平台窗口层提供。
         // 大文件外壳契约由下面的主内容、Tab 和状态栏共同验证，不绑定平台装饰实现。
@@ -434,18 +439,19 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
                 .debug_bounds("status-bar-format-overflow-button")
                 .is_some()
         );
-        assert!(visual.debug_bounds("large-file-source-mode").is_none());
+        assert!(visual.debug_bounds("document-host-source-mode").is_none());
         assert!(large_content.left() >= content.left());
         assert!(large_content.right() <= content.right());
         assert_eq!(tab_strip.bottom(), content.top());
         assert_eq!(status_bar.top(), shell.bottom());
         assert!(large_status.right() <= status_bar.right());
-        if let Some(first_body) = visual.debug_bounds("large-file-line-body-0") {
-            let source_surface = visual
-                .debug_bounds("large-file-source-horizontal-scroll")
+        if let Some(first_body) = visual.debug_bounds("document-host-line-body-0") {
+            let document_host = visual
+                .debug_bounds("document-host-source-horizontal-scroll")
                 .expect("large Source surface");
+            let expected_inset = Theme::default_theme().dimensions.editor_padding;
             assert!(
-                first_body.top() >= source_surface.top() + px(47.0),
+                first_body.top() >= document_host.top() + px(expected_inset - 1.0),
                 "large Source keeps the same reading top inset as ordinary Source"
             );
         }
@@ -459,15 +465,15 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
             cx.refresh_windows();
         });
         redraw(visual);
-        assert!(visual.debug_bounds("large-document-tab-content").is_some());
+        assert!(visual.debug_bounds("document-host-tab-content").is_some());
         assert!(visual.debug_bounds("status-bar-mode-switch").is_some());
-        assert!(visual.debug_bounds("large-file-scrollbar").is_some());
+        assert!(visual.debug_bounds("document-host-scrollbar").is_some());
     }
 
     visual.executor().advance_clock(Duration::from_millis(50));
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large document view");
     let initial_scroll_top =
         large_view.read_with(visual, |view, _cx| view.scroll_top_line_for_test());
@@ -477,7 +483,7 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     visual.update(|window, cx| window.draw(cx).clear());
     assert!(
         visual
-            .debug_bounds("large-file-retained-frame-progress")
+            .debug_bounds("document-host-retained-frame-progress")
             .is_some(),
         "a disjoint jump must retain the previous ScreenLines instead of painting a blank frame"
     );
@@ -498,14 +504,14 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     );
 
     let inactive_body = visual
-        .debug_bounds("large-file-line-body-0")
+        .debug_bounds("document-host-line-body-0")
         .expect("inactive large source row body");
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| view.begin_line_edit_for_test(0, window, cx));
     });
     redraw(visual);
     let active_body = visual
-        .debug_bounds("large-file-line-body-0")
+        .debug_bounds("document-host-line-body-0")
         .expect("active large source row body");
     assert_eq!(active_body, inactive_body);
     assert!(
@@ -518,7 +524,7 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     }));
     visual.simulate_keystrokes("ctrl-g");
     redraw(visual);
-    assert!(visual.debug_bounds("large-file-navigation-panel").is_some());
+    assert!(visual.debug_bounds("document-host-navigation-panel").is_some());
     large_view.update(visual, |view, cx| view.close_navigation_for_test(cx));
     redraw(visual);
 
@@ -548,23 +554,26 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Source));
     assert!(
         large_view
-            .read_with(visual, |view, _cx| view.status_text().to_string())
+            .read_with(visual, |view, cx| {
+                view.status_text(cx.global::<crate::i18n::I18nManager>().strings())
+                    .to_string()
+            })
             .contains("Preview needs a resident Markdown projection")
     );
     editor.update(visual, |editor, cx| {
         editor.set_view_mode(ViewMode::Source, cx)
     });
-    assert!(visual.debug_bounds("large-file-find-panel").is_none());
+    assert!(visual.debug_bounds("document-host-find-panel").is_none());
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.on_find_in_document_action(&crate::components::FindInDocument, window, cx);
         });
     });
     redraw(visual);
-    assert!(visual.debug_bounds("large-file-find-panel").is_some());
-    assert!(visual.debug_bounds("large-file-search-input").is_some());
-    assert!(visual.debug_bounds("large-file-scrollbar").is_some());
-    assert!(editor.read_with(visual, |editor, _cx| editor.source_surface.is_some()));
+    assert!(visual.debug_bounds("document-host-find-panel").is_some());
+    assert!(visual.debug_bounds("document-host-search-input").is_some());
+    assert!(visual.debug_bounds("document-host-scrollbar").is_some());
+    assert!(editor.read_with(visual, |editor, _cx| editor.document_host.is_some()));
     visual.simulate_input("stale query");
     visual.simulate_keystrokes("ctrl-a");
     visual.simulate_input("line 400");
@@ -577,8 +586,8 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     visual.simulate_keystrokes("escape");
     visual.simulate_keystrokes("ctrl-g");
     redraw(visual);
-    assert!(visual.debug_bounds("large-file-navigation-panel").is_some());
-    assert!(visual.debug_bounds("large-file-navigation-input").is_some());
+    assert!(visual.debug_bounds("document-host-navigation-panel").is_some());
+    assert!(visual.debug_bounds("document-host-navigation-input").is_some());
     visual.simulate_input("400");
     visual.run_until_parked();
     assert_eq!(
@@ -689,13 +698,13 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
 
     redraw(visual);
     let stable_active_body = visual
-        .debug_bounds("large-file-line-body-1")
+        .debug_bounds("document-host-line-body-1")
         .expect("reanchored active row body");
     for _ in 0..3 {
         redraw(visual);
         assert_eq!(
             visual
-                .debug_bounds("large-file-line-body-1")
+                .debug_bounds("document-host-line-body-1")
                 .expect("stable active row body"),
             stable_active_body,
             "settled viewport rows must not alternate geometry between frames"

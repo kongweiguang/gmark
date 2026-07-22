@@ -11,6 +11,13 @@ fn built_in_chinese_strings_are_utf8() {
     assert_eq!(strings.menu_file, "文件");
     assert_eq!(strings.menu_export, "导出");
     assert_eq!(strings.menu_language, "语言");
+    assert_eq!(strings.new_document_untyped, "未指定类型");
+    assert_eq!(
+        I18nStrings::en_us().new_document_untyped,
+        "Unspecified Type"
+    );
+    assert_eq!(strings.new_document_csv, "CSV 文档");
+    assert_eq!(I18nStrings::en_us().new_document_csv, "CSV Document");
     assert_eq!(strings.save_failed_title, "保存失败");
     assert_eq!(strings.export_failed_title, "导出失败");
     assert_eq!(strings.view_mode_switch_to_source, "切换到源码");
@@ -32,6 +39,35 @@ fn built_in_chinese_strings_are_utf8() {
         strings.help_about_star_message,
         "如果本项目对您有帮助，那不妨给本项目一颗 Star⭐，十分感谢！"
     );
+}
+
+#[test]
+fn large_document_strings_are_complete_and_language_specific() {
+    let zh = I18nStrings::zh_cn();
+    let en = I18nStrings::en_us();
+
+    assert_eq!(
+        zh.large_document.keys().collect::<Vec<_>>(),
+        en.large_document.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        zh.large_document_text("recovered_structured_paused"),
+        "恢复的编辑保存前，结构化视图已暂停"
+    );
+    assert_eq!(
+        en.large_document_text("recovered_structured_paused"),
+        "Structured view is paused until recovered edits are saved"
+    );
+
+    for (key, zh_value) in &zh.large_document {
+        let en_value = &en.large_document[key];
+        assert!(!zh_value.trim().is_empty(), "Chinese value is empty: {key}");
+        assert!(!en_value.trim().is_empty(), "English value is empty: {key}");
+        assert_ne!(
+            zh_value, en_value,
+            "language-specific value fell back: {key}"
+        );
+    }
 }
 
 #[test]

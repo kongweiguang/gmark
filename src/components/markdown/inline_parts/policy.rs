@@ -11,6 +11,7 @@ pub(super) fn emphasis_requires_body(delimiter: Delimiter) -> bool {
         Delimiter::BoldMarkdown { .. }
             | Delimiter::ItalicMarkdown { .. }
             | Delimiter::StrikethroughMarkdown
+            | Delimiter::HighlightMarkdown
             | Delimiter::BoldHtml
             | Delimiter::ItalicHtml
             | Delimiter::Underline
@@ -62,6 +63,15 @@ pub(super) fn is_single_tilde_delimiter(tokens: &[CharToken], index: usize) -> b
         && tokens.get(index + 1).is_none_or(|token| token.ch != '~')
 }
 
+pub(super) fn is_double_equals_delimiter(tokens: &[CharToken], index: usize) -> bool {
+    matches_sequence(tokens, index, "==")
+        && index
+            .checked_sub(1)
+            .and_then(|previous| tokens.get(previous))
+            .is_none_or(|token| token.ch != '=')
+        && tokens.get(index + 2).is_none_or(|token| token.ch != '=')
+}
+
 pub(super) fn matches_sequence(tokens: &[CharToken], index: usize, sequence: &str) -> bool {
     sequence
         .chars()
@@ -95,6 +105,7 @@ pub(super) fn escaped_sequence_token_len(tokens: &[CharToken], index: usize) -> 
         || matches_sequence(tokens, next_index, "]")
         || matches_sequence(tokens, next_index, "`")
         || matches_sequence(tokens, next_index, "^")
+        || matches_sequence(tokens, next_index, "=")
     {
         Some(1)
     } else {
@@ -405,6 +416,9 @@ pub(super) fn stack_variants(
     if style.underline {
         markdown_stack.push(Delimiter::Underline);
     }
+    if style.highlight {
+        markdown_stack.push(Delimiter::HighlightMarkdown);
+    }
     if style.strikethrough {
         markdown_stack.push(Delimiter::StrikethroughMarkdown);
     }
@@ -443,6 +457,9 @@ pub(super) fn stack_variants(
     }
     if style.underline {
         html_stack.push(Delimiter::Underline);
+    }
+    if style.highlight {
+        html_stack.push(Delimiter::HighlightMarkdown);
     }
     if style.strikethrough {
         html_stack.push(Delimiter::StrikethroughMarkdown);
@@ -494,6 +511,7 @@ pub(super) fn styles_match_ignoring_script(left: InlineStyle, right: InlineStyle
     left.bold == right.bold
         && left.italic == right.italic
         && left.underline == right.underline
+        && left.highlight == right.highlight
         && left.strikethrough == right.strikethrough
         && left.code == right.code
 }
@@ -600,6 +618,7 @@ pub(super) fn style_flag_enabled(style: InlineStyle, flag: StyleFlag) -> bool {
         StyleFlag::Italic => style.italic,
         StyleFlag::Underline => style.underline,
         StyleFlag::Strikethrough => style.strikethrough,
+        StyleFlag::Highlight => style.highlight,
         StyleFlag::Code => style.code,
         StyleFlag::Superscript => style.script == InlineScript::Superscript,
         StyleFlag::Subscript => style.script == InlineScript::Subscript,
@@ -616,6 +635,7 @@ pub(super) fn set_style_flag(
         StyleFlag::Italic => style.italic = enabled,
         StyleFlag::Underline => style.underline = enabled,
         StyleFlag::Strikethrough => style.strikethrough = enabled,
+        StyleFlag::Highlight => style.highlight = enabled,
         StyleFlag::Code => style.code = enabled,
         StyleFlag::Superscript => {
             style.script = if enabled {

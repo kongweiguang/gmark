@@ -147,9 +147,13 @@ impl Editor {
                     .size(px(14.0))
                     .text_color(c.dialog_muted),
             )
-            .on_click(move |_event, _window, cx| {
+            .on_click(move |event, _window, cx| {
                 let _ = new_tab_editor.update(cx, |editor, cx| {
-                    editor.new_untitled_tab(cx);
+                    editor.tabs.context_menu = None;
+                    editor.tabs.new_tab_menu = Some(NewTabMenu {
+                        position: event.position(),
+                    });
+                    cx.notify();
                 });
                 cx.stop_propagation();
             })
@@ -171,8 +175,6 @@ impl Editor {
                 .items_center()
                 .overflow_hidden()
                 .bg(c.tab_strip_background)
-                .border_b(px(theme.dimensions.dialog_border_width))
-                .border_color(c.dialog_border)
                 .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
                     let _ = strip_release_editor.update(cx, |editor, _cx| {
                         editor.tabs.dragging_tab = None;
@@ -211,26 +213,34 @@ impl Editor {
                         .overflow_x_scroll()
                         .children(self.tabs.records.iter().enumerate().map(|(index, record)| {
                             let active = index == self.tabs.active;
-                            let (path, dirty) = if active {
-                                (self.file_path.as_deref(), self.document_dirty)
+                            let (path, dirty, document_kind) = if active {
+                                (
+                                    self.file_path.as_deref(),
+                                    self.is_document_dirty(),
+                                    self.document_kind,
+                                )
                             } else {
                                 record
                                     .snapshot
                                     .as_ref()
                                     .map(|snapshot| {
-                                        (snapshot.file_path.as_deref(), snapshot.document_dirty)
+                                        (
+                                            snapshot.file_path.as_deref(),
+                                            snapshot.document_dirty,
+                                            snapshot.document_kind,
+                                        )
                                     })
-                                    .unwrap_or((None, false))
+                                    .unwrap_or((None, false, DocumentKind::Markdown))
                             };
                             let title = path
                                 .and_then(Path::file_name)
                                 .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| "Untitled".to_owned());
+                                .unwrap_or_else(|| document_kind.untitled_name().to_owned());
                             let display_title = middle_ellipsis(&title, 28);
                             let leading_icon = if record.pinned {
                                 TAB_PIN_ICON
                             } else {
-                                TAB_DOCUMENT_ICON
+                                document_kind.icon()
                             };
                             let title_tooltip: SharedString = title.clone().into();
                             let close_tooltip: SharedString = close_tab_tooltip.clone().into();
@@ -263,24 +273,45 @@ impl Editor {
                                 .flex()
                                 .items_center()
                                 .gap(px(7.0))
-                                .rounded(px(8.0))
-                                .border(px(theme.dimensions.dialog_border_width))
-                                .border_color(if active {
-                                    c.dialog_border
-                                } else {
-                                    hsla(0.0, 0.0, 0.0, 0.0)
-                                })
+                                .relative()
+                                .rounded_t(px(8.0))
                                 .bg(if active {
-                                    c.chrome_hover
+                                    c.tab_active_background
                                 } else {
                                     c.tab_strip_background
                                 })
-                                .hover(|this| this.bg(c.chrome_hover))
-                                .focus(|this| this.bg(c.chrome_hover))
+                                .hover(|this| {
+                                    this.bg(if active {
+                                        c.tab_active_background
+                                    } else {
+                                        c.chrome_hover
+                                    })
+                                })
+                                .focus(|this| {
+                                    this.bg(if active {
+                                        c.tab_active_background
+                                    } else {
+                                        c.chrome_hover
+                                    })
+                                })
                                 .cursor_pointer()
                                 .tooltip(move |_window, cx| {
                                     crate::ui::ui_tooltip(title_tooltip.clone(), cx)
                                 })
+                                // Edge 式活动标签靠连续底色与内容区相接，不在开口两侧留下
+                                // 截断的描边；元素必须 relative，延伸层才能稳定贴住自身底边。
+                                .children(active.then(|| {
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .right_0()
+                                        .bottom(px(-4.0))
+                                        .h(px(5.0))
+                                        .bg(c.tab_active_background)
+                                        .debug_selector(move || {
+                                            format!("document-tab-open-bottom-{index}")
+                                        })
+                                }))
                                 .child(
                                     div()
                                         .size(px(16.0))
@@ -548,7 +579,7 @@ impl Editor {
         let panel_origin = clamped_floating_panel_origin(
             position,
             panel_width,
-            compact_menu_panel_height(3, 0, d),
+            compact_menu_panel_height(4, 0, d),
             window.viewport_size(),
         );
         let editor = cx.entity().downgrade();
@@ -688,6 +719,138 @@ impl Editor {
                                             editor.request_close_other_tabs(index, cx);
                                         });
                                     })
+                            }),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    pub(in crate::editor) fn render_new_tab_menu_overlay(
+        &self,
+        theme: &crate::theme::Theme,
+        strings: &crate::i18n::I18nStrings,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let position = self.tabs.new_tab_menu.as_ref()?.position;
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let panel_width = d.context_menu_submenu_width.max(210.0);
+        let panel_origin = clamped_floating_panel_origin(
+            position,
+            panel_width,
+            compact_menu_panel_height(4, 0, d),
+            window.viewport_size(),
+        );
+        let editor = cx.entity().downgrade();
+        let dismiss_editor = editor.clone();
+        let markdown_editor = editor.clone();
+        let untyped_editor = editor.clone();
+        let json_editor = editor.clone();
+        let csv_editor = editor;
+        let item = |id: &'static str, label: String, icon: &'static str| {
+            div()
+                .id(id)
+                .debug_selector(move || id.to_owned())
+                .h(px(d.menu_item_height))
+                .px(px(d.menu_item_padding_x))
+                .flex()
+                .items_center()
+                .gap(px(7.0))
+                .rounded(px(d.menu_item_radius))
+                .text_size(px(d.menu_text_size))
+                .text_color(c.dialog_secondary_button_text)
+                .hover(|item| item.bg(c.dialog_secondary_button_hover))
+                .cursor_pointer()
+                .child(menu_icon_slot(Some(icon), c.dialog_muted))
+                .child(label)
+        };
+        Some(
+            div()
+                .id("new-tab-type-menu-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .occlude()
+                .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                    let _ = dismiss_editor.update(cx, |editor, cx| {
+                        editor.tabs.new_tab_menu = None;
+                        cx.notify();
+                    });
+                })
+                .child(
+                    div()
+                        .id("new-tab-type-menu")
+                        .debug_selector(|| "new-tab-type-menu".to_owned())
+                        .absolute()
+                        .left(panel_origin.x)
+                        .top(panel_origin.y)
+                        .w(px(panel_width))
+                        .p(px(d.menu_panel_padding))
+                        .flex()
+                        .flex_col()
+                        .gap(px(d.menu_panel_gap))
+                        .bg(c.dialog_surface)
+                        .border(px(d.dialog_border_width))
+                        .border_color(c.dialog_border)
+                        .rounded(px(d.menu_panel_radius))
+                        .shadow_lg()
+                        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                            cx.stop_propagation()
+                        })
+                        .child(
+                            item(
+                                "new-tab-untyped",
+                                strings.new_document_untyped.clone(),
+                                "icon/ui/file.svg",
+                            )
+                            .on_click(move |_event, _window, cx| {
+                                let _ = untyped_editor.update(cx, |editor, cx| {
+                                    editor.tabs.new_tab_menu = None;
+                                    editor.new_untyped_tab(cx);
+                                });
+                            }),
+                        )
+                        .child(
+                            item(
+                                "new-tab-markdown",
+                                strings.new_document_markdown.clone(),
+                                TAB_DOCUMENT_ICON,
+                            )
+                            .on_click(move |_event, _window, cx| {
+                                let _ = markdown_editor.update(cx, |editor, cx| {
+                                    editor.tabs.new_tab_menu = None;
+                                    editor.new_untitled_tab(cx);
+                                });
+                            }),
+                        )
+                        .child(
+                            item(
+                                "new-tab-json",
+                                strings.new_document_json.clone(),
+                                "icon/ui/code.svg",
+                            )
+                            .on_click(move |_event, _window, cx| {
+                                let _ = json_editor.update(cx, |editor, cx| {
+                                    editor.tabs.new_tab_menu = None;
+                                    editor.new_document_tab(DocumentKind::Json, cx);
+                                });
+                            }),
+                        )
+                        .child(
+                            item(
+                                "new-tab-csv",
+                                strings.new_document_csv.clone(),
+                                "icon/ui/table.svg",
+                            )
+                            .on_click(move |_event, _window, cx| {
+                                let _ = csv_editor.update(cx, |editor, cx| {
+                                    editor.tabs.new_tab_menu = None;
+                                    editor.new_document_tab(DocumentKind::Csv, cx);
+                                });
                             }),
                         ),
                 )

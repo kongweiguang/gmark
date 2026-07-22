@@ -13,6 +13,8 @@ pub(super) enum Delimiter {
     ItalicMarkdown { marker: char },
     /// Markdown strikethrough marker `~~`.
     StrikethroughMarkdown,
+    /// Markdown highlight marker `==`.
+    HighlightMarkdown,
     /// Markdown superscript marker `^`.
     SuperscriptMarkdown,
     /// Markdown subscript marker `~`.
@@ -39,6 +41,7 @@ impl Delimiter {
             Self::BoldMarkdown { marker } => marker.to_string().repeat(2),
             Self::ItalicMarkdown { marker } => marker.to_string(),
             Self::StrikethroughMarkdown => "~~".into(),
+            Self::HighlightMarkdown => "==".into(),
             Self::SuperscriptMarkdown => "^".into(),
             Self::SubscriptMarkdown => "~".into(),
             Self::Underline => "<u>".into(),
@@ -55,6 +58,7 @@ impl Delimiter {
             Self::BoldMarkdown { marker } => marker.to_string().repeat(2),
             Self::ItalicMarkdown { marker } => marker.to_string(),
             Self::StrikethroughMarkdown => "~~".into(),
+            Self::HighlightMarkdown => "==".into(),
             Self::SuperscriptMarkdown => "^".into(),
             Self::SubscriptMarkdown => "~".into(),
             Self::Underline => "</u>".into(),
@@ -78,6 +82,7 @@ impl Delimiter {
             Self::BoldMarkdown { .. } => 0,
             Self::Underline => 1,
             Self::StrikethroughMarkdown => 2,
+            Self::HighlightMarkdown => 2,
             Self::SuperscriptMarkdown | Self::SubscriptMarkdown => 3,
             Self::ItalicMarkdown { .. } => 4,
             Self::SuperscriptHtml | Self::SubscriptHtml => 5,
@@ -106,6 +111,8 @@ pub(crate) enum StyleFlag {
     Underline,
     /// Strikethrough text.
     Strikethrough,
+    /// Highlighted text.
+    Highlight,
     /// Inline code text.
     Code,
     /// Superscript text.
@@ -168,6 +175,9 @@ impl NormalizeBuilder {
         }
         if extra_style.underline {
             style.underline = true;
+        }
+        if extra_style.highlight {
+            style.highlight = true;
         }
         if extra_style.strikethrough {
             style.strikethrough = true;
@@ -290,6 +300,9 @@ pub(super) fn parse_until(
                 }
                 Delimiter::SubscriptMarkdown => {
                     is_single_tilde_delimiter(tokens, index) && can_close_emphasis(tokens, index)
+                }
+                Delimiter::HighlightMarkdown => {
+                    is_double_equals_delimiter(tokens, index) && can_close_emphasis(tokens, index)
                 }
                 _ => {
                     matches_sequence(tokens, index, &end_delim.close())

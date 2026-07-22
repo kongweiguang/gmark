@@ -9,7 +9,24 @@ struct PreferencesFile {
     theme: ThemePreferencesFile,
     editor: EditorPreferencesFile,
     status_bar: StatusBarPreferencesFile,
+    documents: DocumentsPreferencesFile,
     keybindings: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Serialize)]
+struct DocumentsPreferencesFile {
+    loading: DocumentLoadingPreferencesFile,
+}
+
+#[derive(Serialize)]
+struct DocumentLoadingPreferencesFile {
+    preset: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_resident_mib: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_resident_lines: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_structural_units: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -98,6 +115,14 @@ impl From<&AppPreferences> for PreferencesFile {
                 font_family: value.editor_font_family.clone(),
             },
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
+            documents: DocumentsPreferencesFile {
+                loading: DocumentLoadingPreferencesFile {
+                    preset: value.document_loading.preset.as_str().into(),
+                    max_resident_mib: value.document_loading.max_resident_mib,
+                    max_resident_lines: value.document_loading.max_resident_lines,
+                    max_structural_units: value.document_loading.max_structural_units,
+                },
+            },
             keybindings: normalize_shortcut_config(&value.keybindings),
         }
     }
@@ -262,6 +287,29 @@ fn app_preferences_from_toml_value(
         })
         .unwrap_or_default();
 
+    let loading = value
+        .get("documents")
+        .and_then(|documents| documents.get("loading"));
+    let document_loading = DocumentLoadingPreferences {
+        preset: loading
+            .and_then(|loading| loading.get("preset"))
+            .and_then(|value| value.as_str())
+            .map(DocumentLoadingPreset::from_str)
+            .unwrap_or_default(),
+        max_resident_mib: loading
+            .and_then(|loading| loading.get("max_resident_mib"))
+            .and_then(|value| value.as_integer())
+            .and_then(|value| u64::try_from(value).ok()),
+        max_resident_lines: loading
+            .and_then(|loading| loading.get("max_resident_lines"))
+            .and_then(|value| value.as_integer())
+            .and_then(|value| u64::try_from(value).ok()),
+        max_structural_units: loading
+            .and_then(|loading| loading.get("max_structural_units"))
+            .and_then(|value| value.as_integer())
+            .and_then(|value| u64::try_from(value).ok()),
+    };
+
     let status_bar = value
         .get("status_bar")
         .map(|sb| {
@@ -333,6 +381,7 @@ fn app_preferences_from_toml_value(
         recent_editing_commands,
         keybindings,
         status_bar,
+        document_loading,
     }
 }
 
@@ -485,6 +534,7 @@ pub(crate) fn save_preferences_from_window(
     default_language_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
+    document_loading: &DocumentLoadingPreferences,
     status_bar: &StatusBarPreferences,
 ) -> anyhow::Result<AppPreferences> {
     let dirs = GmarkConfigDirs::from_system()?;
@@ -504,6 +554,7 @@ pub(crate) fn save_preferences_from_window(
         default_language_id,
         image_paste_behavior,
         keybindings,
+        document_loading,
         status_bar,
         &dirs,
     )
@@ -525,6 +576,7 @@ pub(super) fn save_preferences_from_window_with_dirs(
     default_language_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
+    document_loading: &DocumentLoadingPreferences,
     status_bar: &StatusBarPreferences,
     dirs: &GmarkConfigDirs,
 ) -> anyhow::Result<AppPreferences> {
@@ -547,6 +599,7 @@ pub(super) fn save_preferences_from_window_with_dirs(
     preferences.default_language_id = default_language_id.into();
     preferences.image_paste_behavior = image_paste_behavior;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
+    preferences.document_loading = document_loading.clone();
     preferences.status_bar = status_bar.clone();
     save_app_preferences_with_dirs(&preferences, dirs)?;
     Ok(preferences)

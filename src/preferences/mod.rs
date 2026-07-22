@@ -31,7 +31,7 @@ const MAX_EDITOR_LINE_HEIGHT_PERCENT: u16 = 200;
 const EDITOR_LINE_HEIGHT_STEP: u16 = 5;
 const DEFAULT_EDITOR_CONTENT_WIDTH: u16 = 1200;
 const MIN_EDITOR_CONTENT_WIDTH: u16 = 680;
-const MAX_EDITOR_CONTENT_WIDTH: u16 = 1200;
+const MAX_EDITOR_CONTENT_WIDTH: u16 = 1600;
 const EDITOR_CONTENT_WIDTH_STEP: u16 = 40;
 const MAX_EDITOR_FONT_FAMILY_CHARS: usize = 80;
 
@@ -239,6 +239,7 @@ pub(crate) struct AppPreferences {
     pub(crate) recent_editing_commands: Vec<String>,
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
     pub(crate) status_bar: StatusBarPreferences,
+    pub(crate) document_loading: DocumentLoadingPreferences,
 }
 
 impl Default for AppPreferences {
@@ -262,7 +263,100 @@ impl Default for AppPreferences {
             recent_editing_commands: Vec::new(),
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
+            document_loading: DocumentLoadingPreferences::default(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DocumentLoadingPreset {
+    #[default]
+    Balanced,
+    LowMemory,
+    HighPerformance,
+}
+
+impl DocumentLoadingPreset {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::LowMemory => "low_memory",
+            Self::HighPerformance => "high_performance",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value {
+            "low_memory" => Self::LowMemory,
+            "high_performance" => Self::HighPerformance,
+            _ => Self::Balanced,
+        }
+    }
+
+    fn core(self) -> gmark_document_core::LoadingPreset {
+        match self {
+            Self::Balanced => gmark_document_core::LoadingPreset::Balanced,
+            Self::LowMemory => gmark_document_core::LoadingPreset::LowMemory,
+            Self::HighPerformance => gmark_document_core::LoadingPreset::HighPerformance,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DocumentLoadingPreferences {
+    pub(crate) preset: DocumentLoadingPreset,
+    pub(crate) max_resident_mib: Option<u64>,
+    pub(crate) max_resident_lines: Option<u64>,
+    pub(crate) max_structural_units: Option<u64>,
+}
+
+impl DocumentLoadingPreferences {
+    const MIB_RANGE: std::ops::RangeInclusive<u64> = 1..=1_024;
+    const LINE_RANGE: std::ops::RangeInclusive<u64> = 1_000..=10_000_000;
+    const STRUCTURE_RANGE: std::ops::RangeInclusive<u64> = 10_000..=50_000_000;
+
+    pub(crate) fn policy(&self) -> gmark_document_core::LoadingPolicy {
+        let valid = |value: Option<u64>, range: &std::ops::RangeInclusive<u64>| {
+            value.filter(|value| range.contains(value))
+        };
+        gmark_document_core::LoadingPolicy {
+            preset: self.preset.core(),
+            max_resident_bytes: valid(self.max_resident_mib, &Self::MIB_RANGE)
+                .and_then(|mib| mib.checked_mul(1024 * 1024)),
+            max_resident_lines: valid(self.max_resident_lines, &Self::LINE_RANGE),
+            max_structural_units: valid(self.max_structural_units, &Self::STRUCTURE_RANGE),
+            force_safe_source: false,
+        }
+    }
+
+    pub(crate) fn effective_max_resident_mib(&self) -> u64 {
+        self.max_resident_mib
+            .filter(|value| Self::MIB_RANGE.contains(value))
+            .unwrap_or(self.preset.core().limits().max_resident_bytes / (1024 * 1024))
+    }
+
+    pub(crate) fn effective_max_resident_lines(&self) -> u64 {
+        self.max_resident_lines
+            .filter(|value| Self::LINE_RANGE.contains(value))
+            .unwrap_or(self.preset.core().limits().max_resident_lines)
+    }
+
+    pub(crate) fn effective_max_structural_units(&self) -> u64 {
+        self.max_structural_units
+            .filter(|value| Self::STRUCTURE_RANGE.contains(value))
+            .unwrap_or(self.preset.core().limits().max_structural_units)
+    }
+
+    /// 非法覆盖值仍保留在配置中供用户修正，但打开策略会逐字段回退到预设。
+    pub(crate) fn has_invalid_override(&self) -> bool {
+        self.max_resident_mib
+            .is_some_and(|value| !Self::MIB_RANGE.contains(&value))
+            || self
+                .max_resident_lines
+                .is_some_and(|value| !Self::LINE_RANGE.contains(&value))
+            || self
+                .max_structural_units
+                .is_some_and(|value| !Self::STRUCTURE_RANGE.contains(&value))
     }
 }
 
@@ -563,4 +657,4 @@ pub(crate) use storage::{
 
 #[path = "preferences_parts/window.rs"]
 mod window;
-pub(crate) use window::open_preferences_window;
+pub(crate) use window::{localized_shortcut_command_label, open_preferences_window};

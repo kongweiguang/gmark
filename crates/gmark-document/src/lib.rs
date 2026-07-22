@@ -11,7 +11,7 @@ mod atomic_save;
 mod document;
 mod source_format;
 
-pub use atomic_save::{AtomicWriteError, AtomicWriteStage, atomic_write};
+pub use atomic_save::{AtomicWriteError, AtomicWriteStage, atomic_write, atomic_write_verified};
 pub use document::{
     DocumentError, DocumentSnapshot, Revision, SourceDocument, TextEdit, Transaction,
 };

@@ -3,6 +3,8 @@
 //! 按行为边界拆分的测试集合；include 保持原模块作用域与测试名称。
 
 include!("scenarios/editor_head.rs");
+include!("scenarios/editor_tail_18.rs");
+include!("scenarios/editor_tail_17.rs");
 include!("scenarios/editor_tail_16.rs");
 include!("scenarios/editor_tail_15.rs");
 include!("scenarios/editor_tail_14.rs");

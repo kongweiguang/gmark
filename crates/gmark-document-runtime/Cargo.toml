@@ -1,0 +1,25 @@
+# @author kongweiguang
+
+[package]
+name = "gmark-document-runtime"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+gmark-document = { path = "../gmark-document" }
+gmark-document-core = { path = "../gmark-document-core" }
+gmark-paged-document = { package = "gmark-paged-document", path = "../gmark-paged-document" }
+encoding_rs = "0.8"
+regex = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

@@ -246,7 +246,10 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.handle_context_menu_key(event, window, cx)
+        if self.handle_workspace_link_completion_key(event, cx)
+            || self.handle_diagram_overlay_key(event, cx)
+            || self.handle_table_cell_selection_key(event, cx)
+            || self.handle_context_menu_key(event, window, cx)
             || self.handle_in_window_menu_key(event, window, cx)
             || self.handle_find_panel_key(event, window, cx)
             || self.handle_command_palette_key(event, window, cx)

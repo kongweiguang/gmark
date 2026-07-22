@@ -39,6 +39,7 @@ impl PreferencesWindow {
         let show_tab_bar_actions = preferences.show_tab_bar_actions;
         let image_paste_behavior = preferences.image_paste_behavior;
         let keybindings = preferences.keybindings;
+        let document_loading = preferences.document_loading.clone();
         // 字体枚举成本较高，偏好设置窗口创建时只读取一次，渲染阶段复用稳定列表。
         let mut font_options = cx.text_system().all_font_names();
         font_options.retain(|font| !font.trim().is_empty());
@@ -84,6 +85,7 @@ impl PreferencesWindow {
             selected_language_id: selected_language_id.clone(),
             image_paste_behavior,
             keybindings: keybindings.clone(),
+            document_loading: document_loading.clone(),
             saved_startup_open: startup_open,
             saved_auto_save: auto_save,
             saved_spell_check: spell_check,
@@ -99,6 +101,7 @@ impl PreferencesWindow {
             saved_language_id: selected_language_id,
             saved_image_paste_behavior: image_paste_behavior,
             saved_keybindings: keybindings,
+            saved_document_loading: document_loading,
             theme_options,
             language_options,
             font_options,
@@ -112,6 +115,7 @@ impl PreferencesWindow {
             search_selected: 0,
             startup_dropdown_open: false,
             auto_save_dropdown_open: false,
+            document_loading_dropdown_open: false,
             theme_dropdown_open: false,
             language_dropdown_open: false,
             image_dropdown_open: false,
@@ -179,6 +183,31 @@ impl PreferencesWindow {
                 nav: PreferencesNav::File,
                 category: strings.preferences_nav_file.clone(),
                 label: strings.preferences_spell_check.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::File,
+                category: strings.preferences_nav_file.clone(),
+                label: strings.preferences_document_loading.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::File,
+                category: strings.preferences_nav_file.clone(),
+                label: strings.preferences_document_loading_preset.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::File,
+                category: strings.preferences_nav_file.clone(),
+                label: strings.preferences_document_max_resident_mib.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::File,
+                category: strings.preferences_nav_file.clone(),
+                label: strings.preferences_document_max_resident_lines.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::File,
+                category: strings.preferences_nav_file.clone(),
+                label: strings.preferences_document_max_structural_units.clone(),
             },
             PreferenceSearchItem {
                 nav: PreferencesNav::Editor,

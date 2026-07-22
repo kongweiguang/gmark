@@ -636,6 +636,36 @@ impl Block {
             return;
         }
 
+        if self.kind() == BlockKind::Paragraph && !self.uses_raw_text_editing() {
+            let mut literal = self.display_text().to_owned();
+            literal.replace_range(visible_range.clone(), new_text);
+            if BlockKind::parse_code_fence_opening(&literal).is_some() {
+                // 段首围栏在输入语言首字母时不能进入行内代码投影；否则 ```j
+                // 会被折叠为 `j`，Enter 再也无法识别代码块。这里保持字面文本，
+                // 直到 on_newline 原子地把整个前缀转换为 CodeBlock。
+                let inserted = visible_range.start..visible_range.start + new_text.len();
+                let selected_range = selected_range_relative.as_ref().map(|relative| {
+                    visible_range.start + relative.start..visible_range.start + relative.end
+                });
+                let cursor = selected_range
+                    .as_ref()
+                    .map(|range| range.end)
+                    .unwrap_or(inserted.end);
+                let marked_range =
+                    (mark_inserted_text && !new_text.is_empty()).then_some(inserted.clone());
+                self.apply_title_edit(
+                    InlineTextTree::plain(literal),
+                    cursor,
+                    marked_range,
+                    selected_range,
+                    Some(false),
+                    false,
+                    cx,
+                );
+                return;
+            }
+        }
+
         let clean_range = self.current_to_clean_range(visible_range.clone());
         let mut base_title = self.record.title.clone();
         let overlaps_delimiters = self.projection.is_some() && !self.uses_raw_text_editing();

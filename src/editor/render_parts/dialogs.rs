@@ -121,7 +121,7 @@ impl Editor {
                         .border(px(d.dialog_border_width))
                         .border_color(c.dialog_border)
                         .rounded(px(4.0))
-                        .font_family("monospace")
+                        .font_family(crate::document_host::source_monospace_font_family())
                         .text_size(px(12.0))
                         .text_color(c.dialog_body)
                         .child(text),

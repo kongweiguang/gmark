@@ -2,6 +2,13 @@
 
 use super::*;
 
+fn preview_key(source: &str, parameters: impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    parameters.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl Block {
     pub(super) fn on_html_details_toggle_mouse_down(
         &mut self,
@@ -132,7 +139,11 @@ impl Block {
         container.into_any_element()
     }
 
-    pub(super) fn render_math_content(&mut self, theme: &Theme) -> AnyElement {
+    pub(super) fn render_math_content(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
@@ -142,68 +153,104 @@ impl Block {
             .as_deref()
             .unwrap_or_else(|| self.display_text())
             .to_string();
+        let text_color = c.text_default;
+        let font_size = display_math_font_size(t.text_size);
+        let key = preview_key(&raw, (format!("{text_color:?}"), font_size.to_bits()));
+        if self.math_preview_key != Some(key) {
+            self.math_preview_key = Some(key);
+            self.math_render_error = None;
+            let source = raw.clone();
+            self.math_preview_task = Some(cx.spawn(
+                async move |this: WeakEntity<Block>, cx: &mut AsyncApp| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(100))
+                        .await;
+                    let result = cx
+                        .background_spawn(async move {
+                            parse_display_math_source(&source)
+                                .ok_or_else(|| "invalid display math source".to_owned())
+                                .and_then(|parsed| {
+                                    render_display_math_svg(&parsed, text_color, font_size)
+                                        .map_err(|error| error.to_string())
+                                })
+                        })
+                        .await;
+                    let _ = this.update(cx, |block, cx| {
+                        if block.math_preview_key != Some(key) {
+                            return;
+                        }
+                        block.math_preview_task = None;
+                        match result {
+                            Ok(rendered) => {
+                                block.last_successful_math_render = Some(rendered);
+                                block.math_render_error = None;
+                            }
+                            Err(error) => block.math_render_error = Some(error),
+                        }
+                        cx.notify();
+                    });
+                },
+            ));
+        }
 
-        let result = parse_display_math_source(&raw)
-            .ok_or_else(|| "invalid display math source".to_owned())
-            .and_then(|source| {
-                render_display_math_svg(
-                    &source,
-                    c.text_default,
-                    display_math_font_size(t.text_size),
-                )
-                .map_err(|error| error.to_string())
-            });
-
-        match result {
-            Ok(rendered) => {
-                self.math_render_error = None;
-                self.last_successful_math_render = Some(rendered.clone());
-                render_math_svg_content(&rendered, theme)
-            }
-            Err(error) if self.last_successful_math_render.is_some() => {
-                self.math_render_error = Some(error.clone());
-                let rendered = self.last_successful_math_render.as_ref().unwrap();
-                div()
-                    .id("math-render-fallback")
-                    .debug_selector(|| "math-render-fallback".to_owned())
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(render_math_svg_content(rendered, theme))
-                    .child(render_complex_warning(
-                        format!("LaTeX render error: {error}"),
-                        theme,
-                        "math-render-warning",
-                    ))
-                    .into_any_element()
-            }
-            Err(error) => {
-                self.math_render_error = Some(error.clone());
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .rounded_sm()
-                    .bg(c.source_mode_block_bg)
-                    .px(px(d.block_padding_x))
-                    .py(px(d.block_padding_y))
-                    .text_size(px(t.text_size))
-                    .line_height(rems(t.text_line_height))
-                    .text_color(c.text_default)
-                    .child(SharedString::from(raw))
-                    .child(render_complex_warning(
-                        format!("LaTeX render error: {error}"),
-                        theme,
-                        "math-render-warning",
-                    ))
-                    .into_any_element()
-            }
+        match (
+            self.last_successful_math_render.as_ref(),
+            self.math_render_error.as_ref(),
+        ) {
+            (Some(rendered), None) => render_math_svg_content(rendered, theme),
+            (Some(rendered), Some(error)) => div()
+                .id("math-render-fallback")
+                .debug_selector(|| "math-render-fallback".to_owned())
+                .w_full()
+                .min_w(px(0.0))
+                .max_w(Length::Definite(relative(1.0)))
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(render_math_svg_content(rendered, theme))
+                .child(render_complex_warning(
+                    format!("LaTeX render error: {error}"),
+                    theme,
+                    "math-render-warning",
+                ))
+                .into_any_element(),
+            (None, Some(error)) => div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .rounded_sm()
+                .bg(c.source_mode_block_bg)
+                .px(px(d.block_padding_x))
+                .py(px(d.block_padding_y))
+                .text_size(px(t.text_size))
+                .line_height(rems(t.text_line_height))
+                .text_color(c.text_default)
+                .child(SharedString::from(raw))
+                .child(render_complex_warning(
+                    format!("LaTeX render error: {error}"),
+                    theme,
+                    "math-render-warning",
+                ))
+                .into_any_element(),
+            (None, None) => div()
+                .id("math-render-pending")
+                .debug_selector(|| "math-render-pending".to_owned())
+                .w_full()
+                .min_h(px(64.0))
+                .rounded_sm()
+                .bg(c.source_mode_block_bg)
+                .into_any_element(),
         }
     }
 
-    pub(super) fn render_mermaid_content(&mut self, theme: &Theme, window: &Window) -> AnyElement {
+    pub(super) fn render_mermaid_content(
+        &mut self,
+        theme: &Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
@@ -217,60 +264,146 @@ impl Block {
         let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
         let available_width = effective_image_width(self, viewport_width, d);
         let theme_mode = MermaidThemeMode::from_theme(theme);
-
-        let result = parse_mermaid_fence_source(&raw)
-            .ok_or_else(|| "invalid Mermaid fence source".to_owned())
-            .and_then(|source| {
-                render_mermaid_svg_for_display(&source, available_width, viewport_width, theme_mode)
-                    .map_err(|error| error.to_string())
-            });
-        match result {
-            Ok(rendered) => {
-                self.mermaid_render_error = None;
-                self.last_successful_mermaid_render = Some(rendered.clone());
-                render_mermaid_svg_content(&rendered, d.block_padding_y)
-            }
-            Err(error) if self.last_successful_mermaid_render.is_some() => {
-                self.mermaid_render_error = Some(error.clone());
-                let rendered = self.last_successful_mermaid_render.as_ref().unwrap();
-                div()
-                    .id("mermaid-render-fallback")
-                    .debug_selector(|| "mermaid-render-fallback".to_owned())
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(render_mermaid_svg_content(rendered, d.block_padding_y))
-                    .child(render_complex_warning(
-                        format!("Mermaid render error: {error}"),
-                        theme,
-                        "mermaid-render-warning",
-                    ))
-                    .into_any_element()
-            }
-            Err(error) => {
-                self.mermaid_render_error = Some(error.clone());
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .rounded_sm()
-                    .bg(c.source_mode_block_bg)
-                    .px(px(d.block_padding_x))
-                    .py(px(d.block_padding_y))
-                    .text_size(px(t.text_size))
-                    .line_height(rems(t.text_line_height))
-                    .text_color(c.text_default)
-                    .child(SharedString::from(raw))
-                    .child(render_complex_warning(
-                        format!("Mermaid render error: {error}"),
-                        theme,
-                        "mermaid-render-warning",
-                    ))
-                    .into_any_element()
-            }
+        let key = preview_key(
+            &raw,
+            (
+                available_width.to_bits(),
+                viewport_width.to_bits(),
+                theme_mode,
+            ),
+        );
+        if self.mermaid_preview_key != Some(key) {
+            self.mermaid_preview_key = Some(key);
+            let source = raw.clone();
+            self.mermaid_preview_task = Some(cx.spawn(
+                async move |this: WeakEntity<Block>, cx: &mut AsyncApp| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(250))
+                        .await;
+                    let result = cx
+                        .background_spawn(async move {
+                            parse_mermaid_fence_source(&source)
+                                .ok_or_else(|| "invalid Mermaid fence source".to_owned())
+                                .and_then(|parsed| {
+                                    render_mermaid_svg_for_display(
+                                        &parsed,
+                                        available_width,
+                                        viewport_width,
+                                        theme_mode,
+                                    )
+                                    .map_err(|error| error.to_string())
+                                })
+                        })
+                        .await;
+                    let _ = this.update(cx, |block, cx| {
+                        if block.mermaid_preview_key != Some(key) {
+                            return;
+                        }
+                        block.mermaid_preview_task = None;
+                        match result {
+                            Ok(rendered) => {
+                                block.last_successful_mermaid_render = Some(rendered);
+                                block.mermaid_render_error = None;
+                            }
+                            Err(error) => block.mermaid_render_error = Some(error),
+                        }
+                        cx.notify();
+                    });
+                },
+            ));
         }
+        let content = match (
+            self.last_successful_mermaid_render.as_ref(),
+            self.mermaid_render_error.as_ref(),
+        ) {
+            (Some(rendered), None) => render_mermaid_svg_content(rendered, d.block_padding_y),
+            (Some(rendered), Some(error)) => div()
+                .id("mermaid-render-fallback")
+                .debug_selector(|| "mermaid-render-fallback".to_owned())
+                .w_full()
+                .min_w(px(0.0))
+                .max_w(Length::Definite(relative(1.0)))
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(render_mermaid_svg_content(rendered, d.block_padding_y))
+                .child(render_complex_warning(
+                    format!("Mermaid render error: {error}"),
+                    theme,
+                    "mermaid-render-warning",
+                ))
+                .into_any_element(),
+            (None, Some(error)) => div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .rounded_sm()
+                .bg(c.source_mode_block_bg)
+                .px(px(d.block_padding_x))
+                .py(px(d.block_padding_y))
+                .text_size(px(t.text_size))
+                .line_height(rems(t.text_line_height))
+                .text_color(c.text_default)
+                .child(SharedString::from(raw))
+                .child(render_complex_warning(
+                    format!("Mermaid render error: {error}"),
+                    theme,
+                    "mermaid-render-warning",
+                ))
+                .into_any_element(),
+            (None, None) => div()
+                .id("mermaid-render-pending")
+                .debug_selector(|| "mermaid-render-pending".to_owned())
+                .w_full()
+                .min_h(px(96.0))
+                .rounded_sm()
+                .bg(c.source_mode_block_bg)
+                .into_any_element(),
+        };
+        let Some(rendered) = self.last_successful_mermaid_render.clone() else {
+            return content;
+        };
+        let preview_key = key;
+        div()
+            .relative()
+            .w_full()
+            .min_w(px(0.0))
+            .max_w(Length::Definite(relative(1.0)))
+            .overflow_hidden()
+            .child(content)
+            .child(
+                div()
+                    .id("mermaid-open-overlay")
+                    .debug_selector(|| "mermaid-open-overlay".to_owned())
+                    .absolute()
+                    .top(px(6.0))
+                    .right(px(6.0))
+                    .size(px(30.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .bg(c.dialog_surface)
+                    .border(px(1.0))
+                    .border_color(c.dialog_border)
+                    .text_color(c.text_link)
+                    .cursor_pointer()
+                    .hover(|this| this.bg(c.chrome_hover))
+                    .child("↗")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_block, _event, _window, cx| {
+                            cx.emit(BlockEvent::RequestOpenMermaidOverlay {
+                                preview_key,
+                                rendered: rendered.clone(),
+                            });
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .into_any_element()
     }
 
     pub(super) fn render_text_or_mixed_inline_visuals(

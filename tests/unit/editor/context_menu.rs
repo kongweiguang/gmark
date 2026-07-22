@@ -81,11 +81,11 @@ async fn context_menu_keyboard_skips_disabled_table_edges(cx: &mut TestAppContex
                 index: 0,
             },
         });
-        editor.context_menu_keyboard_item = Some(2);
+        editor.context_menu_keyboard_item = Some(5);
         assert!(editor.handle_context_menu_key(&key_event("down"), window, cx));
         assert_eq!(
             editor.context_menu_keyboard_item,
-            Some(4),
+            Some(7),
             "disabled move-left command must be skipped"
         );
     });
@@ -245,7 +245,7 @@ async fn context_insert_keyboard_model_matches_shared_command_order(cx: &mut Tes
         assert!(editor.handle_context_menu_key(&key_event("down"), window, cx));
         assert!(editor.handle_context_menu_key(&key_event("right"), window, cx));
         assert!(editor.handle_context_menu_key(&key_event("end"), window, cx));
-        assert_eq!(editor.context_menu_keyboard_submenu_item, Some(3));
+        assert_eq!(editor.context_menu_keyboard_submenu_item, Some(5));
         assert!(editor.handle_context_menu_key(&key_event("enter"), window, cx));
         assert!(
             editor.document.visible_blocks().iter().any(

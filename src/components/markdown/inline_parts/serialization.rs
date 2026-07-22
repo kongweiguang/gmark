@@ -292,6 +292,18 @@ impl InlineTextTree {
         self.toggle_style(range, StyleFlag::Underline)
     }
 
+    pub fn toggle_highlight(&mut self, range: Range<usize>) -> bool {
+        self.toggle_style(range, StyleFlag::Highlight)
+    }
+
+    pub fn toggle_superscript(&mut self, range: Range<usize>) -> bool {
+        self.toggle_style(range, StyleFlag::Superscript)
+    }
+
+    pub fn toggle_subscript(&mut self, range: Range<usize>) -> bool {
+        self.toggle_style(range, StyleFlag::Subscript)
+    }
+
     pub fn toggle_strikethrough(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Strikethrough)
     }
@@ -512,7 +524,6 @@ impl InlineTextTree {
         self.normalize_fragments();
     }
 
-    #[cfg(test)]
     pub fn replace_visible_range(
         &self,
         range: Range<usize>,

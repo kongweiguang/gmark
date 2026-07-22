@@ -254,6 +254,8 @@ pub struct PrepaintState {
     source_layout_cache_hit: bool,
     source_line_numbers: Vec<ShapedLine>,
     source_line_number_gutter_width: Pixels,
+    source_gutter_separator: Option<PaintQuad>,
+    active_source_line: Option<PaintQuad>,
     cursor: Option<PaintQuad>,
     selection: Vec<PaintQuad>,
     code_backgrounds: Vec<PaintQuad>,
@@ -507,6 +509,15 @@ impl Element for BlockTextElement {
         } else {
             Vec::new()
         };
+        let source_gutter_separator = show_source_line_numbers.then(|| {
+            fill(
+                Bounds::new(
+                    point(text_bounds.left() - px(1.0), bounds.top()),
+                    size(px(1.0), bounds.size.height),
+                ),
+                theme.colors.dialog_border.opacity(0.7),
+            )
+        });
 
         let cursor_opacity = input.cursor_opacity();
         let cursor_color = {
@@ -572,6 +583,30 @@ impl Element for BlockTextElement {
                 (vec![], None)
             };
 
+        let active_source_line =
+            (focused && input.is_source_raw_mode() && !self.is_placeholder && !lines.is_empty())
+                .then(|| {
+                    cursor_bounds_for_offset(
+                        &lines,
+                        text_bounds,
+                        line_height,
+                        input.display_text(),
+                        cursor,
+                        text_align,
+                        px(cursor_width),
+                    )
+                    .map(|caret| {
+                        fill(
+                            Bounds::new(
+                                point(bounds.left(), caret.top()),
+                                size(bounds.size.width, caret.size.height),
+                            ),
+                            theme.colors.source_mode_block_bg.opacity(0.55),
+                        )
+                    })
+                })
+                .flatten();
+
         // Compute code-span background quads with rounded corners and padding.
         let mut code_quads = Vec::new();
         if show_inline_code_backgrounds && !self.is_placeholder {
@@ -611,6 +646,8 @@ impl Element for BlockTextElement {
             source_layout_cache_hit: request_layout.source_layout_cache_hit.get(),
             source_line_numbers,
             source_line_number_gutter_width,
+            source_gutter_separator,
+            active_source_line,
             cursor: cursor_quad,
             selection: selection_quads,
             code_backgrounds: code_quads,
@@ -663,6 +700,13 @@ impl Element for BlockTextElement {
                 ElementInputHandler::new(text_bounds, self.input.clone()),
                 cx,
             );
+        }
+
+        if let Some(active_source_line) = prepaint.active_source_line.take() {
+            window.paint_quad(active_source_line);
+        }
+        if let Some(source_gutter_separator) = prepaint.source_gutter_separator.take() {
+            window.paint_quad(source_gutter_separator);
         }
 
         // Paint code backgrounds behind text.

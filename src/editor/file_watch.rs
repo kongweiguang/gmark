@@ -100,7 +100,7 @@ impl Editor {
     pub(super) fn restart_file_watcher(&mut self, cx: &mut Context<Self>) {
         self.file_watch_task = None;
         self.file_watch_guard = None;
-        if self.source_surface.is_some() {
+        if self.document_host.is_some() {
             // 大文档以 file id、抽样前缀和 generation 区分追加、截断与替换；普通
             // fingerprint watcher 会把合法 tail 追加误报成冲突，因此同一 Tab 只能保留
             // 大文档监控这一条事实来源。

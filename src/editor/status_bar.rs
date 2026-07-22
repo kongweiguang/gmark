@@ -95,6 +95,28 @@ impl StatusBarState {
 }
 
 impl Editor {
+    /// 右下角模式按钮保持单一视觉契约；文件类型只决定其背后的实时编辑能力。
+    pub(in crate::editor) fn activate_status_view_mode(
+        &mut self,
+        mode: super::ViewMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let json_graph = (mode == super::ViewMode::Rendered)
+            .then(|| self.document_host.clone())
+            .flatten()
+            .filter(|view| view.read(cx).is_json_document());
+        let Some(graph_view) = json_graph else {
+            self.set_view_mode(mode, cx);
+            return;
+        };
+
+        self.set_view_mode(super::ViewMode::Preview, cx);
+        graph_view.update(cx, |view, cx| {
+            view.begin_selected_json_graph_edit(window, cx)
+        });
+    }
+
     fn set_status_tooltip_hover(
         &mut self,
         tooltip: StatusTooltip,
@@ -177,16 +199,20 @@ impl Editor {
 
         let mut right_items: Vec<AnyElement> = Vec::new();
         let mut overflow_items: Vec<AnyElement> = Vec::new();
-        let large_file_status = self
-            .source_surface
+        let resident_growth_status = self.source_document.resident_growth_reason().map(|_| {
+            SharedString::from(strings.large_document_text("resident_growth_reopen_source"))
+        });
+        let document_host_status = self
+            .document_host
             .as_ref()
-            .map(|view| view.read(cx).status_text());
+            .map(|view| view.read(cx).status_text(strings))
+            .or(resident_growth_status);
 
-        if let Some(status) = &large_file_status {
+        if let Some(status) = &document_host_status {
             right_items.push(
                 div()
-                    .id("status-bar-large-file-status")
-                    .debug_selector(|| "status-bar-large-file-status".to_owned())
+                    .id("status-bar-document-host-status")
+                    .debug_selector(|| "status-bar-document-host-status".to_owned())
                     .max_w(px(260.0))
                     .overflow_hidden()
                     .truncate()
@@ -214,7 +240,7 @@ impl Editor {
             strings,
         );
         let encoding = self
-            .source_surface
+            .document_host
             .as_ref()
             .map_or(resident_encoding, |view| view.read(cx).encoding_label());
         // 左侧只保留侧栏入口；文档状态与模式在右侧，低频源码格式在窄窗口进入 overflow。
@@ -234,17 +260,18 @@ impl Editor {
             ));
         }
 
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            let follow_enabled = large_file.read(cx).follow_enabled();
-            let follow_view = large_file.clone();
+        if let Some(document_host) = self.document_host.clone() {
+            let follow_enabled = document_host.read(cx).follow_enabled();
+            let follow_view = document_host.clone();
             overflow_items.push(
                 render_large_overflow_action(
                     "status-bar-large-follow",
                     if follow_enabled {
-                        "Pause log following"
+                        strings.large_document_text("pause_log_following")
                     } else {
-                        "Follow appended content"
-                    },
+                        strings.large_document_text("follow_appended_content")
+                    }
+                    .to_owned(),
                     follow_enabled,
                     theme,
                 )
@@ -257,59 +284,56 @@ impl Editor {
             );
             overflow_items.push(render_overflow_text(
                 "status-bar-large-reopen-encoding-label",
-                "Reopen with encoding".to_owned(),
+                strings
+                    .large_document_text("reopen_with_encoding")
+                    .to_owned(),
                 theme,
             ));
-            let current_encoding = large_file.read(cx).encoding_label();
-            for (id, label, active_label, encoding) in [
+            let current_encoding = document_host.read(cx).encoding_label();
+            for (id, active_label, encoding) in [
                 (
                     "status-bar-large-reopen-utf8",
-                    "Reopen as UTF-8",
                     "UTF-8",
-                    gmark_large_document::TextEncoding::Utf8 { bom: false },
+                    gmark_document_core::TextEncoding::Utf8 { bom: false },
                 ),
                 (
                     "status-bar-large-reopen-utf8-bom",
-                    "Reopen as UTF-8 BOM",
                     "UTF-8 BOM",
-                    gmark_large_document::TextEncoding::Utf8 { bom: true },
+                    gmark_document_core::TextEncoding::Utf8 { bom: true },
                 ),
                 (
                     "status-bar-large-reopen-utf16-le",
-                    "Reopen as UTF-16 LE",
                     "UTF-16 LE",
-                    gmark_large_document::TextEncoding::Utf16Le,
+                    gmark_document_core::TextEncoding::Utf16Le,
                 ),
                 (
                     "status-bar-large-reopen-utf16-be",
-                    "Reopen as UTF-16 BE",
                     "UTF-16 BE",
-                    gmark_large_document::TextEncoding::Utf16Be,
+                    gmark_document_core::TextEncoding::Utf16Be,
                 ),
                 (
                     "status-bar-large-reopen-windows-1252",
-                    "Reopen as WINDOWS-1252",
                     "WINDOWS-1252",
-                    gmark_large_document::TextEncoding::Legacy("windows-1252".to_owned()),
+                    gmark_document_core::TextEncoding::Legacy("windows-1252".to_owned()),
                 ),
                 (
                     "status-bar-large-reopen-gbk",
-                    "Reopen as GBK",
                     "GBK",
-                    gmark_large_document::TextEncoding::Legacy("gbk".to_owned()),
+                    gmark_document_core::TextEncoding::Legacy("gbk".to_owned()),
                 ),
                 (
                     "status-bar-large-reopen-shift-jis",
-                    "Reopen as SHIFT_JIS",
                     "SHIFT_JIS",
-                    gmark_large_document::TextEncoding::Legacy("shift_jis".to_owned()),
+                    gmark_document_core::TextEncoding::Legacy("shift_jis".to_owned()),
                 ),
             ] {
-                let encoding_view = large_file.clone();
+                let encoding_view = document_host.clone();
                 overflow_items.push(
                     render_large_overflow_action(
                         id,
-                        label,
+                        strings
+                            .large_document_text("reopen_as_template")
+                            .replace("{encoding}", active_label),
                         current_encoding == active_label,
                         theme,
                     )
@@ -325,17 +349,20 @@ impl Editor {
                     .into_any_element(),
                 );
             }
-            if large_file.read(cx).has_registered_structure_view() {
-                let structure_active = large_file.read(cx).structure_view_active();
-                let structured_view = large_file.clone();
+            if document_host.read(cx).has_registered_structure_view()
+                && !document_host.read(cx).is_json_document()
+            {
+                let structure_active = document_host.read(cx).structure_view_active();
+                let structured_view = document_host.clone();
                 overflow_items.push(
                     render_large_overflow_action(
                         "status-bar-large-structure",
                         if structure_active {
-                            "Return to source"
+                            strings.large_document_text("return_to_source")
                         } else {
-                            "Open structured data view"
-                        },
+                            strings.large_document_text("open_structured_view")
+                        }
+                        .to_owned(),
                         structure_active,
                         theme,
                     )
@@ -354,16 +381,17 @@ impl Editor {
                     }))
                     .into_any_element(),
                 );
-                let split_active = large_file.read(cx).structured_split_active();
-                let split_view = large_file.clone();
+                let split_active = document_host.read(cx).structured_split_active();
+                let split_view = document_host.clone();
                 overflow_items.push(
                     render_large_overflow_action(
                         "status-bar-large-structured-split",
                         if split_active {
-                            "Close source + structure split"
+                            strings.large_document_text("close_source_structure_split")
                         } else {
-                            "Open source + structure split"
-                        },
+                            strings.large_document_text("open_source_structure_split")
+                        }
+                        .to_owned(),
                         split_active,
                         theme,
                     )
@@ -382,20 +410,21 @@ impl Editor {
                     .into_any_element(),
                 );
             }
-            let endings_visible = large_file.read(cx).line_endings_visible();
+            let endings_visible = document_host.read(cx).line_endings_visible();
             overflow_items.push(
                 render_large_overflow_action(
                     "status-bar-large-line-endings",
                     if endings_visible {
-                        "Hide line endings"
+                        strings.large_document_text("hide_line_endings")
                     } else {
-                        "Show line endings"
-                    },
+                        strings.large_document_text("show_line_endings")
+                    }
+                    .to_owned(),
                     endings_visible,
                     theme,
                 )
                 .on_click(cx.listener(move |editor, _, _, cx| {
-                    large_file.update(cx, |view, cx| view.toggle_line_endings(cx));
+                    document_host.update(cx, |view, cx| view.toggle_line_endings(cx));
                     editor.status_bar.format_overflow_open = false;
                     cx.notify();
                 }))
@@ -409,7 +438,7 @@ impl Editor {
                 super::ViewMode::Source | super::ViewMode::Split
             )
         {
-            let position = self.source_surface.as_ref().map_or_else(
+            let position = self.document_host.as_ref().map_or_else(
                 || self.compute_source_cursor_position(cx),
                 |view| view.read(cx).cursor_position(cx),
             );
@@ -421,7 +450,7 @@ impl Editor {
             }
         }
 
-        if large_file_status.is_none() && prefs.show_word_count {
+        if document_host_status.is_none() && prefs.show_word_count {
             let revision = self.source_document.revision();
             let total_count = if let Some(count) = self.status_bar.cached_word_count(revision) {
                 Some(count)
@@ -467,10 +496,37 @@ impl Editor {
         }
 
         if prefs.show_mode_switch {
+            let json_document = self
+                .document_host
+                .as_ref()
+                .is_some_and(|view| view.read(cx).is_json_document());
+            let available_modes: Vec<super::ViewMode> = self.document_host.as_ref().map_or_else(
+                || {
+                    vec![
+                        super::ViewMode::Rendered,
+                        super::ViewMode::Source,
+                        super::ViewMode::Split,
+                        super::ViewMode::Preview,
+                    ]
+                },
+                |view| {
+                    if view.read(cx).supports_tabular_modes() {
+                        vec![
+                            super::ViewMode::Rendered,
+                            super::ViewMode::Source,
+                            super::ViewMode::Split,
+                            super::ViewMode::Preview,
+                        ]
+                    } else {
+                        vec![super::ViewMode::Source]
+                    }
+                },
+            );
             right_items.push(render_mode_switch(
                 &mut self.status_bar,
                 self.view_mode,
-                self.source_surface.is_some(),
+                &available_modes,
+                json_document,
                 theme,
                 strings,
                 cx,

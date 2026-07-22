@@ -437,6 +437,7 @@ impl Editor {
             }
         }
         self.sync_source_document_from_projection(&source);
+        self.source_document.mark_dirty();
         self.pending_dirty_source = Some(source);
         self.render_row_cache = None;
         match self.view_mode {

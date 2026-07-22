@@ -18,11 +18,12 @@ use crate::components::markdown::paste::should_split_plain_multiline_paste;
 use crate::components::{
     BlockDown, BlockUp, BoldSelection, CodeSelection, Copy, CopyAsMarkdown, Cut, Delete,
     DeleteBack, DismissTransientUi, End, ExitCodeBlock, FindInDocument, FindNext, FindPrevious,
-    FocusNext, FocusPrev, GoToLine, Home, IndentBlock, ItalicSelection, JumpToBottom, JumpToTop,
-    LinkSelection, MoveLeft, MoveRight, Newline, OutdentBlock, PageDown, PageUp, Paste,
-    PasteAsPlainText, Redo, SaveDocument, SelectAll, SelectEnd, SelectHome, SelectLeft,
-    SelectRight, StrikethroughSelection, UnderlineSelection, Undo, WordDeleteBack,
-    WordDeleteForward, WordMoveLeft, WordMoveRight, WordSelectLeft, WordSelectRight,
+    FocusNext, FocusPrev, GoToLine, HighlightSelection, Home, IndentBlock, InlineMathSelection,
+    ItalicSelection, JumpToBottom, JumpToTop, LinkSelection, MoveLeft, MoveRight, Newline,
+    OutdentBlock, PageDown, PageUp, Paste, PasteAsPlainText, Redo, SaveDocument, SelectAll,
+    SelectEnd, SelectHome, SelectLeft, SelectRight, StrikethroughSelection, SubscriptSelection,
+    SuperscriptSelection, UnderlineSelection, Undo, WordDeleteBack, WordDeleteForward,
+    WordMoveLeft, WordMoveRight, WordSelectLeft, WordSelectRight,
 };
 
 impl Block {

@@ -23,6 +23,45 @@ async fn tab_inserts_character_in_code_block(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui::test]
+async fn enter_after_typed_fence_uses_preserved_markdown_and_opens_code_block(
+    cx: &mut TestAppContext,
+) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
+
+    cx.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            block.focus_handle.focus(window);
+            block.sync_inline_projection_for_focus(true);
+            for ch in "```java".chars() {
+                <Block as EntityInputHandler>::replace_text_in_range(
+                    block,
+                    None,
+                    &ch.to_string(),
+                    window,
+                    block_cx,
+                );
+            }
+            assert_eq!(block.display_text(), "```java");
+            assert_eq!(block.record.title.serialize_markdown(), "\\`\\`\\`java");
+            assert_eq!(block.cursor_offset(), block.visible_len());
+            block.on_newline(&Newline, window, block_cx);
+        });
+    });
+
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(
+            block.kind(),
+            BlockKind::CodeBlock {
+                language: Some("java".into())
+            }
+        );
+        assert_eq!(block.display_text(), "");
+        assert_eq!(block.selected_range, 0..0);
+    });
+}
+
 #[test]
 fn expanded_code_cursor_offset_stays_before_closing_backtick() {
     let fragments = vec![InlineFragment {
@@ -753,4 +792,3 @@ async fn typing_closing_italic_marker_places_caret_after_marker(cx: &mut TestApp
         );
     });
 }
-

@@ -82,14 +82,14 @@ async fn split_divider_resizes_resets_and_preserves_document_state(cx: &mut Test
     });
     visual.simulate_mouse_up(drag_target, MouseButton::Left, Modifiers::default());
     visual.run_until_parked();
-    editor.update(visual, |editor, _cx| {
+    editor.update(visual, |editor, cx| {
         assert!(editor.split_resize_session.is_none());
         assert_eq!(editor.source_document.text(), source);
         assert_eq!(editor.source_document.revision(), revision);
         assert_eq!(editor.document_dirty, dirty);
         assert!(
             editor
-                .workspace_session_snapshot()
+                .workspace_session_snapshot(cx)
                 .split_pane_ratio
                 .is_some_and(|ratio| ratio > 0.5)
         );
@@ -115,9 +115,9 @@ async fn split_divider_resizes_resets_and_preserves_document_state(cx: &mut Test
     let source_reset = visual.debug_bounds("split-source-pane-shell").unwrap();
     let preview_reset = visual.debug_bounds("split-preview-pane").unwrap();
     assert!((f32::from(source_reset.size.width - preview_reset.size.width)).abs() <= 1.0);
-    editor.update(visual, |editor, _cx| {
+    editor.update(visual, |editor, cx| {
         assert_eq!(
-            editor.workspace_session_snapshot().split_pane_ratio,
+            editor.workspace_session_snapshot(cx).split_pane_ratio,
             Some(0.5)
         );
     });
@@ -166,13 +166,13 @@ async fn split_divider_keyboard_controls_are_focused_bounded_and_non_destructive
     });
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
-    editor.update(visual, |editor, _cx| {
+    editor.update(visual, |editor, cx| {
         assert!((editor.split_pane_ratio - 0.5).abs() < 0.001);
         assert_eq!(editor.source_document.text(), source);
         assert_eq!(editor.source_document.revision(), revision);
         assert_eq!(editor.document_dirty, dirty);
         assert_eq!(
-            editor.workspace_session_snapshot().split_pane_ratio,
+            editor.workspace_session_snapshot(cx).split_pane_ratio,
             Some(0.5)
         );
     });

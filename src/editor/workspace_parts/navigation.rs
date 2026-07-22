@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use crate::i18n::I18nManager;
 
 impl Editor {
     pub(super) fn jump_to_source_line(&mut self, line: usize, cx: &mut Context<Self>) {
@@ -12,7 +13,7 @@ impl Editor {
             .sum::<usize>()
             .min(source.len());
         let selection =
-            UndoSelectionSnapshot::collapsed(offset, gmark_large_document::SourceAffinity::Before);
+            UndoSelectionSnapshot::collapsed(offset, gmark_document_core::SourceAffinity::Before);
         // 虚拟面可能先滚动再挂载目标 Entity；权威源码选择仍须立即更新，供会话与后续挂载恢复。
         self.last_selection_snapshot = selection;
         if let Some(y) = self
@@ -101,7 +102,7 @@ impl Editor {
             .position(|node| match (&self.workspace.selected, &node.kind) {
                 (
                     Some(WorkspaceSelection::File(selected)),
-                    WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::MarkdownFile(path),
+                    WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::File(path),
                 ) => selected == path,
                 (
                     Some(WorkspaceSelection::Outline(selected)),
@@ -113,7 +114,7 @@ impl Editor {
 
     pub(super) fn select_workspace_keyboard_node(&mut self, node: &WorkspaceKeyboardNode) {
         self.workspace.selected = match &node.kind {
-            WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::MarkdownFile(path) => {
+            WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::File(path) => {
                 Some(WorkspaceSelection::File(path.clone()))
             }
             WorkspaceTreeKind::Heading { .. } => Some(WorkspaceSelection::Outline(node.id.clone())),
@@ -128,7 +129,7 @@ impl Editor {
     ) {
         match node.kind {
             WorkspaceTreeKind::Directory(_) => self.toggle_workspace_node(&node.id, cx),
-            WorkspaceTreeKind::MarkdownFile(path) => self.open_workspace_file(path, window, cx),
+            WorkspaceTreeKind::File(path) => self.open_workspace_file(path, window, cx),
             WorkspaceTreeKind::Heading { line, .. } => {
                 self.select_outline_node(node.id, line, window, cx)
             }
@@ -348,7 +349,12 @@ impl Editor {
                 let candidate = PathBuf::from(&value);
                 if candidate.file_name() != Some(candidate.as_os_str()) {
                     if let Some(dialog) = self.workspace.operation_dialog.as_mut() {
-                        dialog.error = Some("A rename must contain only a file name.".to_owned());
+                        dialog.error = Some(
+                            cx.global::<I18nManager>()
+                                .strings()
+                                .workspace_rename_filename_only_error
+                                .clone(),
+                        );
                     }
                     cx.notify();
                     return;
@@ -419,13 +425,14 @@ impl Editor {
                             .ok()
                             .or_else(|| Some(path.clone()))
                     });
+                    let document_dirty = editor.is_document_dirty();
                     let Some(dialog) = editor.workspace.operation_dialog.as_mut() else {
                         return;
                     };
                     dialog.running = false;
                     match plan {
                         Ok(plan) => {
-                            let affects_dirty_document = editor.document_dirty
+                            let affects_dirty_document = document_dirty
                                 && current_path.as_ref().is_some_and(|current| {
                                     matches!(&plan, WorkspacePendingPlan::Move(plan) if
                                     current.starts_with(&plan.source)
@@ -508,7 +515,7 @@ impl Editor {
         if self.workspace.file_operation_task.is_some() {
             return;
         }
-        if undo && self.file_path.as_ref() == Some(&plan.path) && self.document_dirty {
+        if undo && self.file_path.as_ref() == Some(&plan.path) && self.is_document_dirty() {
             self.workspace.operation_error = Some(
                 cx.global::<crate::i18n::I18nManager>()
                     .strings()
@@ -558,7 +565,7 @@ impl Editor {
                                 if plan.kind
                                     == super::workspace_file_ops::WorkspaceCreateKind::MarkdownFile
                                 {
-                                    if editor.document_dirty {
+                                    if editor.is_document_dirty() {
                                         editor.workspace.selected =
                                             Some(WorkspaceSelection::File(plan.path.clone()));
                                     } else {
@@ -610,7 +617,7 @@ impl Editor {
                 .ok()
                 .or_else(|| Some(path.clone()))
         });
-        let affects_dirty_document = self.document_dirty
+        let affects_dirty_document = self.is_document_dirty()
             && active_path.as_ref().is_some_and(|current| {
                 current.starts_with(&plan.source)
                     || plan

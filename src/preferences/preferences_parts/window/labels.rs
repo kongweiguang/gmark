@@ -143,6 +143,21 @@ impl PreferencesWindow {
             }
             ShortcutCommand::CodeSelection => strings.preferences_shortcut_code_selection.clone(),
             ShortcutCommand::LinkSelection => strings.preferences_shortcut_link_selection.clone(),
+            ShortcutCommand::HighlightSelection => strings.slash_commands["highlight"].clone(),
+            ShortcutCommand::SuperscriptSelection => strings.slash_commands["superscript"].clone(),
+            ShortcutCommand::SubscriptSelection => strings.slash_commands["subscript"].clone(),
+            ShortcutCommand::InlineMathSelection => strings.slash_commands["inline_math"].clone(),
+            ShortcutCommand::SetParagraph => strings
+                .slash_commands
+                .get("paragraph")
+                .cloned()
+                .unwrap_or_else(|| "Paragraph".to_owned()),
+            ShortcutCommand::SetHeading1 => strings.slash_commands["heading_1"].clone(),
+            ShortcutCommand::SetHeading2 => strings.slash_commands["heading_2"].clone(),
+            ShortcutCommand::SetHeading3 => strings.slash_commands["heading_3"].clone(),
+            ShortcutCommand::SetHeading4 => strings.slash_commands["heading_4"].clone(),
+            ShortcutCommand::SetHeading5 => strings.slash_commands["heading_5"].clone(),
+            ShortcutCommand::SetHeading6 => strings.slash_commands["heading_6"].clone(),
             ShortcutCommand::IndentBlock => strings.preferences_shortcut_indent_block.clone(),
             ShortcutCommand::OutdentBlock => strings.preferences_shortcut_outdent_block.clone(),
             ShortcutCommand::ExitCodeBlock => strings.preferences_shortcut_exit_code_block.clone(),

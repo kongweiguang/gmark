@@ -15,7 +15,7 @@ use super::{
 use crate::components::markdown::inline::StyleFlag;
 use crate::components::{
     Block, BlockKind, Copy, CopyAsMarkdown, Cut, Delete, DeleteBack, EditingCommandId,
-    InlineTextTree, UndoCaptureKind, serialize_table_markdown_lines,
+    InlineTextTree, Paste, TableCellPosition, UndoCaptureKind, serialize_table_markdown_lines,
 };
 use crate::perf;
 
@@ -75,6 +75,21 @@ impl Editor {
         }
     }
 
+    fn table_cell_at_point(
+        &self,
+        position: Point<Pixels>,
+        cx: &App,
+    ) -> Option<(EntityId, TableCellPosition)> {
+        self.table_cells.values().find_map(|binding| {
+            let bounds = binding.cell.read(cx).last_bounds?;
+            let inside = position.x >= bounds.left()
+                && position.x <= bounds.right()
+                && position.y >= bounds.top()
+                && position.y <= bounds.bottom();
+            inside.then_some((binding.table_block.entity_id(), binding.position))
+        })
+    }
+
     pub(super) fn on_editor_capture_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -86,12 +101,32 @@ impl Editor {
             return;
         }
 
-        if self.view_mode != ViewMode::Rendered {
+        if !matches!(self.view_mode, ViewMode::Rendered | ViewMode::Preview) {
             cx.propagate();
             return;
         }
 
         self.rendered_select_all_cycle = None;
+        if let Some((table_block_id, position)) = self.table_cell_at_point(event.position, cx) {
+            self.cross_block_drag = None;
+            self.table_cell_drag_anchor = Some((table_block_id, position));
+            if event.modifiers.shift {
+                let anchor = self
+                    .table_cell_rectangle
+                    .filter(|selection| selection.table_block_id == table_block_id)
+                    .map(|selection| selection.anchor)
+                    .unwrap_or(position);
+                self.table_cell_rectangle = Some(super::table_selection::TableCellRectangle {
+                    table_block_id,
+                    anchor,
+                    focus: position,
+                });
+                self.sync_table_cell_rectangle_highlights(cx);
+            }
+            cx.propagate();
+            return;
+        }
+        self.table_cell_drag_anchor = None;
         self.begin_cross_block_drag_at_point(event.position, cx);
         cx.propagate();
     }
@@ -103,6 +138,23 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if !event.dragging() {
+            return;
+        }
+        if let Some((table_block_id, anchor)) = self.table_cell_drag_anchor {
+            let Some((focus_table_id, focus)) = self.table_cell_at_point(event.position, cx) else {
+                return;
+            };
+            if focus_table_id != table_block_id {
+                return;
+            }
+            self.table_cell_rectangle = Some(super::table_selection::TableCellRectangle {
+                table_block_id,
+                anchor,
+                focus,
+            });
+            self.clear_cross_block_selection(cx);
+            self.sync_table_cell_rectangle_highlights(cx);
+            cx.notify();
             return;
         }
         let Some(drag) = self.cross_block_drag else {
@@ -136,6 +188,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.cross_block_drag = None;
+        self.table_cell_drag_anchor = None;
         self.end_block_pointer_selection_sessions(cx);
     }
 
@@ -145,6 +198,11 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(tsv) = self.selected_table_cells_tsv(cx) {
+            cx.write_to_clipboard(ClipboardItem::new_string(tsv));
+            cx.stop_propagation();
+            return;
+        }
         let Some(markdown) = self.cross_block_selected_markdown(cx) else {
             cx.propagate();
             return;
@@ -168,6 +226,14 @@ impl Editor {
     }
 
     pub(super) fn on_cut_capture(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tsv) = self.selected_table_cells_tsv(cx)
+            && let Some(selection) = self.table_cell_rectangle
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(tsv));
+            self.clear_table_cell_rectangle(selection, cx);
+            cx.stop_propagation();
+            return;
+        }
         let Some(markdown) = self.cross_block_selected_markdown(cx) else {
             cx.propagate();
             return;
@@ -177,12 +243,34 @@ impl Editor {
         cx.stop_propagation();
     }
 
+    pub(super) fn on_paste_capture(
+        &mut self,
+        _: &Paste,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            cx.propagate();
+            return;
+        };
+        if self.paste_table_cells_tsv(&text, cx) {
+            cx.stop_propagation();
+        } else {
+            cx.propagate();
+        }
+    }
+
     pub(super) fn on_delete_capture(
         &mut self,
         _: &Delete,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(selection) = self.table_cell_rectangle {
+            self.clear_table_cell_rectangle(selection, cx);
+            cx.stop_propagation();
+            return;
+        }
         if !self.delete_cross_block_selection(cx) {
             cx.propagate();
             return;
@@ -300,7 +388,7 @@ impl Editor {
         block: Entity<Block>,
         cx: &mut Context<Self>,
     ) {
-        if self.view_mode != ViewMode::Rendered {
+        if !matches!(self.view_mode, ViewMode::Rendered | ViewMode::Preview) {
             self.rendered_select_all_cycle = None;
             return;
         }
@@ -575,6 +663,9 @@ impl Editor {
             EditingCommandId::Bold => Some(StyleFlag::Bold),
             EditingCommandId::Italic => Some(StyleFlag::Italic),
             EditingCommandId::Underline => Some(StyleFlag::Underline),
+            EditingCommandId::Highlight => Some(StyleFlag::Highlight),
+            EditingCommandId::Superscript => Some(StyleFlag::Superscript),
+            EditingCommandId::Subscript => Some(StyleFlag::Subscript),
             EditingCommandId::Strikethrough => Some(StyleFlag::Strikethrough),
             EditingCommandId::InlineCode => Some(StyleFlag::Code),
             EditingCommandId::ClearFormatting => None,

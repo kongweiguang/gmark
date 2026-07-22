@@ -12,6 +12,7 @@
                 bold: true,
                 italic: true,
                 underline: true,
+                highlight: false,
                 strikethrough: false,
                 code: false,
                 script: InlineScript::Normal,
@@ -55,6 +56,19 @@
         assert!(cache.style_at(0).strikethrough);
         assert_eq!(tree.serialize_markdown(), "~~text~~");
     }
+
+    #[test]
+    fn parses_toggles_and_serializes_highlight() {
+        let mut tree = InlineTextTree::from_markdown("before ==marked== after");
+        assert_eq!(tree.visible_text(), "before marked after");
+        assert!(tree.render_cache().style_at(7).highlight);
+        assert_eq!(tree.serialize_markdown(), "before ==marked== after");
+
+        assert!(tree.toggle_highlight(7..13));
+        assert!(!tree.render_cache().style_at(7).highlight);
+        assert_eq!(tree.serialize_markdown(), "before marked after");
+    }
+
 
     #[test]
     fn parses_and_serializes_superscript() {

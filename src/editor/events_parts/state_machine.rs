@@ -67,6 +67,14 @@ impl Editor {
                 } else {
                     self.mark_block_dirty(block.entity_id(), cx);
                 }
+                if self
+                    .diagram_overlay
+                    .as_ref()
+                    .is_some_and(|state| state.block_id == block.entity_id())
+                {
+                    self.diagram_overlay = None;
+                }
+                self.refresh_workspace_link_completion(&block, cx);
                 self.request_active_block_scroll_into_view(cx);
                 self.finalize_pending_undo_capture(cx);
             }
@@ -286,6 +294,18 @@ impl Editor {
                 let Some(location) = self.document.find_block_location(block.entity_id()) else {
                     return;
                 };
+                let table_fragment_targets =
+                    if structural && leading_empty && trailing.visible_len() == 0 && !quote_related
+                    {
+                        self.table_fragment_targets_for_paste(
+                            location.parent.as_ref(),
+                            location.index,
+                            &tail_lines,
+                            cx,
+                        )
+                    } else {
+                        Vec::new()
+                    };
 
                 // Physical-line paste is for plain rendered text snippets. If
                 // the classifier saw structural Markdown, delegate the tail to
@@ -300,7 +320,7 @@ impl Editor {
                     inserted_roots.push(Self::new_block(cx, BlockRecord::paragraph(String::new())));
                 }
                 self.document.insert_blocks_at(
-                    location.parent,
+                    location.parent.clone(),
                     location.index + 1,
                     inserted_roots.clone(),
                     cx,
@@ -381,6 +401,16 @@ impl Editor {
                 }
                 self.mark_dirty(cx);
                 self.finalize_pending_undo_capture(cx);
+                if !table_fragment_targets.is_empty() {
+                    self.install_table_fragment_merge_candidate(
+                        location.parent.as_ref(),
+                        inserted_roots.iter().map(Entity::entity_id).collect(),
+                        table_fragment_targets,
+                        cx,
+                    );
+                } else {
+                    self.table_fragment_merge = None;
+                }
                 cx.notify();
             }
             BlockEvent::RequestPasteImage { .. }
@@ -532,6 +562,12 @@ impl Editor {
             } => {
                 self.request_open_link_prompt(prompt_target.clone(), open_target.clone(), cx);
             }
+            BlockEvent::RequestOpenMermaidOverlay {
+                preview_key,
+                rendered,
+            } => {
+                self.open_diagram_overlay(block.entity_id(), *preview_key, rendered.clone(), cx);
+            }
             BlockEvent::RequestJumpToFootnoteDefinition { id, .. } => {
                 let _ = self.jump_to_footnote_definition(id, cx);
                 cx.notify();
@@ -567,11 +603,6 @@ impl Editor {
             } => {
                 if block.read(cx).kind() == BlockKind::Table {
                     self.preview_table_axis(block.entity_id(), *kind, *index, *hovered, cx);
-                }
-            }
-            BlockEvent::RequestSelectTableAxis { kind, index } => {
-                if block.read(cx).kind() == BlockKind::Table {
-                    self.select_table_axis(block.entity_id(), *kind, *index, cx);
                 }
             }
             BlockEvent::RequestOpenTableAxisMenu {
@@ -748,7 +779,10 @@ impl Editor {
                 }
                 cx.notify();
             }
-            BlockEvent::RequestRenderedSelectAll | BlockEvent::SelectionChanged => {}
+            BlockEvent::SelectionChanged => {
+                self.workspace_link_completion = None;
+            }
+            BlockEvent::RequestRenderedSelectAll => {}
             BlockEvent::RequestSlashCommand { .. }
             | BlockEvent::RequestEditingCommand { .. }
             | BlockEvent::RequestMoveBlock { .. } => {}

@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use crate::i18n::I18nManager;
 
 impl Editor {
     pub(in crate::editor) const HISTORY_LIMIT: usize = 200;
@@ -44,43 +45,50 @@ impl Editor {
         editor
     }
 
-    pub(crate) fn from_large_file(
+    pub(crate) fn from_source_backed_file(
         cx: &mut Context<Self>,
         path: PathBuf,
-        probe: gmark_large_document::OpenProbe,
-        source: gmark_large_document::FileSource,
+        probe: gmark_paged_document::OpenProbe,
+        source: gmark_paged_document::FileSource,
     ) -> Self {
+        let structured_preview = probe.strategy == gmark_paged_document::OpenStrategy::Resident
+            && matches!(
+                probe.format,
+                gmark_document_core::DocumentFormat::Json
+                    | gmark_document_core::DocumentFormat::Delimited { .. }
+            );
         let mut editor = Self::from_markdown_internal(cx, String::new(), Some(path.clone()), false);
-        let large_file =
-            cx.new(move |cx| crate::large_file::DiskSourceAdapter::new(path, probe, source, cx));
-        Self::subscribe_disk_source_adapter(&large_file, cx);
-        editor.source_surface = SourceSurface::disk(large_file);
-        editor.view_mode = ViewMode::Source;
+        let source_backed_view =
+            cx.new(move |cx| crate::document_host::DocumentHost::new(path, probe, source, cx));
+        Self::subscribe_document_host(&source_backed_view, cx);
+        editor.document_host = Some(source_backed_view);
+        if structured_preview {
+            if let Some(view) = editor.document_host.clone() {
+                view.update(cx, |view, cx| view.show_structure_view(cx));
+            }
+            editor.view_mode = ViewMode::Preview;
+        } else {
+            editor.view_mode = ViewMode::Source;
+        }
         editor.pending_focus = None;
         editor.active_entity_id = None;
         editor.restart_file_watcher(cx);
         editor
     }
 
-    pub(crate) fn from_large_recovery(
+    pub(crate) fn from_paged_recovery(
         cx: &mut Context<Self>,
         path: PathBuf,
-        probe: gmark_large_document::OpenProbe,
-        source: gmark_large_document::FileSource,
+        probe: gmark_paged_document::OpenProbe,
+        source: gmark_paged_document::FileSource,
         journal_path: PathBuf,
     ) -> Self {
         let mut editor = Self::from_markdown_internal(cx, String::new(), Some(path.clone()), false);
-        let large_file = cx.new(move |cx| {
-            crate::large_file::DiskSourceAdapter::from_recovery(
-                path,
-                probe,
-                source,
-                journal_path,
-                cx,
-            )
+        let document_host = cx.new(move |cx| {
+            crate::document_host::DocumentHost::from_recovery(path, probe, source, journal_path, cx)
         });
-        Self::subscribe_disk_source_adapter(&large_file, cx);
-        editor.source_surface = SourceSurface::disk(large_file);
+        Self::subscribe_document_host(&document_host, cx);
+        editor.document_host = Some(document_host);
         editor.view_mode = ViewMode::Source;
         editor.document_dirty = true;
         editor.pending_window_edited = true;
@@ -117,16 +125,17 @@ impl Editor {
         &self,
         cx: &App,
     ) -> crate::accessibility::EditorAccessibilitySnapshot {
-        if let Some(large_file) = self.source_surface.as_ref() {
-            return large_file.read(cx).accessibility_snapshot(cx);
+        let strings = cx.global::<I18nManager>().strings();
+        if let Some(document_host) = self.document_host.as_ref() {
+            return document_host.read(cx).accessibility_snapshot(cx);
         }
         let title = self
             .file_path
             .as_ref()
             .and_then(|path| path.file_name())
             .and_then(|name| name.to_str())
-            .unwrap_or("Untitled")
-            .to_owned();
+            .map(str::to_owned)
+            .unwrap_or_else(|| strings.large_document_text("untitled"));
         let lines = self
             .source_document
             .text()
@@ -137,15 +146,15 @@ impl Editor {
             .collect();
         crate::accessibility::EditorAccessibilitySnapshot {
             title,
-            dirty: self.document_dirty,
-            status: if self.document_dirty {
-                "Modified".to_owned()
+            dirty: self.is_document_dirty(),
+            status: if self.is_document_dirty() {
+                strings.large_document_text("modified").to_owned()
             } else {
-                "Saved".to_owned()
+                strings.large_document_text("saved").to_owned()
             },
             error: self
                 .external_file_conflict
-                .then(|| "File changed on disk".to_owned()),
+                .then(|| strings.large_document_text("file_changed_disk").to_owned()),
             busy: self.save_task.is_some() || self.export_in_progress,
             search_visible: self.find_panel.is_some(),
             navigation_visible: false,
@@ -155,10 +164,10 @@ impl Editor {
     }
 
     pub(in crate::editor) fn current_accessibility_revision(&self, cx: &App) -> u64 {
-        if let Some(large_file) = self.source_surface.as_ref() {
-            return large_file.read(cx).accessibility_revision();
+        if let Some(document_host) = self.document_host.as_ref() {
+            return document_host.read(cx).accessibility_revision();
         }
-        let flags = u64::from(self.document_dirty)
+        let flags = u64::from(self.is_document_dirty())
             | (u64::from(self.find_panel.is_some()) << 1)
             | (u64::from(self.external_file_conflict) << 2)
             | (u64::from(self.save_task.is_some()) << 3)
@@ -170,12 +179,12 @@ impl Editor {
             .wrapping_add(flags)
     }
 
-    pub(crate) fn subscribe_disk_source_adapter(
-        view: &Entity<crate::large_file::DiskSourceAdapter>,
+    pub(crate) fn subscribe_document_host(
+        view: &Entity<crate::document_host::DocumentHost>,
         cx: &mut Context<Self>,
     ) {
         cx.subscribe(view, |editor, _, event, cx| match event {
-            crate::large_file::DiskSourceEvent::SavedAs(path) => {
+            crate::document_host::DocumentHostEvent::SavedAs(path) => {
                 editor.file_path = Some(path.clone());
                 editor.saved_file_fingerprint = crate::recovery::fingerprint_file(path).ok();
                 editor.document_dirty = false;
@@ -183,7 +192,22 @@ impl Editor {
                 editor.schedule_workspace_session_save(cx);
                 cx.notify();
             }
-            crate::large_file::DiskSourceEvent::StateChanged => cx.notify(),
+            crate::document_host::DocumentHostEvent::StateChanged => cx.notify(),
+            crate::document_host::DocumentHostEvent::ViewModeChanged(mode) => {
+                editor.view_mode = match mode {
+                    crate::document_host::DocumentHostMode::Live => ViewMode::Rendered,
+                    crate::document_host::DocumentHostMode::Source => ViewMode::Source,
+                    crate::document_host::DocumentHostMode::Preview => ViewMode::Preview,
+                    crate::document_host::DocumentHostMode::Split => ViewMode::Split,
+                };
+                editor.schedule_workspace_session_save(cx);
+                cx.notify();
+            }
+            crate::document_host::DocumentHostEvent::SplitRatioChanged(ratio) => {
+                editor.split_pane_ratio = ratio.clamp(0.3, 0.7);
+                editor.schedule_workspace_session_save(cx);
+                cx.notify();
+            }
         })
         .detach();
     }
@@ -237,6 +261,7 @@ impl Editor {
         editor.apply_selection_snapshot_in_current_mode(&selection, cx);
         editor.last_selection_snapshot = selection;
         editor.document_dirty = true;
+        editor.source_document.mark_dirty();
         editor.pending_window_edited = true;
         editor.pending_window_title_refresh = true;
         editor
@@ -258,7 +283,11 @@ impl Editor {
         force_virtual_surface: bool,
     ) -> Self {
         let construction_started = perf::start();
-        let source_document = SourceDocument::new(&markdown);
+        let document_kind = file_path
+            .as_deref()
+            .map(DocumentKind::from_path)
+            .unwrap_or(DocumentKind::Markdown);
+        let source_document = EditorDocumentSession::new(SourceDocument::new(&markdown));
         let normalized = source_document.text();
         let saved_file_fingerprint = file_path
             .as_deref()
@@ -318,9 +347,10 @@ impl Editor {
             accessibility_bridge: None,
             accessibility_wake_task: None,
             accessibility_revision: None,
-            source_surface: SourceSurface::resident(),
+            document_host: None,
             source_document,
             source_encoding: crate::document_io::DocumentEncoding::Utf8,
+            document_kind,
             document_epoch: 0,
             projection_cache: Some(projection),
             document,
@@ -329,6 +359,7 @@ impl Editor {
             split_resize_session: None,
             split_divider_focus_handle: cx.focus_handle(),
             document_toolbar_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
+            file_open_failure_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             table_cells: HashMap::new(),
             view_mode: ViewMode::Rendered,
             pending_focus,
@@ -350,6 +381,7 @@ impl Editor {
             pending_window_title_refresh: false,
             document_dirty: false,
             file_path,
+            file_open_failure: None,
             saved_file_fingerprint,
             file_watch_guard: None,
             file_watch_task: None,
@@ -391,6 +423,11 @@ impl Editor {
             context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,
+            table_cell_rectangle: None,
+            table_cell_drag_anchor: None,
+            table_fragment_merge: None,
+            diagram_overlay: None,
+            workspace_link_completion: None,
             cross_block_selection: None,
             cross_block_drag: None,
             rendered_select_all_cycle: None,

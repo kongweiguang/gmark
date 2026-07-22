@@ -37,15 +37,18 @@ enum ToolbarCommand {
     Link,
     Overflow,
     Underline,
+    Highlight,
+    Superscript,
+    Subscript,
+    InlineMath,
     ClearFormatting,
 }
 
 impl ToolbarCommand {
-    const PRIMARY: [Self; 8] = [
+    const PRIMARY: [Self; 7] = [
         Self::BlockType,
         Self::Bold,
         Self::Italic,
-        Self::Underline,
         Self::Strikethrough,
         Self::Code,
         Self::Link,
@@ -62,6 +65,10 @@ impl ToolbarCommand {
             Self::Link => "link",
             Self::Overflow => "overflow",
             Self::Underline => "underline",
+            Self::Highlight => "highlight",
+            Self::Superscript => "superscript",
+            Self::Subscript => "subscript",
+            Self::InlineMath => "inline-math",
             Self::ClearFormatting => "clear-formatting",
         }
     }
@@ -76,6 +83,10 @@ impl ToolbarCommand {
             Self::Link => "[]",
             Self::Overflow => "...",
             Self::Underline => "U",
+            Self::Highlight => "==",
+            Self::Superscript => "x²",
+            Self::Subscript => "x₂",
+            Self::InlineMath => "$",
             Self::ClearFormatting => "Tx",
         }
     }
@@ -94,6 +105,26 @@ impl ToolbarCommand {
             Self::Link => strings.selection_toolbar_link.clone(),
             Self::Overflow => strings.selection_toolbar_more.clone(),
             Self::Underline => strings.selection_toolbar_underline.clone(),
+            Self::Highlight => strings
+                .slash_commands
+                .get("highlight")
+                .cloned()
+                .unwrap_or_else(|| "Highlight".to_owned()),
+            Self::Superscript => strings
+                .slash_commands
+                .get("superscript")
+                .cloned()
+                .unwrap_or_else(|| "Superscript".to_owned()),
+            Self::Subscript => strings
+                .slash_commands
+                .get("subscript")
+                .cloned()
+                .unwrap_or_else(|| "Subscript".to_owned()),
+            Self::InlineMath => strings
+                .slash_commands
+                .get("inline_math")
+                .cloned()
+                .unwrap_or_else(|| "Inline Math".to_owned()),
             Self::ClearFormatting => strings
                 .slash_commands
                 .get("clear_formatting")
@@ -108,6 +139,10 @@ impl ToolbarCommand {
             Self::Bold => Some(EditingCommandId::Bold),
             Self::Italic => Some(EditingCommandId::Italic),
             Self::Underline => Some(EditingCommandId::Underline),
+            Self::Highlight => Some(EditingCommandId::Highlight),
+            Self::Superscript => Some(EditingCommandId::Superscript),
+            Self::Subscript => Some(EditingCommandId::Subscript),
+            Self::InlineMath => Some(EditingCommandId::InlineMath),
             Self::Strikethrough => Some(EditingCommandId::Strikethrough),
             Self::Code => Some(EditingCommandId::InlineCode),
             Self::Link => Some(EditingCommandId::Link),

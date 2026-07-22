@@ -30,7 +30,7 @@ impl Editor {
                 editor.auto_save_task = None;
                 // 计时期间 watcher、恢复或手动保存都可能改变资格，触发前必须重新校验。
                 if EditorSettings::auto_save(cx) == AutoSavePreference::AfterDelay
-                    && editor.document_dirty
+                    && editor.is_document_dirty()
                     && editor.file_path.is_some()
                     && !editor.recovered_session
                     && !editor.external_file_conflict

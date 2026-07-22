@@ -24,6 +24,7 @@ impl PreferencesNav {
 pub(super) enum PreferencesDropdown {
     Startup,
     AutoSave,
+    DocumentLoadingPreset,
     Theme,
     Language,
     Image,
@@ -86,10 +87,16 @@ enum PreferencesStepperControl {
     LineHeightIncrease,
     ContentWidthDecrease,
     ContentWidthIncrease,
+    ResidentMibDecrease,
+    ResidentMibIncrease,
+    ResidentLinesDecrease,
+    ResidentLinesIncrease,
+    StructuralUnitsDecrease,
+    StructuralUnitsIncrease,
 }
 
 impl PreferencesStepperControl {
-    const COUNT: usize = 6;
+    const COUNT: usize = 12;
 
     fn index(self) -> usize {
         match self {
@@ -99,6 +106,12 @@ impl PreferencesStepperControl {
             Self::LineHeightIncrease => 3,
             Self::ContentWidthDecrease => 4,
             Self::ContentWidthIncrease => 5,
+            Self::ResidentMibDecrease => 6,
+            Self::ResidentMibIncrease => 7,
+            Self::ResidentLinesDecrease => 8,
+            Self::ResidentLinesIncrease => 9,
+            Self::StructuralUnitsDecrease => 10,
+            Self::StructuralUnitsIncrease => 11,
         }
     }
 
@@ -110,21 +123,28 @@ impl PreferencesStepperControl {
             Self::LineHeightIncrease => "preferences-editor-line-height-increase",
             Self::ContentWidthDecrease => "preferences-editor-content-width-decrease",
             Self::ContentWidthIncrease => "preferences-editor-content-width-increase",
+            Self::ResidentMibDecrease => "preferences-document-resident-mib-decrease",
+            Self::ResidentMibIncrease => "preferences-document-resident-mib-increase",
+            Self::ResidentLinesDecrease => "preferences-document-resident-lines-decrease",
+            Self::ResidentLinesIncrease => "preferences-document-resident-lines-increase",
+            Self::StructuralUnitsDecrease => "preferences-document-structural-units-decrease",
+            Self::StructuralUnitsIncrease => "preferences-document-structural-units-increase",
         }
     }
 }
 
 impl PreferencesDropdown {
-    const COUNT: usize = 6;
+    const COUNT: usize = 7;
 
     fn index(self) -> usize {
         match self {
             Self::Startup => 0,
             Self::AutoSave => 1,
-            Self::Theme => 2,
-            Self::Language => 3,
-            Self::Image => 4,
-            Self::Font => 5,
+            Self::DocumentLoadingPreset => 2,
+            Self::Theme => 3,
+            Self::Language => 4,
+            Self::Image => 5,
+            Self::Font => 6,
         }
     }
 }
@@ -154,6 +174,7 @@ pub(crate) struct PreferencesWindow {
     selected_language_id: String,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
+    document_loading: DocumentLoadingPreferences,
     saved_startup_open: StartupOpenPreference,
     saved_auto_save: AutoSavePreference,
     saved_spell_check: bool,
@@ -169,6 +190,7 @@ pub(crate) struct PreferencesWindow {
     saved_language_id: String,
     saved_image_paste_behavior: ImagePasteBehavior,
     saved_keybindings: BTreeMap<String, Vec<String>>,
+    saved_document_loading: DocumentLoadingPreferences,
     theme_options: Vec<ThemeCatalogEntry>,
     language_options: Vec<LanguageCatalogEntry>,
     font_options: Vec<String>,
@@ -182,6 +204,7 @@ pub(crate) struct PreferencesWindow {
     search_selected: usize,
     startup_dropdown_open: bool,
     auto_save_dropdown_open: bool,
+    document_loading_dropdown_open: bool,
     theme_dropdown_open: bool,
     language_dropdown_open: bool,
     image_dropdown_open: bool,
@@ -706,6 +729,13 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
         .preferences_window_title
         .clone();
     open_preferences_window_with_state(cx, preferences, theme_options, title)
+}
+
+pub(crate) fn localized_shortcut_command_label(
+    command: ShortcutCommand,
+    strings: &crate::i18n::I18nStrings,
+) -> String {
+    PreferencesWindow::shortcut_command_label(command, strings)
 }
 
 #[cfg(test)]

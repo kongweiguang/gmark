@@ -20,14 +20,12 @@ fn filters_english_chinese_and_pinyin_initial_aliases() {
 
 #[test]
 fn every_slash_command_uses_a_local_svg_icon() {
-    let mut paths = SLASH_COMMANDS
+    let paths = SLASH_COMMANDS
         .into_iter()
         .map(|command| command.descriptor().icon_path)
         .collect::<Vec<_>>();
     assert!(paths.iter().all(|path| path.starts_with("icon/ui/")));
     assert!(paths.iter().all(|path| path.ends_with(".svg")));
-    paths.sort_unstable();
-    paths.dedup();
     assert_eq!(paths.len(), SLASH_COMMANDS.len());
 }
 

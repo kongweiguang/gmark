@@ -523,7 +523,7 @@ impl Editor {
         let selected = match (&self.workspace.selected, &node.kind) {
             (
                 Some(WorkspaceSelection::File(selected)),
-                WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::MarkdownFile(path),
+                WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::File(path),
             ) => selected == path,
             (Some(WorkspaceSelection::Outline(selected)), _) => selected == &node.id,
             _ => false,
@@ -542,7 +542,7 @@ impl Editor {
                     text: c.text_default,
                 })
             }
-            WorkspaceTreeKind::MarkdownFile(path) => Some(WorkspaceDragPayload {
+            WorkspaceTreeKind::File(path) => Some(WorkspaceDragPayload {
                 path: path.clone(),
                 label: node.label.clone(),
                 background: c.dialog_surface,
@@ -552,7 +552,7 @@ impl Editor {
         };
         let drop_target = match &node.kind {
             WorkspaceTreeKind::Directory(path) => Some(path.clone()),
-            WorkspaceTreeKind::MarkdownFile(path) => path.parent().map(Path::to_path_buf),
+            WorkspaceTreeKind::File(path) => path.parent().map(Path::to_path_buf),
             WorkspaceTreeKind::Heading { .. } => None,
         };
         let drop_editor = editor.clone();
@@ -567,7 +567,10 @@ impl Editor {
 
         let icon = match &node.kind {
             WorkspaceTreeKind::Directory(_) => Some((FOLDER_ICON, c.dialog_muted)),
-            WorkspaceTreeKind::MarkdownFile(_) => Some((MARKDOWN_ICON, c.text_link)),
+            WorkspaceTreeKind::File(path) if is_markdown_file(path) => {
+                Some((MARKDOWN_ICON, c.text_link))
+            }
+            WorkspaceTreeKind::File(_) => Some((FILE_ICON, c.dialog_muted)),
             WorkspaceTreeKind::Heading { .. } => None,
         };
 
@@ -646,7 +649,7 @@ impl Editor {
                         editor.workspace.selected = Some(WorkspaceSelection::File(path));
                         editor.toggle_workspace_node(&node_id, cx);
                     }
-                    WorkspaceTreeKind::MarkdownFile(path) => {
+                    WorkspaceTreeKind::File(path) => {
                         editor.open_workspace_file(path, window, cx);
                     }
                     WorkspaceTreeKind::Heading { line, .. } => {
@@ -656,7 +659,7 @@ impl Editor {
             })
             .on_mouse_down(MouseButton::Right, move |event, _window, cx| {
                 let path = match &context_kind {
-                    WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::MarkdownFile(path) => {
+                    WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::File(path) => {
                         path.clone()
                     }
                     WorkspaceTreeKind::Heading { .. } => return,

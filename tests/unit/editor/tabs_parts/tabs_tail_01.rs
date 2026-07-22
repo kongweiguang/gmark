@@ -26,12 +26,12 @@
         });
         editor.update(visual, |editor, cx| {
             add_inactive_tab(editor, "survivor", "survivor.md");
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             editor.tabs.close_after_save = true;
             editor.finish_pending_tab_close_after_save(cx);
             assert_eq!(editor.tabs.records.len(), 2);
 
-            editor.document_dirty = false;
+            editor.set_document_dirty_for_test(false);
             editor.finish_pending_tab_close_after_save(cx);
             assert_eq!(editor.tabs.records.len(), 1);
             assert_eq!(editor.source_document.text(), "survivor");
@@ -67,7 +67,7 @@
             super::Editor::from_markdown(cx, "first dirty".to_owned(), None)
         });
         editor.update(visual, |editor, cx| {
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             add_inactive_tab(editor, "second dirty", "second.md");
             editor.tabs.records[1]
                 .snapshot
@@ -77,7 +77,7 @@
 
             assert!(!editor.prepare_window_close_save());
             assert!(editor.tabs.continue_window_close_after_save);
-            editor.document_dirty = false;
+            editor.set_document_dirty_for_test(false);
             editor.continue_window_close_after_save(cx);
 
             assert_eq!(editor.tabs.active, 1);
@@ -347,6 +347,9 @@
                             crate::document_io::OpenedMarkdown {
                                 text: "first".to_owned(),
                                 encoding: crate::document_io::DocumentEncoding::Utf8,
+                                text_encoding: gmark_document_core::TextEncoding::Utf8 { bom: false },
+                                file_identity: None,
+                                loading_limits: gmark_document_core::LoadingPolicy::default().effective_limits(),
                             },
                         ),
                         path: first_path.clone(),
@@ -369,6 +372,9 @@
                             crate::document_io::OpenedMarkdown {
                                 text: "second".to_owned(),
                                 encoding: crate::document_io::DocumentEncoding::Utf8,
+                                text_encoding: gmark_document_core::TextEncoding::Utf8 { bom: false },
+                                file_identity: None,
+                                loading_limits: gmark_document_core::LoadingPolicy::default().effective_limits(),
                             },
                         ),
                         path: second_path.clone(),
@@ -393,6 +399,11 @@
                                 encoding: crate::document_io::DocumentEncoding::Legacy(
                                     "windows-1252".to_owned(),
                                 ),
+                                text_encoding: gmark_document_core::TextEncoding::Legacy(
+                                    "windows-1252".to_owned(),
+                                ),
+                                file_identity: None,
+                                loading_limits: gmark_document_core::LoadingPolicy::default().effective_limits(),
                             },
                         ),
                         path: legacy_path.clone(),
@@ -432,7 +443,7 @@
                 Some(canonical_root.as_path())
             );
 
-            let persisted = editor.workspace_session_snapshot();
+            let persisted = editor.workspace_session_snapshot(cx);
             assert_eq!(persisted.tabs.len(), 3);
             assert_eq!(persisted.active_index, 1);
             assert_eq!(
@@ -460,7 +471,7 @@
             super::Editor::from_markdown(cx, "detached dirty".to_owned(), Some(editor_path))
         });
         let detached = editor.update(visual, |editor, cx| {
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             editor.view_mode = ViewMode::Source;
             add_inactive_tab(editor, "survivor", "survivor.md");
             let active_id = editor.tabs.records[0].id;
@@ -623,7 +634,7 @@
         });
         visual.update(|window, cx| {
             editor.update(cx, |editor, cx| {
-                editor.document_dirty = true;
+                editor.set_document_dirty_for_test(true);
                 assert!(!editor.on_window_should_close(window, cx));
                 assert!(editor.tabs.remove_session_after_window_close);
                 editor.on_cancel_close_dialog(&gpui::ClickEvent::default(), window, cx);
@@ -647,7 +658,7 @@
         visual.update(|window, cx| {
             editor.update(cx, |editor, cx| {
                 editor.install_workspace_session_window_observer(window, cx);
-                let snapshot = editor.workspace_session_snapshot();
+                let snapshot = editor.workspace_session_snapshot(cx);
                 let restored = snapshot
                     .window
                     .expect("window placement should be captured");
@@ -769,4 +780,25 @@
         let restored = super::Editor::restored_selection("你a", Some(&selection));
         assert_eq!(restored.range(), 0..4);
         assert!(restored.reversed());
+    }
+
+    #[test]
+    fn legacy_view_ids_are_case_insensitive_and_structure_maps_to_preview() {
+        for value in ["Source", "source"] {
+            assert_eq!(super::Editor::restored_view_mode(Some(value)), ViewMode::Source);
+        }
+        for value in ["Preview", "Structure", "structure"] {
+            assert_eq!(
+                super::Editor::restored_view_mode(Some(value)),
+                ViewMode::Preview
+            );
+        }
+        assert_eq!(
+            super::Editor::restored_view_mode(Some("Split")),
+            ViewMode::Split
+        );
+        assert_eq!(
+            super::Editor::restored_view_mode(Some("Live")),
+            ViewMode::Rendered
+        );
     }

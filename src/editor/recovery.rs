@@ -41,7 +41,7 @@ impl Editor {
                     .timer(Self::RECOVERY_IDLE_DELAY)
                     .await;
                 let step = this.update(cx, |editor, cx| {
-                    if !editor.document_dirty {
+                    if !editor.is_document_dirty() {
                         editor.recovery_task = None;
                         return RecoveryTimerStep::Stop;
                     }
@@ -91,7 +91,7 @@ impl Editor {
                         // 已无后续 await；此时清 handle 不会取消刚完成的持久化。
                         let _ = this.update(cx, |editor, cx| {
                             editor.recovery_task = None;
-                            if editor.document_dirty
+                            if editor.is_document_dirty()
                                 && editor.recovery_generation != observed_generation
                             {
                                 editor.schedule_recovery_journal(cx);

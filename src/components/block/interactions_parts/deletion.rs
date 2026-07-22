@@ -372,6 +372,14 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.is_read_only() {
+            // 本地全选保证 Split 右栏始终可用；事件让普通 Preview 沿用 Live 的
+            // 两段式语义，第二次 Ctrl/Cmd+A 再升级为整份文档选择。
+            self.select_all_text(cx);
+            cx.emit(BlockEvent::RequestRenderedSelectAll);
+            return;
+        }
+
         // 独立的 SourceRaw Block 也用于大文件行编辑、查找和跳转输入框；它没有
         // Editor 级跨块选择订阅，Ctrl+A 必须留在本地文本内，否则会选中整份大文件。
         if self.compact_source_host()

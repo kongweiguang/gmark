@@ -59,6 +59,27 @@ fn markdown_pairs_promote_bold_and_keep_bullet_shortcut_reachable() {
 }
 
 #[test]
+fn backtick_pair_promotes_to_a_reachable_fence_prefix() {
+    assert!(matches!(
+        auto_pair_edit("", 0..0, "`", false, true),
+        Some(AutoPairEdit::Replace { text, selected_range_relative, .. })
+            if text == "``" && selected_range_relative == (1..1)
+    ));
+    assert_eq!(
+        auto_pair_edit("``", 1..1, "`", false, true),
+        Some(AutoPairEdit::Replace {
+            range: 0..2,
+            text: "```".to_owned(),
+            selected_range_relative: 3..3,
+        })
+    );
+    assert_eq!(
+        auto_pair_edit("```", 3..3, "`", false, true),
+        Some(AutoPairEdit::MoveTo(3))
+    );
+}
+
+#[test]
 fn markdown_selection_uses_supported_delimiter_widths() {
     assert!(matches!(
         auto_pair_edit("old", 0..3, "~", false, true),

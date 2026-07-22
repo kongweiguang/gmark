@@ -54,6 +54,12 @@ pub(crate) enum InlineFormat {
     Strikethrough,
     /// Toggle underline formatting.
     Underline,
+    /// Toggle highlight formatting.
+    Highlight,
+    /// Toggle superscript formatting.
+    Superscript,
+    /// Toggle subscript formatting.
+    Subscript,
     /// Toggle inline code formatting.
     Code,
 }
@@ -154,6 +160,10 @@ pub struct Block {
     pub(crate) last_successful_mermaid_render: Option<crate::components::MermaidSvgRender>,
     pub(crate) math_render_error: Option<String>,
     pub(crate) mermaid_render_error: Option<String>,
+    pub(crate) math_preview_key: Option<u64>,
+    pub(crate) mermaid_preview_key: Option<u64>,
+    pub(crate) math_preview_task: Option<Task<()>>,
+    pub(crate) mermaid_preview_task: Option<Task<()>>,
     pub children: Vec<Entity<Block>>,
     pub focus_handle: FocusHandle,
     pub(crate) code_language_focus_handle: FocusHandle,
@@ -225,6 +235,8 @@ pub struct Block {
     /// 大文件 viewport 的活动行由宿主统一提供行高、行号槽与选择背景；Block 只负责
     /// 普通 Source 输入与光标，不能在聚焦时再引入第二套 padding/min-height/chrome。
     compact_source_host: bool,
+    /// 紧凑宿主可覆盖源码输入字号，使内联编辑器与宿主文本在聚焦前后保持同一尺寸。
+    host_text_size: Option<f32>,
     pub(crate) table_runtime: Option<TableRuntime>,
     pub(crate) table_cell_position: Option<TableCellPosition>,
     pub(crate) table_cell_alignment: Option<TableColumnAlignment>,
@@ -321,6 +333,10 @@ impl Block {
             last_successful_mermaid_render: None,
             math_render_error: None,
             mermaid_render_error: None,
+            math_preview_key: None,
+            mermaid_preview_key: None,
+            math_preview_task: None,
+            mermaid_preview_task: None,
             children: Vec::new(),
             focus_handle: cx.focus_handle(),
             code_language_focus_handle: cx.focus_handle(),
@@ -376,6 +392,7 @@ impl Block {
             read_only: false,
             show_source_line_numbers: false,
             compact_source_host: false,
+            host_text_size: None,
             table_runtime: None,
             table_cell_position: None,
             table_cell_alignment: None,
@@ -503,6 +520,14 @@ impl Block {
         self.compact_source_host = true;
     }
 
+    pub(crate) fn set_host_text_size(&mut self, text_size: f32) {
+        self.host_text_size = Some(text_size.max(1.0));
+    }
+
+    pub(crate) fn host_text_size(&self) -> Option<f32> {
+        self.host_text_size
+    }
+
     pub(crate) fn set_source_layout_identity(&mut self, identity: SourceLayoutIdentity) {
         if self.source_layout_identity.as_ref() == Some(&identity) {
             return;
@@ -518,6 +543,9 @@ impl Block {
     pub(crate) fn set_source_document_mode(&mut self) {
         self.set_source_raw_mode();
         self.show_source_line_numbers = true;
+        // Resident 文档是 Markdown 真值；Source 视图必须显式启用语法语言，
+        // 否则 BlockTextElement 只会生成单色 TextRun。
+        self.set_source_syntax_language(Some("markdown"));
     }
 
     pub(crate) fn sync_edit_mode_from_kind(&mut self) {

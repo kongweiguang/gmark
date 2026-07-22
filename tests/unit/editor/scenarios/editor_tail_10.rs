@@ -6,21 +6,21 @@ async fn large_external_truncation_reload_replaces_the_clean_baseline(cx: &mut T
     let temp = tempfile::tempdir().expect("large reload tempdir");
     let path = temp.path().join("reload.txt");
     fs::write(&path, "original long content\n").expect("large reload fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large reload probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large reload source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large reload source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large reload view");
 
     fs::write(temp.path().join("reload.txt"), "new\n").expect("truncate source");
@@ -31,12 +31,12 @@ async fn large_external_truncation_reload_replaces_the_clean_baseline(cx: &mut T
     redraw(visual);
     assert!(matches!(
         large_view.read_with(visual, |view, _cx| view.pending_external_change_for_test()),
-        Some(gmark_large_document::ExternalChange::Truncated { .. })
-            | Some(gmark_large_document::ExternalChange::Modified)
+        Some(gmark_paged_document::ExternalChange::Truncated { .. })
+            | Some(gmark_paged_document::ExternalChange::Modified)
     ));
     assert!(
         visual
-            .debug_bounds("large-file-external-change-banner")
+            .debug_bounds("document-host-external-change-banner")
             .is_some()
     );
 
@@ -73,21 +73,21 @@ async fn large_source_copy_reads_the_selection_snapshot_off_the_ui_thread(cx: &m
     let temp = tempfile::tempdir().expect("large copy tempdir");
     let path = temp.path().join("copy.txt");
     fs::write(&path, "alpha\n世界\n").expect("large copy fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large copy probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large copy source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large copy source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large copy view");
 
     visual.update(|window, cx| {
@@ -112,20 +112,20 @@ async fn large_source_copy_keeps_command_snapshot_while_the_document_changes(
     let temp = tempfile::tempdir().expect("large copy snapshot tempdir");
     let path = temp.path().join("copy-snapshot.txt");
     fs::write(&path, "alpha\nbeta\n").expect("large copy snapshot fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large copy snapshot probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large copy snapshot source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large copy snapshot source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large copy snapshot view");
 
     visual.write_to_clipboard(gpui::ClipboardItem::new_string("updated".to_owned()));
@@ -151,28 +151,26 @@ async fn large_source_copy_keeps_command_snapshot_while_the_document_changes(
 }
 
 #[gpui::test]
-async fn switching_tabs_keeps_large_source_copy_snapshot_and_source_state(
-    cx: &mut TestAppContext,
-) {
+async fn switching_tabs_keeps_large_source_copy_snapshot_and_source_state(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let temp = tempfile::tempdir().expect("large copy tab-switch tempdir");
     let path = temp.path().join("copy-tab-switch.txt");
     fs::write(&path, "alpha\nbeta\n").expect("large copy tab-switch fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large copy tab-switch probe");
     let source =
-        gmark_large_document::FileSource::open(&path).expect("large copy tab-switch source");
+        gmark_paged_document::FileSource::open(&path).expect("large copy tab-switch source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large copy tab-switch view");
     visual.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".to_owned()));
 
@@ -192,7 +190,7 @@ async fn switching_tabs_keeps_large_source_copy_snapshot_and_source_state(
         visual.read_from_clipboard().and_then(|item| item.text()),
         Some("alpha".to_owned())
     );
-    assert!(editor.read_with(visual, |editor, _cx| editor.source_surface.is_none()));
+    assert!(editor.read_with(visual, |editor, _cx| editor.document_host.is_none()));
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.on_previous_tab_action(&crate::components::PreviousTab, window, cx);
@@ -201,7 +199,7 @@ async fn switching_tabs_keeps_large_source_copy_snapshot_and_source_state(
     visual.run_until_parked();
     assert!(editor.read_with(visual, |editor, _cx| {
         editor
-            .source_surface
+            .document_host
             .as_ref()
             .is_some_and(|restored| *restored == large_view)
     }));
@@ -220,20 +218,20 @@ async fn closing_large_tab_cancels_copy_and_reopen_resumes_background_lifetime(
     let temp = tempfile::tempdir().expect("large close cancellation tempdir");
     let path = temp.path().join("close-copy.txt");
     fs::write(&path, "alpha\nbeta\n").expect("large close cancellation fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large close cancellation probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large close source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large close source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("active large close view");
     visual.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".to_owned()));
 
@@ -253,24 +251,16 @@ async fn closing_large_tab_cancels_copy_and_reopen_resumes_background_lifetime(
         Some("sentinel".to_owned()),
         "a closed tab must not complete an old clipboard write"
     );
-    assert!(large_view.read_with(visual, |view, _cx| {
-        view.is_closed_suspended_for_test()
-    }));
+    assert!(large_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
 
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
-            editor.on_reopen_closed_tab_action(
-                &crate::components::ReopenClosedTab,
-                window,
-                cx,
-            );
+            editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
         });
     });
     visual.run_until_parked();
-    assert!(!large_view.read_with(visual, |view, _cx| {
-        view.is_closed_suspended_for_test()
-    }));
-    assert!(editor.read_with(visual, |editor, _cx| editor.source_surface.is_some()));
+    assert!(!large_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
+    assert!(editor.read_with(visual, |editor, _cx| editor.document_host.is_some()));
 }
 
 #[gpui::test]
@@ -282,33 +272,27 @@ async fn reopening_large_tab_restarts_an_index_cancelled_before_first_snapshot(
     let path = temp.path().join("provisional-reopen.txt");
     let text = "alpha\n世界🙂\nomega\n";
     fs::write(&path, text).expect("large provisional reopen fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large provisional reopen probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large provisional source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large provisional source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("provisional large view");
 
     // 不运行 executor，确保初次索引仍在 pending；关闭必须取消旧 worker，重开必须另起代次。
     editor.update(visual, |editor, cx| editor.request_close_tab_index(0, cx));
-    assert!(large_view.read_with(visual, |view, _cx| {
-        view.is_closed_suspended_for_test()
-    }));
+    assert!(large_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
-            editor.on_reopen_closed_tab_action(
-                &crate::components::ReopenClosedTab,
-                window,
-                cx,
-            );
+            editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
         });
     });
     visual.run_until_parked();
@@ -317,9 +301,7 @@ async fn reopening_large_tab_restarts_an_index_cancelled_before_first_snapshot(
         large_view.read_with(visual, |view, _cx| view.recovered_text_for_test()),
         Some(text.as_bytes().to_vec())
     );
-    assert!(!large_view.read_with(visual, |view, _cx| {
-        view.is_closed_suspended_for_test()
-    }));
+    assert!(!large_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
 }
 
 #[gpui::test]
@@ -330,22 +312,22 @@ async fn large_source_character_range_copy_and_cut_use_utf8_source_anchors(
     let temp = tempfile::tempdir().expect("large character selection tempdir");
     let path = temp.path().join("character-selection.txt");
     fs::write(&path, "alpha\n世界🙂\n").expect("large character selection fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large character selection probe");
     let source =
-        gmark_large_document::FileSource::open(&path).expect("large character selection source");
+        gmark_paged_document::FileSource::open(&path).expect("large character selection source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large character selection view");
 
     visual.update(|window, cx| {
@@ -385,21 +367,21 @@ async fn large_source_copy_preserves_crlf_combining_and_zwj_boundaries(cx: &mut 
     let path = temp.path().join("unicode-boundaries.txt");
     let text = "alpha\r\ne\u{301} 👩‍👩‍👧‍👦\r\n";
     fs::write(&path, text).expect("large Unicode boundary fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large Unicode boundary probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("Unicode boundary source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("Unicode boundary source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large Unicode boundary view");
 
     let samples = ["\r\n", "e\u{301}", "👩‍👩‍👧‍👦"];
@@ -432,26 +414,26 @@ async fn large_source_selection_export_preserves_original_encoding_or_explicit_u
         encoded.extend_from_slice(&unit.to_le_bytes());
     }
     fs::write(&path, encoded).expect("UTF-16LE source fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("UTF-16LE source probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("UTF-16LE source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("UTF-16LE source");
     let editor_path = path.clone();
     let (editor, visual) = cx.add_window_view(move |_window, cx| {
-        Editor::from_large_file(cx, editor_path, probe, source)
+        Editor::from_source_backed_file(cx, editor_path, probe, source)
     });
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large encoded export view");
     large_view.update(visual, |view, _cx| {
-        // SourceSurface anchors always address the normalized UTF-8 shadow.
+        // Source anchors always address the normalized UTF-8 shadow.
         view.select_source_range_for_test(6..12, false);
     });
     let selection_before =
@@ -500,7 +482,7 @@ async fn large_source_clipboard_enforces_the_exact_64_mib_boundary(cx: &mut Test
     init_editor_test_app(cx);
     let temp = tempfile::tempdir().expect("clipboard boundary tempdir");
     let path = temp.path().join("clipboard-boundary.txt");
-    let clipboard_limit = gmark_large_document::MAX_SYSTEM_CLIPBOARD_BYTES;
+    let clipboard_limit = gmark_paged_document::MAX_SYSTEM_CLIPBOARD_BYTES;
     let mut file = fs::File::create(&path).expect("clipboard boundary fixture");
     let chunk = vec![b'a'; 1024 * 1024];
     for _ in 0..64 {
@@ -510,21 +492,21 @@ async fn large_source_clipboard_enforces_the_exact_64_mib_boundary(cx: &mut Test
     file.sync_all().expect("sync clipboard fixture");
     drop(file);
 
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("clipboard boundary probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("clipboard boundary source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("clipboard boundary source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("clipboard boundary view");
 
     visual.update(|window, cx| {
@@ -569,21 +551,21 @@ async fn large_source_shaped_layout_cache_reuses_and_invalidates_complete_keys(
     let temp = tempfile::tempdir().expect("large layout cache tempdir");
     let path = temp.path().join("layout-cache.txt");
     fs::write(&path, "alpha\n世界🙂\nomega\n".repeat(128)).expect("layout cache fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("layout cache probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("layout cache source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("layout cache source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large layout cache view");
     let (initial_hits, initial_misses, initial_entries) = large_view
         .read_with(visual, |view, cx| {
@@ -624,29 +606,29 @@ async fn large_source_pointer_selection_is_character_precise_cross_line_and_reve
     let path = temp.path().join("pointer-selection.txt");
     fs::write(&path, "alpha bravo\n世界🙂 tail\nthird line\n")
         .expect("large pointer selection fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large pointer selection probe");
     let source =
-        gmark_large_document::FileSource::open(&path).expect("large pointer selection source");
+        gmark_paged_document::FileSource::open(&path).expect("large pointer selection source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large pointer selection view");
 
     let first = visual
-        .debug_bounds("large-file-line-body-0")
+        .debug_bounds("document-host-line-body-0")
         .expect("first source row bounds");
     let third = visual
-        .debug_bounds("large-file-line-body-2")
+        .debug_bounds("document-host-line-body-2")
         .expect("third source row bounds");
     let forward_start = point(first.left() + px(28.0), first.center().y);
     let forward_end = point(third.left() + px(42.0), third.center().y);
@@ -696,7 +678,7 @@ async fn large_source_pointer_selection_is_character_precise_cross_line_and_reve
     redraw(visual);
     assert!(
         visual
-            .debug_bounds("large-file-source-context-menu")
+            .debug_bounds("document-host-source-context-menu")
             .is_some()
     );
     assert!(
@@ -732,28 +714,28 @@ async fn large_source_drag_autoscroll_extends_selection_beyond_mounted_viewport(
         .map(|line| format!("source line {line:04} with selectable text\n"))
         .collect::<String>();
     fs::write(&path, text).expect("large drag autoscroll fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large drag autoscroll probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("drag autoscroll source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("drag autoscroll source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.simulate_resize(size(px(720.0), px(520.0)));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large drag autoscroll view");
     let first = visual
-        .debug_bounds("large-file-line-body-0")
+        .debug_bounds("document-host-line-body-0")
         .expect("first source row");
     let viewport = visual
-        .debug_bounds("large-file-source-horizontal-scroll")
+        .debug_bounds("document-host-source-horizontal-scroll")
         .expect("source viewport");
     let start = point(first.left() + px(8.0), first.center().y);
     let edge = point(first.left() + px(48.0), viewport.bottom() - px(2.0));
@@ -787,21 +769,21 @@ async fn large_source_ime_composition_commits_one_piece_tree_undo_transaction(
     let temp = tempfile::tempdir().expect("large IME tempdir");
     let path = temp.path().join("ime-source.txt");
     fs::write(&path, "alpha\n").expect("large IME fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large IME probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large IME source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large IME source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large IME view");
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| view.begin_line_edit_for_test(0, window, cx));
@@ -874,21 +856,21 @@ async fn large_source_cross_line_paste_is_one_reversible_source_transaction(
     let temp = tempfile::tempdir().expect("large paste tempdir");
     let path = temp.path().join("paste-source.txt");
     fs::write(&path, "alpha\nbeta\ngamma\n").expect("large paste fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large paste probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large paste source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large paste source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large paste view");
     visual.write_to_clipboard(gpui::ClipboardItem::new_string("中\n🙂".to_owned()));
     visual.update(|window, cx| {
@@ -915,7 +897,7 @@ async fn large_source_cross_line_paste_is_one_reversible_source_transaction(
     );
     assert_eq!(
         large_view.read_with(visual, |view, _cx| view.source_selection_for_test()),
-        Some(gmark_large_document::SourceSelection::from_range(
+        Some(gmark_paged_document::SourceSelection::from_range(
             3..13,
             true
         ))
@@ -942,21 +924,21 @@ async fn large_source_select_all_upgrades_from_active_line_to_lazy_document_rang
     let path = temp.path().join("select-all-source.txt");
     let source_text = "alpha\n世界🙂\nomega\n";
     fs::write(&path, source_text).expect("large select-all fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large select-all probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large select-all source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large select-all source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large select-all view");
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| view.begin_line_edit_for_test(0, window, cx));
@@ -982,38 +964,38 @@ async fn large_source_select_all_upgrades_from_active_line_to_lazy_document_rang
 }
 
 #[gpui::test]
-async fn large_recovery_replays_inside_the_standard_editor_shell(cx: &mut TestAppContext) {
+async fn paged_recovery_replays_inside_the_standard_editor_shell(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let temp = tempfile::tempdir().expect("large recovery tempdir");
     let path = temp.path().join("recovered-large.md");
     fs::write(&path, "alpha\nbeta\n").expect("large recovery source");
-    let source = gmark_large_document::FileSource::open(&path).expect("recovery source");
-    let mut journal = gmark_large_document::LargeRecoveryJournal::create(
+    let source = gmark_paged_document::FileSource::open(&path).expect("recovery source");
+    let mut journal = gmark_paged_document::PagedRecoveryJournal::create(
         temp.path().join("recovery"),
         &source,
-        gmark_large_document::TextEncoding::Utf8 { bom: false },
+        gmark_paged_document::TextEncoding::Utf8 { bom: false },
     )
     .expect("large recovery journal");
     journal
         .record_replace(0..5, "ALPHA", None, "source")
         .expect("recovery edit");
     let journal_path = journal.path().to_path_buf();
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large recovery probe");
     let (editor, visual) = cx.add_window_view(move |_window, cx| {
-        Editor::from_large_recovery(cx, path, probe, source, journal_path)
+        Editor::from_paged_recovery(cx, path, probe, source, journal_path)
     });
     visual.simulate_resize(size(px(960.0), px(640.0)));
     redraw(visual);
 
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large recovery view");
     assert_eq!(
         large_view.read_with(visual, |view, _cx| view.recovered_text_for_test()),
@@ -1023,12 +1005,12 @@ async fn large_recovery_replays_inside_the_standard_editor_shell(cx: &mut TestAp
     assert!(editor.read_with(visual, |editor, _cx| editor.document_dirty));
     assert!(visual.debug_bounds("editor-titlebar").is_some());
     assert!(visual.debug_bounds("document-tab-strip").is_some());
-    assert!(visual.debug_bounds("large-document-tab-content").is_some());
+    assert!(visual.debug_bounds("document-host-tab-content").is_some());
     assert!(visual.debug_bounds("status-bar").is_some());
 }
 
 #[gpui::test]
-async fn large_jsonl_follow_rebuilds_structure_and_reports_invalid_appended_record(
+async fn large_jsonl_follow_stays_source_only_while_appended_bytes_remain_visible(
     cx: &mut TestAppContext,
 ) {
     use std::io::Write as _;
@@ -1037,23 +1019,23 @@ async fn large_jsonl_follow_rebuilds_structure_and_reports_invalid_appended_reco
     let temp = tempfile::tempdir().expect("JSONL follow tempdir");
     let path = temp.path().join("follow.jsonl");
     fs::write(&path, "{\"id\":1}\n").expect("JSONL fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("JSONL follow probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("JSONL follow source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("JSONL follow source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("JSONL follow view");
-    assert!(large_view.read_with(visual, |view, _cx| view.has_structure_view()));
+    assert!(!large_view.read_with(visual, |view, _cx| view.has_structure_view()));
     large_view.update(visual, |view, cx| view.toggle_follow(cx));
 
     let mut writer = fs::OpenOptions::new()
@@ -1069,12 +1051,8 @@ async fn large_jsonl_follow_rebuilds_structure_and_reports_invalid_appended_reco
         .advance_clock(Duration::from_millis(1_100));
     visual.run_until_parked();
     redraw(visual);
-    assert!(large_view.read_with(visual, |view, _cx| view.has_structure_view()));
+    assert!(!large_view.read_with(visual, |view, _cx| view.has_structure_view()));
 
-    let invalid_offset = fs::metadata(temp.path().join("follow.jsonl"))
-        .expect("JSONL metadata")
-        .len()
-        + b"{\"broken\":".len() as u64;
     writer
         .write_all(b"{\"broken\":]}\n")
         .expect("append invalid JSONL record");
@@ -1085,79 +1063,65 @@ async fn large_jsonl_follow_rebuilds_structure_and_reports_invalid_appended_reco
     visual.run_until_parked();
     redraw(visual);
 
-    assert_eq!(
-        large_view
-            .read_with(visual, |view, _cx| view.structure_error_for_test())
-            .and_then(|(_, offset)| offset),
-        Some(invalid_offset)
-    );
+    assert!(large_view.read_with(visual, |view, _cx| view.structure_error_for_test()).is_none());
     assert!(
         large_view
             .read_with(visual, |view, _cx| view.recovered_text_for_test())
             .is_some_and(|text| text.ends_with(b"{\"broken\":]}\n"))
     );
-    assert!(
-        visual
-            .debug_bounds("large-file-structure-error-jump")
-            .is_some()
-    );
+    assert!(visual.debug_bounds("document-host-structure-error-jump").is_none());
 }
 
 #[gpui::test]
-async fn large_json_expands_child_containers_without_building_a_dom(cx: &mut TestAppContext) {
+async fn resident_strategy_json_uses_bounded_graph_and_refreshes_after_source_edits(
+    cx: &mut TestAppContext,
+) {
     init_editor_test_app(cx);
     let temp = tempfile::tempdir().expect("large json tempdir");
     let path = temp.path().join("large-tree.json");
     fs::write(&path, r#"[{"id":1}, [2, 3, {"nested":true}], "tail"]"#).expect("large json fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
-        },
+        gmark_paged_document::ProbeOptions::default(),
     )
     .expect("large json probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large json source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large json source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large json view");
-    assert!(large_view.read_with(visual, |view, _cx| view.source_view_for_test()));
+    visual.run_until_parked();
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Preview));
+    assert!(
+        large_view
+            .read_with(visual, |view, _cx| view.json_graph_state_for_test())
+            .is_some_and(|(nodes, edges, truncated, stale, error)| {
+                nodes == 4 && edges == 3 && !truncated && !stale && error.is_none()
+            })
+    );
     editor.update(visual, |editor, cx| {
         editor.set_view_mode(ViewMode::Source, cx);
     });
-    assert!(!large_view.read_with(visual, |view, _cx| view.structure_view_for_test()));
+    assert!(large_view.read_with(visual, |view, _cx| view.source_view_for_test()));
     editor.update(visual, |editor, cx| {
         editor.set_view_mode(ViewMode::Rendered, cx);
     });
-    assert!(large_view.read_with(visual, |view, _cx| view.source_view_for_test()));
-    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Source));
-    large_view.update(visual, |view, cx| {
-        view.show_structure_view(cx);
-    });
     visual.run_until_parked();
-    assert!(large_view.read_with(visual, |view, _cx| view.structure_view_for_test()));
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Preview));
     let (epoch, revision, generation) = large_view
         .read_with(visual, |view, _cx| view.installed_projection_for_test())
         .expect("registered projection snapshot");
     assert!(epoch > 0);
     assert_eq!(revision, 0);
     assert!(generation > 0);
-    assert_eq!(
-        large_view.read_with(visual, |view, _cx| view.json_visible_rows_for_test()),
-        Some(3)
-    );
-    large_view.update(visual, |view, cx| view.expand_json_row_for_test(1, cx));
-    visual.run_until_parked();
-    redraw(visual);
-    assert_eq!(
-        large_view.read_with(visual, |view, _cx| view.json_visible_rows_for_test()),
-        Some(6)
-    );
-    assert!(visual.debug_bounds("large-document-tab-content").is_some());
+    assert!(visual.debug_bounds("document-host-tab-content").is_some());
 
+    editor.update(visual, |editor, cx| {
+        editor.set_view_mode(ViewMode::Split, cx);
+    });
+    visual.run_until_parked();
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| view.begin_line_edit_for_test(0, window, cx));
     });
@@ -1168,55 +1132,70 @@ async fn large_json_expands_child_containers_without_building_a_dom(cx: &mut Tes
         let end = block.display_text().len();
         block.replace_text_in_visible_range(end..end, " ", None, false, cx);
     });
+    visual.executor().advance_clock(Duration::from_millis(300));
     visual.run_until_parked();
     redraw(visual);
     assert!(editor.read_with(visual, |editor, _cx| editor.document_dirty));
-    assert!(!large_view.read_with(visual, |view, _cx| view.has_structure_view()));
+    assert!(
+        large_view
+            .read_with(visual, |view, _cx| view.json_graph_state_for_test())
+            .is_some_and(|(_, _, _, stale, error)| !stale && error.is_none())
+    );
 
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| view.on_undo(&Undo, window, cx));
     });
+    visual.executor().advance_clock(Duration::from_millis(300));
     visual.run_until_parked();
     redraw(visual);
     assert!(!editor.read_with(visual, |editor, _cx| editor.document_dirty));
-    assert!(large_view.read_with(visual, |view, _cx| view.has_structure_view()));
+    assert!(
+        large_view
+            .read_with(visual, |view, _cx| view.json_graph_state_for_test())
+            .is_some_and(|(_, _, _, stale, error)| !stale && error.is_none())
+    );
 }
 
 #[gpui::test]
-async fn invalid_large_json_reports_the_byte_and_jumps_back_to_source(cx: &mut TestAppContext) {
+async fn invalid_resident_json_reports_the_byte_and_jumps_back_to_source(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let temp = tempfile::tempdir().expect("invalid JSON tempdir");
     let path = temp.path().join("invalid-large.json");
     let text = "{\n  \"ok\": 1,\n  \"broken\": ]\n}\n";
     fs::write(&path, text).expect("invalid JSON fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
-        },
+        gmark_paged_document::ProbeOptions::default(),
     )
     .expect("invalid JSON probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("invalid JSON source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("invalid JSON source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.simulate_resize(size(px(960.0), px(640.0)));
     visual.run_until_parked();
     redraw(visual);
 
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("invalid JSON large view");
     let (message, byte_offset) = large_view
-        .read_with(visual, |view, _cx| view.structure_error_for_test())
-        .expect("structured JSON error");
-    assert!(message.contains("invalid JSON near byte"));
+        .read_with(visual, |view, _cx| view.json_graph_error_for_test())
+        .expect("JSON graph error");
+    let expected_message = large_view.read_with(visual, |_view, cx| {
+        cx.global::<I18nManager>()
+            .strings()
+            .large_document_text("error_invalid_json_location")
+            .replace("{line}", "3")
+            .replace("{column}", "13")
+    });
+    assert_eq!(message, expected_message);
     let byte_offset = byte_offset.expect("JSON error byte offset");
-    assert!(visual.debug_bounds("large-file-structure-notice").is_some());
+    assert!(visual.debug_bounds("json-graph-empty-state").is_some());
     let jump = visual
-        .debug_bounds("large-file-structure-error-jump")
+        .debug_bounds("json-graph-error-jump")
         .expect("JSON error jump action");
     visual.simulate_click(jump.center(), Modifiers::default());
+    visual.run_until_parked();
     redraw(visual);
 
     let expected_line = text.as_bytes()[..byte_offset as usize]
@@ -1228,12 +1207,13 @@ async fn invalid_large_json_reports_the_byte_and_jumps_back_to_source(cx: &mut T
         large_view.read_with(visual, |view, cx| view.cursor_position(cx).0),
         expected_line
     );
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Source));
     assert!(visual.debug_bounds("editor-titlebar").is_some());
     assert!(visual.debug_bounds("status-bar").is_some());
 }
 
 #[gpui::test]
-async fn invalid_large_jsonl_record_reports_global_byte_and_jumps_to_source(
+async fn invalid_resident_jsonl_record_reports_global_byte_and_jumps_to_source(
     cx: &mut TestAppContext,
 ) {
     init_editor_test_app(cx);
@@ -1241,33 +1221,36 @@ async fn invalid_large_jsonl_record_reports_global_byte_and_jumps_to_source(
     let path = temp.path().join("invalid-large.jsonl");
     let text = "{\"ok\":1}\n[1,2,3]\n{\"broken\":]}\n";
     fs::write(&path, text).expect("invalid JSONL fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
-        },
+        gmark_paged_document::ProbeOptions::default(),
     )
     .expect("invalid JSONL probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("invalid JSONL source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("invalid JSONL source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.simulate_resize(size(px(960.0), px(640.0)));
     visual.run_until_parked();
     redraw(visual);
 
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("invalid JSONL large view");
     let (message, byte_offset) = large_view
         .read_with(visual, |view, _cx| view.structure_error_for_test())
         .expect("structured JSONL error");
-    assert!(message.contains("invalid JSON near byte"));
     let byte_offset = byte_offset.expect("JSONL error byte offset");
+    let expected_message = large_view.read_with(visual, |_view, cx| {
+        cx.global::<I18nManager>()
+            .strings()
+            .large_document_text("error_invalid_json")
+            .replace("{offset}", &byte_offset.to_string())
+    });
+    assert_eq!(message, expected_message);
     assert_eq!(byte_offset, text.rfind(']').expect("invalid token") as u64);
 
     let jump = visual
-        .debug_bounds("large-file-structure-error-jump")
+        .debug_bounds("document-host-structure-error-jump")
         .expect("JSONL error jump action");
     visual.simulate_click(jump.center(), Modifiers::default());
     redraw(visual);
@@ -1332,6 +1315,10 @@ fn reading_padding_uses_fixed_top_typewriter_target_and_half_viewport_bottom() {
     assert_eq!(super::render::editor_top_padding(false, 700.0), 48.0);
     assert_eq!(super::render::editor_top_padding(true, 700.0), 315.0);
     assert_eq!(super::render::editor_top_padding(true, 80.0), 48.0);
+    assert_eq!(
+        super::render::source_editor_top_padding(&theme.dimensions),
+        theme.dimensions.editor_padding
+    );
     assert_eq!(
         super::render::editor_bottom_padding(700.0, &theme.dimensions),
         theme.dimensions.editor_padding

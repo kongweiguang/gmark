@@ -93,6 +93,8 @@ try {
     $stdoutTask = $cargoProcess.StandardOutput.ReadToEndAsync()
     $stderrTask = $cargoProcess.StandardError.ReadToEndAsync()
     $resourceBaseline = $null
+    $steadyStartedAt = $null
+    $steadySamples = [Collections.Generic.List[object]]::new()
     $maximumRssBytes = [long]0
     $maximumPrivateBytes = [long]0
     $maximumHandleCount = 0
@@ -122,6 +124,20 @@ try {
             }
             if ($null -eq $resourceBaseline) {
                 $resourceBaseline = $sample
+            }
+            # progress.json 只会在应用完成打开、首屏和第一轮保存后出现。资源趋势从这个
+            # 预热点开始统计，避免把进程启动和 1 GiB 首次索引误判为长期泄漏。
+            if (Test-Path -LiteralPath $progress -PathType Leaf) {
+                if ($null -eq $steadyStartedAt) {
+                    $steadyStartedAt = [DateTime]::UtcNow
+                }
+                $steadySamples.Add([pscustomobject]@{
+                    observed_seconds = ([DateTime]::UtcNow - $steadyStartedAt).TotalSeconds
+                    rss_bytes = $sample.rss_bytes
+                    private_bytes = $sample.private_bytes
+                    handle_count = $sample.handle_count
+                    thread_count = $sample.thread_count
+                })
             }
             $maximumRssBytes = [Math]::Max($maximumRssBytes, $sample.rss_bytes)
             $maximumPrivateBytes = [Math]::Max($maximumPrivateBytes, $sample.private_bytes)
@@ -169,6 +185,41 @@ $result = Get-Content -LiteralPath $progress -Raw | ConvertFrom-Json
 if (-not [bool]$result.completed) {
     throw "Interactive soak ended without a completed progress record: $progress"
 }
+# 1 GiB 会话的线程池、文件页缓存和编辑布局分配器需要比普通 smoke 更长的稳定期。
+# 最多预热十分钟且不超过总时长三分之一，确保 30 分钟门禁仍比较完整 20 分钟长稳窗口。
+$warmupSeconds = [Math]::Min(600.0, [Math]::Max(1.0, $DurationSeconds / 3.0))
+$postWarmup = @($steadySamples | Where-Object { $_.observed_seconds -ge $warmupSeconds })
+if ($postWarmup.Count -eq 0) {
+    $postWarmup = @($steadySamples)
+}
+if ($postWarmup.Count -eq 0) {
+    throw 'Interactive soak did not collect any post-start resource samples'
+}
+$windowSize = [Math]::Min(12, [Math]::Max(1, [Math]::Floor($postWarmup.Count / 4)))
+function Get-MedianValue {
+    param(
+        [Parameter(Mandatory = $true)][object[]] $Samples,
+        [Parameter(Mandatory = $true)][string] $Property
+    )
+    $values = @($Samples | ForEach-Object { [double]$_.$Property } | Sort-Object)
+    $middle = [Math]::Floor($values.Count / 2)
+    if ($values.Count % 2 -eq 0) {
+        return ($values[$middle - 1] + $values[$middle]) / 2.0
+    }
+    return $values[$middle]
+}
+$firstWindow = @($postWarmup | Select-Object -First $windowSize)
+$lastWindow = @($postWarmup | Select-Object -Last $windowSize)
+$steadyRssBaseline = Get-MedianValue $firstWindow 'rss_bytes'
+$steadyRssFinal = Get-MedianValue $lastWindow 'rss_bytes'
+$steadyPrivateBaseline = Get-MedianValue $firstWindow 'private_bytes'
+$steadyPrivateFinal = Get-MedianValue $lastWindow 'private_bytes'
+$steadyRssGrowthPercent = if ($steadyRssBaseline -gt 0) {
+    [Math]::Max(0.0, ($steadyRssFinal - $steadyRssBaseline) * 100.0 / $steadyRssBaseline)
+}
+else {
+    0.0
+}
 $resourceResult = [pscustomobject]@{
     process_id = $resourceBaseline.process_id
     baseline_rss_bytes = $resourceBaseline.rss_bytes
@@ -180,6 +231,17 @@ $resourceResult = [pscustomobject]@{
         [long]0,
         $maximumPrivateBytes - $resourceBaseline.private_bytes
     )
+    steady_sample_count = $postWarmup.Count
+    steady_window_size = $windowSize
+    steady_rss_baseline_bytes = [long]$steadyRssBaseline
+    steady_rss_final_bytes = [long]$steadyRssFinal
+    steady_rss_growth_percent = $steadyRssGrowthPercent
+    steady_private_baseline_bytes = [long]$steadyPrivateBaseline
+    steady_private_final_bytes = [long]$steadyPrivateFinal
+    steady_private_growth_bytes = [Math]::Max(
+        [long]0,
+        [long]$steadyPrivateFinal - [long]$steadyPrivateBaseline
+    )
     baseline_handle_count = $resourceBaseline.handle_count
     maximum_handle_count = $maximumHandleCount
     handle_growth = [Math]::Max(0, $maximumHandleCount - $resourceBaseline.handle_count)
@@ -187,8 +249,8 @@ $resourceResult = [pscustomobject]@{
     maximum_thread_count = $maximumThreadCount
     thread_growth = [Math]::Max(0, $maximumThreadCount - $resourceBaseline.thread_count)
 }
-$resourceExceeded = $resourceResult.rss_growth_bytes -gt 128MB -or
-    $resourceResult.private_growth_bytes -gt 192MB -or
+$resourceExceeded = $resourceResult.steady_rss_growth_percent -gt 5.0 -or
+    $resourceResult.steady_private_growth_bytes -gt 192MB -or
     $resourceResult.handle_growth -gt 512 -or
     $resourceResult.thread_growth -gt 64
 $result | Add-Member -NotePropertyName process_resources -NotePropertyValue $resourceResult

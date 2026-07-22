@@ -6,15 +6,25 @@ use std::time::Duration;
 
 use gpui::*;
 
+#[path = "command_palette_metadata.rs"]
+mod metadata;
+
+use self::metadata::localized_action_description;
 use super::{Block, BlockRecord, Editor, render::menu_icon_slot};
 use crate::app_menu::menu_action_icon;
 use crate::components::{
-    BlockEvent, BoldSelection, CodeSelection, EditingCommandCategory, EditingCommandId,
-    EditingSelectionContext, EditingViewMode, ItalicSelection, LinkSelection, SetBulletedList,
-    SetCodeBlock, SetHeading1, SetHeading2, SetHeading3, SetNumberedList, SetParagraph, SetQuote,
-    SetTaskList, StrikethroughSelection, UnderlineSelection,
+    AddLanguageConfig, AddThemeConfig, BlockEvent, BoldSelection, CheckForUpdates, CodeSelection,
+    EditingCommandCategory, EditingCommandId, EditingSelectionContext, EditingViewMode, ExportHtml,
+    ExportImage, ExportPdf, HighlightSelection, InlineMathSelection, InstallCliTool,
+    ItalicSelection, LinkSelection, NoRecentFiles, NormalizeLineEndingsCr,
+    NormalizeLineEndingsCrLf, NormalizeLineEndingsLf, OpenCrashReports, OpenPrivacyPolicy,
+    OpenSafeSource, SetBulletedList, SetCodeBlock, SetHeading1, SetHeading2, SetHeading3,
+    SetHeading4, SetHeading5, SetHeading6, SetNumberedList, SetParagraph, SetQuote, SetTaskList,
+    ShortcutCommand, ShowAbout, StrikethroughSelection, SubscriptSelection, SuperscriptSelection,
+    UnderlineSelection, UninstallCliTool, shortcut_definitions,
 };
 use crate::i18n::I18nStrings;
+use crate::preferences::localized_shortcut_command_label;
 use crate::theme::Theme;
 
 const FILTER_DEBOUNCE: Duration = Duration::from_millis(20);
@@ -31,6 +41,14 @@ fn editing_command_for_action(action: &dyn Action) -> Option<EditingCommandId> {
         Some(EditingCommandId::Underline)
     } else if action.as_any().is::<StrikethroughSelection>() {
         Some(EditingCommandId::Strikethrough)
+    } else if action.as_any().is::<HighlightSelection>() {
+        Some(EditingCommandId::Highlight)
+    } else if action.as_any().is::<SuperscriptSelection>() {
+        Some(EditingCommandId::Superscript)
+    } else if action.as_any().is::<SubscriptSelection>() {
+        Some(EditingCommandId::Subscript)
+    } else if action.as_any().is::<InlineMathSelection>() {
+        Some(EditingCommandId::InlineMath)
     } else if action.as_any().is::<CodeSelection>() {
         Some(EditingCommandId::InlineCode)
     } else if action.as_any().is::<LinkSelection>() {
@@ -43,6 +61,12 @@ fn editing_command_for_action(action: &dyn Action) -> Option<EditingCommandId> {
         Some(EditingCommandId::Heading2)
     } else if action.as_any().is::<SetHeading3>() {
         Some(EditingCommandId::Heading3)
+    } else if action.as_any().is::<SetHeading4>() {
+        Some(EditingCommandId::Heading4)
+    } else if action.as_any().is::<SetHeading5>() {
+        Some(EditingCommandId::Heading5)
+    } else if action.as_any().is::<SetHeading6>() {
+        Some(EditingCommandId::Heading6)
     } else if action.as_any().is::<SetBulletedList>() {
         Some(EditingCommandId::BulletedList)
     } else if action.as_any().is::<SetNumberedList>() {
@@ -60,8 +84,10 @@ fn editing_command_for_action(action: &dyn Action) -> Option<EditingCommandId> {
 
 struct PaletteCommand {
     label: String,
+    description: String,
+    search_text: String,
     shortcut: String,
-    icon: Option<&'static str>,
+    icon: &'static str,
     action: Box<dyn Action>,
 }
 
@@ -83,16 +109,26 @@ impl Editor {
     ) {
         self.close_menu_bar(cx);
         self.dismiss_contextual_overlays(cx);
+        let i18n = cx.global::<crate::i18n::I18nManager>();
+        let strings = i18n.strings().clone();
+        let language_id = i18n.current_language_id().to_owned();
         let mut commands = window
             .available_actions(cx)
             .into_iter()
             .filter(|action| self.command_palette_action_available(action.as_ref(), cx))
             .map(|action| {
-                let icon = menu_action_icon(action.as_ref());
+                let label = localized_action_label(action.as_ref(), &strings, &language_id);
+                let description =
+                    localized_action_description(action.as_ref(), &label, &language_id);
+                let search_text = command_search_text(action.as_ref(), &label, &description);
+                let shortcut =
+                    display_shortcut(&window.keystroke_text_for(action.as_ref()), action.name());
                 PaletteCommand {
-                    label: humanize_action_name(action.name()),
-                    shortcut: window.keystroke_text_for(action.as_ref()),
-                    icon,
+                    label,
+                    description,
+                    search_text,
+                    shortcut,
+                    icon: command_icon(action.as_ref()),
                     action,
                 }
             })
@@ -167,7 +203,7 @@ impl Editor {
         let labels = state
             .commands
             .iter()
-            .map(|command| command.label.clone())
+            .map(|command| command.search_text.clone())
             .collect::<Vec<_>>();
         state.task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
             cx.background_executor().timer(FILTER_DEBOUNCE).await;
@@ -377,7 +413,7 @@ impl Editor {
                                                 .debug_selector(move || {
                                                     format!("command-palette-result-{row}")
                                                 })
-                                                .h(px(34.0))
+                                                .min_h(px(50.0))
                                                 .w_full()
                                                 .px(px(10.0))
                                                 .flex()
@@ -394,7 +430,10 @@ impl Editor {
                                                 })
                                                 .cursor_pointer()
                                                 .child(
-                                                    menu_icon_slot(command.icon, c.dialog_muted)
+                                                    menu_icon_slot(
+                                                        Some(command.icon),
+                                                        c.dialog_muted,
+                                                    )
                                                         .debug_selector(move || {
                                                             format!(
                                                                 "command-palette-result-icon-{row}"
@@ -406,15 +445,35 @@ impl Editor {
                                                         .min_w(px(0.0))
                                                         .flex_grow()
                                                         .overflow_hidden()
-                                                        .truncate()
-                                                        .debug_selector(move || {
-                                                            format!(
-                                                                "command-palette-result-label-{row}"
-                                                            )
-                                                        })
-                                                        .text_size(px(t.dialog_body_size))
-                                                        .text_color(c.text_default)
-                                                        .child(command.label.clone()),
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(2.0))
+                                                        .child(
+                                                            div()
+                                                                .truncate()
+                                                                .debug_selector(move || {
+                                                                    format!(
+                                                                        "command-palette-result-label-{row}"
+                                                                    )
+                                                                })
+                                                                .text_size(px(t.dialog_body_size))
+                                                                .text_color(c.text_default)
+                                                                .child(command.label.clone()),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .truncate()
+                                                                .debug_selector(move || {
+                                                                    format!(
+                                                                        "command-palette-result-description-{row}"
+                                                                    )
+                                                                })
+                                                                .text_size(px(
+                                                                    t.dialog_body_size * 0.82,
+                                                                ))
+                                                                .text_color(c.dialog_muted)
+                                                                .child(command.description.clone()),
+                                                        ),
                                                 )
                                                 .child(
                                                     div()
@@ -468,6 +527,148 @@ fn humanize_action_name(name: &str) -> String {
         previous_lowercase = ch.is_lowercase() || ch.is_ascii_digit();
     }
     output
+}
+
+fn canonical_action_id(value: &str) -> String {
+    value
+        .rsplit("::")
+        .next()
+        .unwrap_or(value)
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn shortcut_command_for_action_name(name: &str) -> Option<ShortcutCommand> {
+    let action_id = canonical_action_id(name);
+    shortcut_definitions()
+        .iter()
+        .find(|definition| canonical_action_id(definition.id) == action_id)
+        .map(|definition| definition.command)
+}
+
+fn localized_action_label(action: &dyn Action, strings: &I18nStrings, language_id: &str) -> String {
+    if let Some(command) = editing_command_for_action(action) {
+        let descriptor = command.descriptor();
+        return strings
+            .slash_commands
+            .get(descriptor.localization_key)
+            .cloned()
+            .unwrap_or_else(|| humanize_action_name(action.name()));
+    }
+
+    if language_id.starts_with("zh") {
+        let label = match canonical_action_id(action.name()).as_str() {
+            "normalizelineendingslf" => "统一为 LF 换行符",
+            "normalizelineendingscrlf" => "统一为 CRLF 换行符",
+            "normalizelineendingscr" => "统一为 CR 换行符",
+            "exporthtml" => "导出为 HTML",
+            "exportimage" => "导出为 PNG 图片",
+            "exportpdf" => "导出为 PDF",
+            "exportselection" => "导出所选内容",
+            "selecttheme" => "切换主题",
+            "selectlanguage" => "切换界面语言",
+            "openrecentfile" => "打开最近文件",
+            _ => "",
+        };
+        if !label.is_empty() {
+            return label.to_owned();
+        }
+    }
+
+    if let Some(command) = shortcut_command_for_action_name(action.name()) {
+        return localized_shortcut_command_label(command, strings);
+    }
+
+    if action.as_any().is::<AddLanguageConfig>() {
+        strings.menu_add_language_config.clone()
+    } else if action.as_any().is::<AddThemeConfig>() {
+        strings.menu_add_theme_config.clone()
+    } else if action.as_any().is::<CheckForUpdates>() {
+        strings.menu_check_updates.clone()
+    } else if action.as_any().is::<OpenSafeSource>() {
+        strings.menu_open_safe_source.clone()
+    } else if action.as_any().is::<NoRecentFiles>() {
+        strings.menu_no_recent_files.clone()
+    } else if action.as_any().is::<ExportHtml>() {
+        strings.menu_export_html.clone()
+    } else if action.as_any().is::<ExportImage>() {
+        strings.menu_export_image.clone()
+    } else if action.as_any().is::<ExportPdf>() {
+        strings.menu_export_pdf.clone()
+    } else if action.as_any().is::<OpenCrashReports>() {
+        strings.menu_open_crash_reports.clone()
+    } else if action.as_any().is::<OpenPrivacyPolicy>() {
+        strings.menu_privacy_policy.clone()
+    } else if action.as_any().is::<ShowAbout>() {
+        strings.menu_about.clone()
+    } else if action.as_any().is::<InstallCliTool>() {
+        strings.menu_install_cli_tool.clone()
+    } else if action.as_any().is::<UninstallCliTool>() {
+        strings.menu_uninstall_cli_tool.clone()
+    } else if action.as_any().is::<NormalizeLineEndingsLf>() {
+        strings.menu_line_ending_lf.clone()
+    } else if action.as_any().is::<NormalizeLineEndingsCrLf>() {
+        strings.menu_line_ending_crlf.clone()
+    } else if action.as_any().is::<NormalizeLineEndingsCr>() {
+        strings.menu_line_ending_cr.clone()
+    } else {
+        humanize_action_name(action.name())
+    }
+}
+
+fn command_search_text(action: &dyn Action, label: &str, description: &str) -> String {
+    let mut search_text = label.to_owned();
+    if let Some(command) = editing_command_for_action(action) {
+        for alias in command.descriptor().aliases {
+            search_text.push(' ');
+            search_text.push_str(alias);
+        }
+    }
+    search_text.push(' ');
+    search_text.push_str(description);
+    search_text.push(' ');
+    search_text.push_str(&humanize_action_name(action.name()));
+    search_text
+}
+
+fn display_shortcut(raw: &str, action_name: &str) -> String {
+    let shortcut = raw.trim();
+    if shortcut.is_empty()
+        || shortcut.contains("::")
+        || canonical_action_id(shortcut) == canonical_action_id(action_name)
+    {
+        String::new()
+    } else {
+        shortcut.to_owned()
+    }
+}
+
+fn command_icon(action: &dyn Action) -> &'static str {
+    if let Some(command) = editing_command_for_action(action) {
+        return command.descriptor().icon_path;
+    }
+    if let Some(icon) = menu_action_icon(action) {
+        return icon;
+    }
+    match canonical_action_id(action.name()).as_str() {
+        "pageup" | "jumptotop" | "blockup" | "moveup" => "icon/ui/arrow-up.svg",
+        "pagedown" | "jumptobottom" | "blockdown" | "movedown" => "icon/ui/arrow-down.svg",
+        "moveleft" | "wordmoveleft" | "selectleft" | "wordselectleft" => "icon/ui/arrow-left.svg",
+        "moveright" | "wordmoveright" | "selectright" | "wordselectright" => {
+            "icon/ui/arrow-right.svg"
+        }
+        "exportselection" => "icon/ui/file-output.svg",
+        "gotoline" | "home" | "end" | "selecthome" | "selectend" => "icon/ui/type.svg",
+        "selecttheme" => "icon/ui/palette.svg",
+        "selectlanguage" => "icon/ui/keyboard.svg",
+        "openrecentfile" => "icon/ui/files.svg",
+        "delete" | "deleteback" | "worddeleteback" | "worddeleteforward" => "icon/ui/trash.svg",
+        "indentblock" | "outdentblock" => "icon/ui/list.svg",
+        "exitcodeblock" => "icon/ui/code.svg",
+        _ => "icon/ui/lightbulb.svg",
+    }
 }
 
 fn filter_command_labels(labels: &[String], query: &str) -> Vec<usize> {

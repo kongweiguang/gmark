@@ -2,6 +2,7 @@
 
 //! Multi-document tab sessions with ownership-preserving state migration.
 
+use super::document_session::EditorDocumentSession;
 use std::mem;
 use std::path::{Path, PathBuf};
 #[cfg(not(test))]
@@ -16,8 +17,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::{
-    Editor, ExternalConflictPreview, HistoryEntry, PendingUndoCapture, SourceSurface,
-    UndoSelectionSnapshot, ViewMode,
+    DocumentKind, Editor, ExternalConflictPreview, FileOpenFailure, HistoryEntry,
+    PendingUndoCapture, UndoSelectionSnapshot, ViewMode,
     render::{
         DialogButtonKind, DialogTitleIcon, DocumentToolbarAction, clamped_floating_panel_origin,
         compact_menu_panel_height, dialog_actions, dialog_body, dialog_button, dialog_content,
@@ -84,6 +85,10 @@ struct TabContextMenu {
     position: Point<Pixels>,
 }
 
+struct NewTabMenu {
+    position: Point<Pixels>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SessionViewSignature {
     tab_id: uuid::Uuid,
@@ -117,10 +122,12 @@ impl DetachedTab {
 }
 
 struct DocumentTabSnapshot {
-    source_surface: SourceSurface,
-    source_document: SourceDocument,
+    document_host: Option<Entity<crate::document_host::DocumentHost>>,
+    source_document: EditorDocumentSession,
     source_encoding: crate::document_io::DocumentEncoding,
+    document_kind: DocumentKind,
     file_path: Option<PathBuf>,
+    file_open_failure: Option<FileOpenFailure>,
     saved_file_fingerprint: Option<crate::recovery::FileFingerprint>,
     document_dirty: bool,
     view_mode: ViewMode,
@@ -158,6 +165,7 @@ pub(super) struct TabState {
     continue_window_close_after_save: bool,
     close_others_keep: Option<uuid::Uuid>,
     context_menu: Option<TabContextMenu>,
+    new_tab_menu: Option<NewTabMenu>,
     // reason: 测试构建禁用真实会话落盘任务；remove when session writer is injected as a test adapter.
     #[cfg_attr(test, allow(dead_code))]
     session_generation: u64,
@@ -192,6 +200,7 @@ impl TabState {
             continue_window_close_after_save: false,
             close_others_keep: None,
             context_menu: None,
+            new_tab_menu: None,
             session_generation: 0,
             session_task: None,
             dragging_tab: None,

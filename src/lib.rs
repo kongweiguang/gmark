@@ -26,13 +26,14 @@ mod cli;
 mod components;
 mod config;
 mod crash_report;
+mod document_host;
 mod document_io;
+mod document_runtime;
 mod editor;
 mod export;
 #[cfg(any(target_os = "macos", test))]
 mod file_url;
 mod i18n;
-mod large_file;
 mod net;
 mod perf;
 mod preferences;
@@ -45,7 +46,7 @@ mod ui;
 mod window_chrome;
 
 use app_menu::{
-    init as init_app_menu, open_editor_window, open_large_recovery_window,
+    init as init_app_menu, open_editor_window, open_paged_recovery_window,
     open_recovered_editor_tabs_window, open_workspace_session_window,
 };
 use components::init_with_keybindings as init_editor;
@@ -517,10 +518,10 @@ fn run_app() {
             .filter_map(|document| document.file_path.clone())
             .collect::<Vec<_>>();
         if let Some(recovery_dir) = &recovery_dir {
-            match gmark_large_document::list_large_recovery_journals(recovery_dir) {
+            match gmark_paged_document::list_paged_recovery_journals(recovery_dir) {
                 Ok(journals) => {
                     for journal in journals {
-                        match gmark_large_document::large_recovery_has_edits(&journal) {
+                        match gmark_paged_document::paged_recovery_has_edits(&journal) {
                             Ok(false) => {
                                 if let Err(error) = std::fs::remove_file(&journal) {
                                     eprintln!(
@@ -529,7 +530,7 @@ fn run_app() {
                                     );
                                 }
                             }
-                            Ok(true) => match open_large_recovery_window(cx, journal.clone()) {
+                            Ok(true) => match open_paged_recovery_window(cx, journal.clone()) {
                                 Ok((_window, path)) => {
                                     opened_recovery = true;
                                     recovered_paths.push(path);

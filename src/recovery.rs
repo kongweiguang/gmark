@@ -13,7 +13,7 @@ use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
 
 use gmark_document::{LineEnding, SourceFormatSnapshot};
-use gmark_large_document::{SourceAffinity, SourceAnchor, SourceSelection};
+use gmark_document_core::{SourceAffinity, SourceAnchor, SourceSelection};
 use gmark_recovery_codec::{DecodedRecord, RecordKind, decode_record, encode_record_payload};
 const MAX_EDITS_BEFORE_COMPACTION: usize = 256;
 const COMPACTION_OVERHEAD_BYTES: u64 = 8 * 1024 * 1024;
@@ -427,6 +427,60 @@ impl RecoveryJournal {
         gmark_document::atomic_write(&self.journal_path, &bytes)
             .map_err(anyhow::Error::new)
             .context("failed to compact recovery journal")
+    }
+}
+
+impl gmark_document_core::RecoveryBackend for RecoveryJournal {
+    fn record(
+        &mut self,
+        record: &gmark_document_core::RecoveryRecord,
+    ) -> Result<(), gmark_document_core::PersistenceError> {
+        let gmark_document_core::RecoveryAction::Transaction(transaction) = &record.action else {
+            return Err(gmark_document_core::PersistenceError::Recovery(
+                "Resident recovery requires the resulting source transaction".into(),
+            ));
+        };
+        let mut document = gmark_document::SourceDocument::from_normalized(
+            &self.last_source,
+            self.last_format.clone(),
+            0,
+        )
+        .ok_or_else(|| {
+            gmark_document_core::PersistenceError::Recovery(
+                "Resident recovery baseline format is inconsistent".into(),
+            )
+        })?;
+        let edits = transaction
+            .edits
+            .iter()
+            .map(|edit| {
+                let start = usize::try_from(edit.range.start).map_err(|_| {
+                    gmark_document_core::PersistenceError::Recovery(
+                        "recovery edit offset does not fit this platform".into(),
+                    )
+                })?;
+                let end = usize::try_from(edit.range.end).map_err(|_| {
+                    gmark_document_core::PersistenceError::Recovery(
+                        "recovery edit offset does not fit this platform".into(),
+                    )
+                })?;
+                Ok(gmark_document::TextEdit::new(
+                    start..end,
+                    edit.replacement.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, gmark_document_core::PersistenceError>>()?;
+        document
+            .apply_transaction(gmark_document::Transaction::new(document.revision(), edits))
+            .map_err(|error| gmark_document_core::PersistenceError::Recovery(error.to_string()))?;
+        self.record_formatted(
+            &document.text(),
+            document.source_format(),
+            RecoverySelection::from_source_selection(record.selection.unwrap_or_default()),
+            record.view_id.as_str(),
+        )
+        .map(|_| ())
+        .map_err(|error| gmark_document_core::PersistenceError::Recovery(error.to_string()))
     }
 }
 

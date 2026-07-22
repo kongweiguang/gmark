@@ -6,8 +6,9 @@ use super::{
 };
 use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, TableCellPosition};
 use gpui::{
-    AppContext, Bounds, Hsla, Modifiers, MouseButton, MouseDownEvent, SharedString, TestAppContext,
-    TextAlign, TextRun, VisualTestContext, font, point, px, rgba, size,
+    AppContext, Bounds, Hsla, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    SharedString, TestAppContext, TextAlign, TextRun, VisualTestContext, font, point, px, rgba,
+    size,
 };
 
 fn shaped_lines(
@@ -117,6 +118,71 @@ async fn link_hit_matches_only_rendered_link_text(cx: &mut TestAppContext) {
 
     assert_eq!(hit, Some("https://example.com".to_string()));
     assert_eq!(miss_right, None);
+}
+
+#[gpui::test]
+async fn source_document_mouse_drag_selects_exact_text_range(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(cx, BlockRecord::paragraph("alpha beta"));
+        block.set_source_document_mode();
+        block
+    });
+    let text = block.read_with(cx, |block, _cx| block.display_text().to_owned());
+    let lines = shaped_lines(&text, px(320.0), cx);
+    let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(320.0), px(20.0)));
+    let start = lines[0]
+        .position_for_index(1, px(20.0))
+        .expect("source selection start");
+    let end = lines[0]
+        .position_for_index(6, px(20.0))
+        .expect("source selection end");
+    block.update(cx, |block, _cx| {
+        block.last_layout = Some(lines);
+        block.last_bounds = Some(bounds);
+        block.last_line_height = px(20.0);
+    });
+
+    cx.update(|window, app| {
+        block.read(app).focus_handle.focus(window);
+        block.update(app, |block, block_cx| {
+            block.on_mouse_down(
+                &MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: point(start.x, px(10.0)),
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                block_cx,
+            );
+            block.on_mouse_move(
+                &MouseMoveEvent {
+                    position: point(end.x, px(10.0)),
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                },
+                window,
+                block_cx,
+            );
+            block.on_mouse_up(
+                &MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: point(end.x, px(10.0)),
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                },
+                window,
+                block_cx,
+            );
+        });
+    });
+
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(block.selected_range, 1..6);
+        assert!(!block.is_selecting);
+    });
 }
 
 #[gpui::test]

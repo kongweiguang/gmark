@@ -94,12 +94,12 @@
     }
 
     #[test]
-    fn workspace_scan_keeps_dirs_and_md_files_only() {
+    fn workspace_scan_keeps_dirs_and_all_file_types() {
         let root =
             std::env::temp_dir().join(format!("gmark-workspace-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(root.join("nested")).expect("create dirs");
         fs::write(root.join("a.md"), "a").expect("write md");
-        fs::write(root.join("a.txt"), "ignored").expect("write txt");
+        fs::write(root.join("a.txt"), "text").expect("write txt");
         fs::write(root.join("ignored.md"), "ignored").expect("write ignored md");
         fs::write(root.join(".gitignore"), "ignored.md\n").expect("write gitignore");
         fs::write(root.join("nested").join("b.md"), "b").expect("write nested md");
@@ -110,15 +110,66 @@
             .iter()
             .map(|node| node.label.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(labels, vec!["nested", "a.md"]);
+        assert_eq!(labels, vec!["nested", ".gitignore", "a.md", "a.txt"]);
         assert!(matches!(
             tree.children[0].kind,
             WorkspaceTreeKind::Directory(_)
         ));
         assert!(matches!(
             tree.children[1].kind,
-            WorkspaceTreeKind::MarkdownFile(_)
+            WorkspaceTreeKind::File(_)
         ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[gpui::test]
+    async fn binary_file_open_failure_is_rendered_in_its_tab(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_workspace_test_app(cx);
+        let root =
+            std::env::temp_dir().join(format!("gmark-binary-tab-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let binary = root.join("sample.exe");
+        fs::write(&binary, b"MZ\0\0\0\0\xff\xfe\0\0\0\0").unwrap();
+        let (editor, visual) = cx.add_window_view(|_window, cx| {
+            super::Editor::from_markdown(cx, "document".to_owned(), None)
+        });
+        visual.simulate_resize(gpui::size(gpui::px(720.0), gpui::px(520.0)));
+
+        editor.update_in(visual, |editor, window, cx| {
+            editor.open_workspace_file(binary.clone(), window, cx);
+        });
+        visual.run_until_parked();
+        visual.update(|window, cx| window.draw(cx).clear());
+
+        editor.update(visual, |editor, _cx| {
+            assert_eq!(editor.file_path.as_ref(), Some(&binary));
+            assert!(editor.file_open_failure.is_some());
+            assert!(editor.workspace.operation_error.is_none());
+        });
+        assert!(visual.debug_bounds("file-open-failure").is_some());
+        assert!(
+            visual
+                .debug_bounds("file-open-failure-open-system")
+                .is_some()
+        );
+        assert!(visual.debug_bounds("file-open-failure-reveal").is_some());
+        let content = visual.debug_bounds("editor-content").unwrap();
+        let placeholder = visual.debug_bounds("file-open-failure").unwrap();
+        let file_name = visual.debug_bounds("file-open-failure-name").unwrap();
+        let reason = visual.debug_bounds("file-open-failure-reason").unwrap();
+        assert!(placeholder.left() >= content.left());
+        assert!(placeholder.right() <= content.right());
+        assert!(f32::from(file_name.size.width) > 100.0);
+        assert!(f32::from(reason.size.width) > 100.0);
+        editor.update_in(visual, |editor, window, cx| {
+            editor.file_open_failure_focus_handles[0].focus(window);
+            assert!(editor.file_open_failure_focus_handles[0].is_focused(window));
+            cx.notify();
+        });
+        visual.update(|window, cx| window.draw(cx).clear());
 
         let _ = fs::remove_dir_all(root);
     }

@@ -143,7 +143,7 @@ fn check_architecture(root: &Path) -> Result<(), String> {
     let mut violations = Vec::new();
     for domain in [
         "crates/gmark-document",
-        "crates/gmark-large-document",
+        "crates/gmark-paged-document",
         "crates/gmark-recovery-codec",
     ] {
         let manifest = root.join(domain).join("Cargo.toml");

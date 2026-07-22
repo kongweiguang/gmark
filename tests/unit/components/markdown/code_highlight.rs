@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use super::{
-    CodeLanguageKey, code_language_for_path, highlight_code_block, resolve_code_language_key,
+    CodeHighlightClass, CodeLanguageKey, code_language_for_path, highlight_code_block,
+    resolve_code_language_key,
 };
 
 #[test]
@@ -94,6 +95,26 @@ fn plain_fallback_languages_produce_empty_spans() {
         .expect("plain text should still produce a result");
     assert_eq!(text.language, CodeLanguageKey::PlainText);
     assert!(text.spans.is_empty());
+}
+
+#[test]
+fn json_source_fragment_keeps_keys_values_and_literals_highlighted() {
+    let source = r#"  "name": "gmark", "count": 2, "ready": true, "next": null,"#;
+    let result = highlight_code_block(Some("json"), source).expect("json highlight result");
+
+    assert_eq!(result.language, CodeLanguageKey::Json);
+    for class in [
+        CodeHighlightClass::Property,
+        CodeHighlightClass::String,
+        CodeHighlightClass::Number,
+        CodeHighlightClass::Constant,
+        CodeHighlightClass::Punctuation,
+    ] {
+        assert!(
+            result.spans.iter().any(|span| span.class == class),
+            "JSON source fragment should contain {class:?}"
+        );
+    }
 }
 
 #[cfg(all(feature = "code-highlight-core", feature = "code-highlight-official"))]

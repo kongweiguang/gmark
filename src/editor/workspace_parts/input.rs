@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use crate::i18n::I18nManager;
 
 impl Editor {
     pub(super) fn handle_workspace_search_input_key(
@@ -451,7 +452,12 @@ impl Editor {
 
         // Validate the root path
         if root.as_os_str().is_empty() {
-            self.workspace.file_error = Some("Invalid workspace path: empty path".to_string());
+            self.workspace.file_error = Some(
+                cx.global::<I18nManager>()
+                    .strings()
+                    .workspace_invalid_path_error
+                    .clone(),
+            );
             self.workspace.selected = None;
             return;
         }

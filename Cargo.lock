@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "gmark"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4127,6 +4127,7 @@ dependencies = [
  "crc32fast",
  "criterion",
  "cssparser",
+ "csv",
  "directories",
  "dunce",
  "ed25519-dalek",
@@ -4135,7 +4136,10 @@ dependencies = [
  "fs4",
  "futures",
  "gmark-document",
- "gmark-large-document",
+ "gmark-document-core",
+ "gmark-document-runtime",
+ "gmark-json-graph",
+ "gmark-paged-document",
  "gmark-recovery-codec",
  "gpui",
  "harper-core",
@@ -4191,7 +4195,28 @@ dependencies = [
 name = "gmark-document"
 version = "0.1.0"
 dependencies = [
+ "gmark-document-core",
  "rope",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "gmark-document-core"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "gmark-document-runtime"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "gmark-document",
+ "gmark-document-core",
+ "gmark-paged-document",
+ "regex",
  "tempfile",
  "thiserror 2.0.19",
 ]
@@ -4205,7 +4230,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "gmark-large-document"
+name = "gmark-json-graph"
+version = "0.1.0"
+dependencies = [
+ "gmark-document-core",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "gmark-paged-document"
 version = "0.1.0"
 dependencies = [
  "atomicwrites",
@@ -4214,6 +4248,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "file-id",
+ "gmark-document-core",
  "gmark-recovery-codec",
  "gpui_sum_tree",
  "lru",

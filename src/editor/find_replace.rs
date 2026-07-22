@@ -88,9 +88,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_find_in_document(&crate::components::FindInDocument, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_find_in_document(&crate::components::FindInDocument, window, cx);
             });
             return;
         }
@@ -103,9 +103,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_find_in_document(&crate::components::FindInDocument, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_find_in_document(&crate::components::FindInDocument, window, cx);
             });
             return;
         }
@@ -118,9 +118,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_find_next(&crate::components::FindNext, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_find_next(&crate::components::FindNext, window, cx);
             });
             return;
         }
@@ -137,9 +137,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_find_previous(&crate::components::FindPrevious, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_find_previous(&crate::components::FindPrevious, window, cx);
             });
             return;
         }

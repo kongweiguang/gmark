@@ -83,6 +83,7 @@ impl Editor {
         self.rebuild_table_runtimes_inner(cx);
         self.rebuild_image_runtimes(cx);
         self.sync_table_axis_visuals(cx);
+        self.sync_table_cell_rectangle_highlights(cx);
     }
 
     pub(super) fn rebuild_virtual_table_runtimes(&mut self, cx: &mut Context<Self>) {
@@ -90,6 +91,7 @@ impl Editor {
         self.rebuild_footnote_registry(cx);
         self.sync_mounted_runtime_contexts(cx);
         self.sync_table_axis_visuals(cx);
+        self.sync_table_cell_rectangle_highlights(cx);
     }
 
     fn rebuild_table_runtimes_inner(&mut self, cx: &mut Context<Self>) {
@@ -316,6 +318,153 @@ impl Editor {
             self.finalize_pending_undo_capture(cx);
         }
         cx.notify();
+    }
+
+    fn commit_table_structure_change(
+        &mut self,
+        table_block: &Entity<Block>,
+        table: TableData,
+        selection: TableAxisSelection,
+        focus: TableCellPosition,
+        cx: &mut Context<Self>,
+    ) {
+        let started_local_capture = if self.pending_undo_capture.is_none() {
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            true
+        } else {
+            false
+        };
+        table_block.update(cx, move |block, _cx| block.record.table = Some(table));
+        self.rebuild_table_runtimes(cx);
+        self.set_table_axis_selection(Some(selection), cx);
+        self.focus_table_cell_position(table_block, focus, cx);
+        self.mark_dirty(cx);
+        self.request_active_block_scroll_into_view(cx);
+        if started_local_capture {
+            self.finalize_pending_undo_capture(cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn insert_table_row(
+        &mut self,
+        table_block: &Entity<Block>,
+        visual_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_table_record_from_runtime(table_block, cx);
+        let Some(mut table) = table_block.read(cx).record.table.clone() else {
+            return;
+        };
+        if !table.insert_empty_visual_row(visual_index) {
+            return;
+        }
+        self.commit_table_structure_change(
+            table_block,
+            table,
+            TableAxisSelection {
+                table_block_id: table_block.entity_id(),
+                kind: TableAxisKind::Row,
+                index: visual_index,
+            },
+            TableCellPosition {
+                row: visual_index,
+                column: 0,
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn duplicate_table_row(
+        &mut self,
+        table_block: &Entity<Block>,
+        visual_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_table_record_from_runtime(table_block, cx);
+        let Some(mut table) = table_block.read(cx).record.table.clone() else {
+            return;
+        };
+        if !table.duplicate_visual_row(visual_index) {
+            return;
+        }
+        let inserted = visual_index + 1;
+        self.commit_table_structure_change(
+            table_block,
+            table,
+            TableAxisSelection {
+                table_block_id: table_block.entity_id(),
+                kind: TableAxisKind::Row,
+                index: inserted,
+            },
+            TableCellPosition {
+                row: inserted,
+                column: 0,
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn insert_table_column(
+        &mut self,
+        table_block: &Entity<Block>,
+        column: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_table_record_from_runtime(table_block, cx);
+        let Some(mut table) = table_block.read(cx).record.table.clone() else {
+            return;
+        };
+        let alignment = table
+            .alignments
+            .get(column.saturating_sub(1))
+            .copied()
+            .or_else(|| table.alignments.get(column).copied())
+            .unwrap_or(TableColumnAlignment::Default);
+        if !table.insert_empty_column(column, alignment) {
+            return;
+        }
+        self.commit_table_structure_change(
+            table_block,
+            table,
+            TableAxisSelection {
+                table_block_id: table_block.entity_id(),
+                kind: TableAxisKind::Column,
+                index: column,
+            },
+            TableCellPosition { row: 0, column },
+            cx,
+        );
+    }
+
+    pub(super) fn duplicate_table_column(
+        &mut self,
+        table_block: &Entity<Block>,
+        column: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_table_record_from_runtime(table_block, cx);
+        let Some(mut table) = table_block.read(cx).record.table.clone() else {
+            return;
+        };
+        if !table.duplicate_column(column) {
+            return;
+        }
+        let inserted = column + 1;
+        self.commit_table_structure_change(
+            table_block,
+            table,
+            TableAxisSelection {
+                table_block_id: table_block.entity_id(),
+                kind: TableAxisKind::Column,
+                index: inserted,
+            },
+            TableCellPosition {
+                row: 0,
+                column: inserted,
+            },
+            cx,
+        );
     }
 
     pub(super) fn move_table_row(

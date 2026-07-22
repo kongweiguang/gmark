@@ -455,7 +455,7 @@
         });
 
         editor.update(visual, |editor, cx| {
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             editor.execute_workspace_move_plan(plan.clone(), false, cx);
             assert!(editor.workspace.file_operation_task.is_none());
             assert!(editor.workspace.operation_error.is_some());

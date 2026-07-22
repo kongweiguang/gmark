@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use crate::editor::document_session::EditorDocumentSession;
 
 impl Editor {
     pub(super) fn install_new_tab(
@@ -25,26 +26,37 @@ impl Editor {
         self.schedule_workspace_session_save(cx);
     }
 
-    pub(super) fn install_new_large_tab(
+    pub(in crate::editor) fn install_new_source_backed_tab(
         &mut self,
         path: PathBuf,
-        probe: gmark_large_document::OpenProbe,
-        source: gmark_large_document::FileSource,
+        probe: gmark_paged_document::OpenProbe,
+        source: gmark_paged_document::FileSource,
         cx: &mut Context<Self>,
     ) {
         if !self.can_switch_tabs() {
             return;
         }
+        let structured_preview = probe.strategy == gmark_paged_document::OpenStrategy::Resident
+            && matches!(
+                probe.format,
+                gmark_document_core::DocumentFormat::Json
+                    | gmark_document_core::DocumentFormat::Delimited { .. }
+            );
         let current = self.capture_active_tab(cx);
         self.tabs.records[self.tabs.active].snapshot = Some(current);
-        let mut snapshot = Self::snapshot_for_untitled_document();
+        let mut snapshot = Self::snapshot_for_untitled_document(DocumentKind::from_path(&path));
         snapshot.file_path = Some(path.clone());
         snapshot.saved_file_fingerprint = crate::recovery::fingerprint_file(&path).ok();
         snapshot.recovery_journal = None;
-        let large_file =
-            cx.new(move |cx| crate::large_file::DiskSourceAdapter::new(path, probe, source, cx));
-        Self::subscribe_disk_source_adapter(&large_file, cx);
-        snapshot.source_surface = SourceSurface::disk(large_file);
+        snapshot.view_mode = if structured_preview {
+            ViewMode::Preview
+        } else {
+            ViewMode::Source
+        };
+        let source_backed_view =
+            cx.new(move |cx| crate::document_host::DocumentHost::new(path, probe, source, cx));
+        Self::subscribe_document_host(&source_backed_view, cx);
+        snapshot.document_host = Some(source_backed_view);
         self.tabs.records.push(TabRecord {
             id: uuid::Uuid::new_v4(),
             pinned: false,
@@ -55,6 +67,41 @@ impl Editor {
         self.schedule_workspace_session_save(cx);
     }
 
+    pub(super) fn install_file_open_failure_tab(
+        &mut self,
+        path: PathBuf,
+        reason: String,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = Self::snapshot_for_file_open_failure(path, reason);
+        self.new_tab_from_snapshot(snapshot, cx);
+    }
+
+    pub(crate) fn install_initial_file_open_failure(
+        &mut self,
+        path: PathBuf,
+        reason: String,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = Self::snapshot_for_file_open_failure(path, reason);
+        self.install_tab_snapshot(snapshot, cx);
+        self.schedule_workspace_session_save(cx);
+    }
+
+    fn snapshot_for_file_open_failure(path: PathBuf, reason: String) -> DocumentTabSnapshot {
+        let mut snapshot = Self::snapshot_for_untitled_document(DocumentKind::from_path(&path));
+        snapshot.file_path = Some(path.clone());
+        snapshot.file_open_failure = Some(FileOpenFailure {
+            path: path.clone(),
+            reason,
+            action_error: None,
+        });
+        snapshot.saved_file_fingerprint = crate::recovery::fingerprint_file(&path).ok();
+        snapshot.recovery_journal = None;
+        snapshot.view_mode = ViewMode::Source;
+        snapshot
+    }
+
     pub(super) fn snapshot_for_restored_document(
         tab: &RestoredTab,
         cx: &mut Context<Self>,
@@ -63,19 +110,32 @@ impl Editor {
             crate::document_io::OpenedDocument::Resident(opened) => Some(
                 Self::snapshot_for_opened_document(opened.clone(), tab.path.clone()),
             ),
-            crate::document_io::OpenedDocument::Large(probe) => {
-                let source = gmark_large_document::FileSource::open(&tab.path).ok()?;
-                let mut snapshot = Self::snapshot_for_untitled_document();
+            crate::document_io::OpenedDocument::ResidentFormat(probe)
+            | crate::document_io::OpenedDocument::Paged(probe) => {
+                let source = gmark_paged_document::FileSource::open(&tab.path).ok()?;
+                let mut snapshot =
+                    Self::snapshot_for_untitled_document(DocumentKind::from_path(&tab.path));
                 snapshot.file_path = Some(tab.path.clone());
                 snapshot.saved_file_fingerprint = crate::recovery::fingerprint_file(&tab.path).ok();
                 snapshot.recovery_journal = None;
+                snapshot.view_mode = if probe.strategy
+                    == gmark_paged_document::OpenStrategy::Resident
+                    && matches!(
+                        probe.format,
+                        gmark_document_core::DocumentFormat::Json
+                            | gmark_document_core::DocumentFormat::Delimited { .. }
+                    ) {
+                    ViewMode::Preview
+                } else {
+                    ViewMode::Source
+                };
                 let path = tab.path.clone();
                 let probe = probe.clone();
-                let large_file = cx.new(move |cx| {
-                    crate::large_file::DiskSourceAdapter::new(path, probe, source, cx)
+                let document_host = cx.new(move |cx| {
+                    crate::document_host::DocumentHost::new(path, probe, source, cx)
                 });
-                Self::subscribe_disk_source_adapter(&large_file, cx);
-                snapshot.source_surface = SourceSurface::disk(large_file);
+                Self::subscribe_document_host(&document_host, cx);
+                snapshot.document_host = Some(document_host);
                 Some(snapshot)
             }
         }
@@ -85,7 +145,12 @@ impl Editor {
         opened: crate::document_io::OpenedMarkdown,
         path: PathBuf,
     ) -> DocumentTabSnapshot {
-        let source_document = SourceDocument::new(&opened.text);
+        let source_document = EditorDocumentSession::new_with_open_context(
+            SourceDocument::new(&opened.text),
+            opened.loading_limits,
+            opened.text_encoding.clone(),
+            opened.file_identity.clone(),
+        );
         let source = source_document.text();
         #[cfg(not(test))]
         let recovery_journal = crate::config::GmarkConfigDirs::from_system()
@@ -102,10 +167,12 @@ impl Editor {
         let recovery_journal = None;
         let requires_conversion = !opened.encoding.is_utf8();
         DocumentTabSnapshot {
-            source_surface: SourceSurface::resident(),
+            document_host: None,
             source_document,
             source_encoding: opened.encoding,
+            document_kind: DocumentKind::from_path(&path),
             file_path: Some(path.clone()),
+            file_open_failure: None,
             saved_file_fingerprint: crate::recovery::fingerprint_file(&path).ok(),
             document_dirty: false,
             view_mode: if requires_conversion {
@@ -115,7 +182,7 @@ impl Editor {
             },
             selection: UndoSelectionSnapshot::collapsed(
                 0,
-                gmark_large_document::SourceAffinity::Before,
+                gmark_document_core::SourceAffinity::Before,
             ),
             scroll_offset: point(px(0.0), px(0.0)),
             undo_history: Vec::new(),
@@ -134,28 +201,37 @@ impl Editor {
         }
     }
 
-    pub(super) fn snapshot_for_untitled_document() -> DocumentTabSnapshot {
-        let source_document = SourceDocument::new("");
+    pub(super) fn snapshot_for_untitled_document(
+        document_kind: DocumentKind,
+    ) -> DocumentTabSnapshot {
+        let source = document_kind.initial_source();
+        let source_document = EditorDocumentSession::new(SourceDocument::new(source));
         #[cfg(not(test))]
         let recovery_journal = crate::config::GmarkConfigDirs::from_system()
             .and_then(|dirs| {
-                crate::recovery::RecoveryJournal::create(&dirs.recovery_dir(), None, String::new())
+                crate::recovery::RecoveryJournal::create(
+                    &dirs.recovery_dir(),
+                    None,
+                    source.to_owned(),
+                )
             })
             .map(|journal| Arc::new(Mutex::new(journal)))
             .ok();
         #[cfg(test)]
         let recovery_journal = None;
         DocumentTabSnapshot {
-            source_surface: SourceSurface::resident(),
+            document_host: None,
             source_document,
             source_encoding: crate::document_io::DocumentEncoding::Utf8,
+            document_kind,
             file_path: None,
+            file_open_failure: None,
             saved_file_fingerprint: None,
             document_dirty: false,
-            view_mode: ViewMode::Rendered,
+            view_mode: document_kind.initial_view_mode(),
             selection: UndoSelectionSnapshot::collapsed(
                 0,
-                gmark_large_document::SourceAffinity::Before,
+                gmark_document_core::SourceAffinity::Before,
             ),
             scroll_offset: point(px(0.0), px(0.0)),
             undo_history: Vec::new(),
@@ -164,7 +240,7 @@ impl Editor {
             virtual_undo_selections: Vec::new(),
             virtual_redo_selections: Vec::new(),
             pending_virtual_undo_selection: None,
-            last_stable_source_text: String::new(),
+            last_stable_source_text: source.to_owned(),
             recovery_journal,
             external_file_conflict: false,
             recovered_session: false,
@@ -175,6 +251,26 @@ impl Editor {
     }
 
     pub(crate) fn new_untitled_tab(&mut self, cx: &mut Context<Self>) -> bool {
+        self.new_document_tab(DocumentKind::Markdown, cx)
+    }
+
+    pub(super) fn new_untyped_tab(&mut self, cx: &mut Context<Self>) -> bool {
+        self.new_document_tab(DocumentKind::Unspecified, cx)
+    }
+
+    pub(super) fn new_document_tab(
+        &mut self,
+        document_kind: DocumentKind,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.new_tab_from_snapshot(Self::snapshot_for_untitled_document(document_kind), cx)
+    }
+
+    fn new_tab_from_snapshot(
+        &mut self,
+        snapshot: DocumentTabSnapshot,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.can_switch_tabs() {
             return false;
         }
@@ -186,7 +282,7 @@ impl Editor {
             snapshot: None,
         });
         self.tabs.active = self.tabs.records.len() - 1;
-        self.install_tab_snapshot(Self::snapshot_for_untitled_document(), cx);
+        self.install_tab_snapshot(snapshot, cx);
         self.schedule_workspace_session_save(cx);
         true
     }
@@ -219,19 +315,25 @@ impl Editor {
         };
         let file_path = recovered.file_path.clone();
         let source = recovered.source.clone();
-        let mut source_document = SourceDocument::new(&source);
+        let mut source_document = EditorDocumentSession::new(SourceDocument::new(&source));
         assert!(
             source_document.restore_source_format(recovered.source_format.clone()),
             "恢复日志中的源码格式必须与恢复文本一致"
         );
+        source_document.mark_dirty();
         DocumentTabSnapshot {
-            source_surface: SourceSurface::resident(),
+            document_host: None,
             source_document,
             source_encoding: crate::document_io::DocumentEncoding::Utf8,
+            document_kind: file_path
+                .as_deref()
+                .map(DocumentKind::from_path)
+                .unwrap_or(DocumentKind::Markdown),
             saved_file_fingerprint: file_path
                 .as_deref()
                 .and_then(|path| crate::recovery::fingerprint_file(path).ok()),
             file_path,
+            file_open_failure: None,
             document_dirty: true,
             view_mode,
             selection,
@@ -283,8 +385,8 @@ impl Editor {
         snapshot: DocumentTabSnapshot,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = snapshot.source_surface.as_ref() {
-            large_file.update(cx, |view, _cx| view.suspend_for_closed_tab());
+        if let Some(document_host) = snapshot.document_host.as_ref() {
+            document_host.update(cx, |view, _cx| view.suspend_for_closed_tab());
         }
         self.tabs.closed.push(snapshot);
         if self.tabs.closed.len() > CLOSED_TAB_LIMIT {
@@ -301,7 +403,7 @@ impl Editor {
             return;
         }
         let dirty = if index == self.tabs.active {
-            self.document_dirty
+            self.is_document_dirty()
         } else {
             self.tabs.records[index]
                 .snapshot
@@ -491,7 +593,7 @@ impl Editor {
         &mut self,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs.close_after_save && !self.document_dirty {
+        if self.tabs.close_after_save && !self.is_document_dirty() {
             self.tabs.close_after_save = false;
             if self.close_tab_index_without_prompt(self.tabs.active, true, cx) {
                 self.advance_close_other_tabs(cx);
@@ -637,7 +739,7 @@ impl Editor {
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.document_dirty {
+        if self.is_document_dirty() {
             return true;
         }
         self.dirty_tab_index_except_active()

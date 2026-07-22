@@ -1,8 +1,10 @@
 // @author kongweiguang
 
 use super::Block;
-use crate::components::{BlockKind, BlockRecord, InlineTextTree, PastedImageSource};
-use gpui::{AppContext, TestAppContext};
+use crate::components::{
+    BlockKind, BlockRecord, Copy, Cut, InlineTextTree, Paste, PastedImageSource, SelectAll,
+};
+use gpui::{AppContext, ClipboardItem, TestAppContext};
 use std::fs;
 
 fn temp_image_path(name: &str) -> std::path::PathBuf {
@@ -20,6 +22,75 @@ fn temp_image_path(name: &str) -> std::path::PathBuf {
 
 fn remove_temp_image(path: &std::path::Path) {
     let _ = path.parent().map(fs::remove_dir_all);
+}
+
+#[gpui::test]
+async fn read_only_preview_text_can_be_selected_and_copied(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(cx, BlockRecord::paragraph("preview text"));
+        block.set_read_only(true);
+        block
+    });
+
+    cx.update(|window, app| {
+        app.write_to_clipboard(ClipboardItem::new_string("old clipboard".to_owned()));
+        block.update(app, |block, block_cx| {
+            block.on_select_all(&SelectAll, window, block_cx);
+            block.on_copy(&Copy, window, block_cx);
+        });
+    });
+
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(block.selected_range, 0.."preview text".len());
+        assert!(block.is_read_only());
+    });
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("preview text")
+    );
+}
+
+#[gpui::test]
+async fn source_document_supports_select_copy_cut_and_paste(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(cx, BlockRecord::paragraph("# source\nbody"));
+        block.set_source_document_mode();
+        block
+    });
+
+    cx.update(|window, app| {
+        block.update(app, |block, block_cx| {
+            block.on_select_all(&SelectAll, window, block_cx);
+            block.on_copy(&Copy, window, block_cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("# source\nbody")
+    );
+
+    cx.update(|window, app| {
+        app.write_to_clipboard(ClipboardItem::new_string("replacement".to_owned()));
+        block.update(app, |block, block_cx| {
+            block.on_paste(&Paste, window, block_cx);
+            block.on_select_all(&SelectAll, window, block_cx);
+            block.on_cut(&Cut, window, block_cx);
+        });
+    });
+
+    block.read_with(cx, |block, _cx| assert!(block.display_text().is_empty()));
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("replacement")
+    );
 }
 
 #[gpui::test]

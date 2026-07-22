@@ -1,6 +1,12 @@
 // @author kongweiguang
 
-use super::{editing_command_for_action, filter_command_labels, humanize_action_name};
+use gpui::Action as _;
+
+use super::{
+    command_icon, command_search_text, display_shortcut, editing_command_for_action,
+    filter_command_labels, humanize_action_name, localized_action_description,
+    localized_action_label,
+};
 
 #[test]
 fn editor_actions_map_to_the_shared_editing_command_registry() {
@@ -24,6 +30,65 @@ fn humanizes_namespaced_camel_case_actions() {
     assert_eq!(humanize_action_name("plugin::open_recent"), "open recent");
 }
 
+#[gpui::test]
+async fn command_labels_follow_the_selected_chinese_language(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        crate::i18n::I18nManager::init_with_language_id(cx, "zh-CN");
+        let strings = cx.global::<crate::i18n::I18nManager>().strings();
+        assert_eq!(
+            localized_action_label(&crate::components::CloseTab, strings, "zh-CN"),
+            "关闭标签页"
+        );
+        assert_eq!(
+            localized_action_label(&crate::components::AddThemeConfig, strings, "zh-CN"),
+            "添加主题配置"
+        );
+        assert_eq!(
+            localized_action_label(&crate::components::CheckForUpdates, strings, "zh-CN"),
+            "检查更新"
+        );
+        assert_eq!(
+            localized_action_label(&crate::components::SetBulletedList, strings, "zh-CN"),
+            "无序列表"
+        );
+        assert_eq!(
+            localized_action_label(
+                &crate::components::NormalizeLineEndingsCrLf,
+                strings,
+                "zh-CN"
+            ),
+            "统一为 CRLF 换行符"
+        );
+        assert_eq!(
+            localized_action_label(&crate::components::ExportPdf, strings, "zh-CN"),
+            "导出为 PDF"
+        );
+    });
+}
+
+#[test]
+fn command_metadata_hides_action_names_and_indexes_human_aliases() {
+    let action = crate::components::SetCodeBlock;
+    let description = localized_action_description(&action, "代码块", "zh-CN");
+    let search_text = command_search_text(&action, "代码块", &description);
+    assert_eq!(description, "将当前段落转换为支持语法高亮的代码块");
+    assert!(search_text.contains("code block"));
+    assert!(search_text.contains("代码块"));
+    assert_eq!(display_shortcut("gmark::SetCodeBlock", action.name()), "");
+    assert_eq!(display_shortcut("ctrl-alt-c", action.name()), "ctrl-alt-c");
+    assert_eq!(command_icon(&action), "icon/ui/code.svg");
+    assert!(std::path::Path::new("assets/icon/ui/code.svg").is_file());
+
+    let exit = crate::components::ExitCodeBlock;
+    let exit_description = localized_action_description(&exit, "退出代码块", "zh-CN");
+    let searchables = vec![
+        command_search_text(&exit, "退出代码块", &exit_description),
+        search_text,
+    ];
+    assert_eq!(filter_command_labels(&searchables, "code block")[0], 1);
+    assert_eq!(command_icon(&exit), "icon/ui/code.svg");
+}
+
 #[test]
 fn command_filter_prefers_prefix_then_contains_then_subsequence() {
     let labels = vec![
@@ -38,7 +103,7 @@ fn command_filter_prefers_prefix_then_contains_then_subsequence() {
 #[gpui::test]
 async fn palette_indexes_real_editor_actions_and_renders_results(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        crate::i18n::I18nManager::init(cx);
+        crate::i18n::I18nManager::init_with_language_id(cx, "en-US");
         crate::theme::ThemeManager::init(cx);
         crate::components::init(cx);
     });
@@ -71,7 +136,9 @@ async fn palette_indexes_real_editor_actions_and_renders_results(cx: &mut gpui::
             .iter()
             .find(|command| command.label == "Quick Open")
             .expect("Quick Open command");
-        assert_eq!(quick_open.icon, Some("icon/ui/files.svg"));
+        assert_eq!(quick_open.icon, "icon/ui/files.svg");
+        assert!(!quick_open.description.is_empty());
+        assert!(!quick_open.shortcut.contains("::"));
     });
 
     for viewport in [
@@ -92,6 +159,9 @@ async fn palette_indexes_real_editor_actions_and_renders_results(cx: &mut gpui::
         let label = visual
             .debug_bounds("command-palette-result-label-0")
             .unwrap();
+        let description = visual
+            .debug_bounds("command-palette-result-description-0")
+            .unwrap();
         let shortcut = visual
             .debug_bounds("command-palette-result-shortcut-0")
             .unwrap();
@@ -102,7 +172,7 @@ async fn palette_indexes_real_editor_actions_and_renders_results(cx: &mut gpui::
         assert_eq!(input.size.height, gpui::px(40.0));
         assert_eq!(search_icon.size, gpui::size(gpui::px(16.0), gpui::px(16.0)));
         assert_eq!(close.size, gpui::size(gpui::px(28.0), gpui::px(28.0)));
-        assert_eq!(row.size.height, gpui::px(34.0));
+        assert_eq!(row.size.height, gpui::px(50.0));
         assert_eq!(icon.size, gpui::size(gpui::px(18.0), gpui::px(18.0)));
         assert!(input.left() >= dialog.left());
         assert!(input.right() <= dialog.right());
@@ -111,6 +181,9 @@ async fn palette_indexes_real_editor_actions_and_renders_results(cx: &mut gpui::
         assert!(icon.left() >= row.left());
         assert!(icon.right() <= label.left());
         assert!(label.right() <= shortcut.left());
+        assert!(description.left() >= label.left());
+        assert!(description.right() <= shortcut.left());
+        assert!(description.top() >= label.bottom());
         assert!(shortcut.right() <= row.right());
     }
 }

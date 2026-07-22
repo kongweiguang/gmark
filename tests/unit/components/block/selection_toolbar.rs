@@ -143,6 +143,24 @@ async fn primary_format_commands_route_to_expected_markdown(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+async fn overflow_extension_commands_route_to_expected_markdown(cx: &mut TestAppContext) {
+    let cases = [
+        (ToolbarCommand::Highlight, "==alpha== beta"),
+        (ToolbarCommand::Superscript, "<sup>alpha</sup> beta"),
+        (ToolbarCommand::Subscript, "<sub>alpha</sub> beta"),
+        (ToolbarCommand::InlineMath, "$alpha$ beta"),
+    ];
+    for (command, expected) in cases {
+        let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("alpha beta")));
+        block.update(cx, |block, cx| {
+            block.selected_range = 0..5;
+            block.apply_selection_toolbar_command(command, cx);
+            assert_eq!(block.record.title.serialize_markdown(), expected);
+        });
+    }
+}
+
+#[gpui::test]
 async fn table_cell_selection_exposes_safe_inline_commands_without_block_transform(
     cx: &mut TestAppContext,
 ) {

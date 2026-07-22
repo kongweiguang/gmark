@@ -1,8 +1,9 @@
 // @author kongweiguang
 
 use super::{
-    AppPreferences, AutoSavePreference, EditorSettings, ImagePasteBehavior, PreferencesDropdown,
-    PreferencesNav, PreferencesSwitch, StartupOpenPreference, StatusBarButton,
+    AppPreferences, AutoSavePreference, DocumentLoadingPreferences, DocumentLoadingPreset,
+    EditorSettings, ImagePasteBehavior, PreferencesDropdown, PreferencesNav, PreferencesSwitch,
+    StartupOpenPreference, StatusBarButton,
     StatusBarPreferences, WorkspaceSidebarPosition,
     load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
     read_app_preferences_with_dirs, save_app_preferences_with_dirs,
@@ -46,6 +47,23 @@ fn theme_options_use_semantic_local_icons() {
     assert_eq!(theme_option_icon("gmark"), "icon/ui/moon.svg");
     assert_eq!(theme_option_icon("gmark-light"), "icon/ui/sun.svg");
     assert_eq!(theme_option_icon("custom:paper"), "icon/ui/palette.svg");
+}
+
+#[test]
+fn editor_preferences_match_product_defaults() {
+    let preferences = AppPreferences::default();
+
+    assert!(preferences.editor_font_family.is_empty());
+    assert_eq!(preferences.editor_font_size, 16);
+    assert_eq!(preferences.editor_line_height_percent, 160);
+    assert_eq!(preferences.editor_content_width, 1200);
+    assert!(preferences.auto_pair_brackets);
+    assert!(preferences.auto_pair_markdown);
+    assert_eq!(
+        preferences.workspace_sidebar_position,
+        WorkspaceSidebarPosition::Left
+    );
+    assert!(!preferences.show_tab_bar_actions);
 }
 
 #[test]
@@ -204,6 +222,7 @@ fn saves_and_reads_preferences() {
         recent_editing_commands: Vec::new(),
         keybindings: BTreeMap::new(),
         status_bar: StatusBarPreferences::default(),
+        document_loading: DocumentLoadingPreferences::default(),
     };
 
     save_app_preferences_with_dirs(&preferences, &dirs)
@@ -226,6 +245,46 @@ fn saves_and_reads_preferences() {
     assert!(text.contains("font_family = \"Georgia\""));
     assert!(text.contains("workspace_sidebar_position = \"right\""));
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn loading_preferences_apply_valid_overrides_and_ignore_invalid_values() {
+    let valid = DocumentLoadingPreferences {
+        preset: DocumentLoadingPreset::LowMemory,
+        max_resident_mib: Some(32),
+        max_resident_lines: Some(250_000),
+        max_structural_units: Some(2_000_000),
+    }
+    .policy()
+    .effective_limits();
+    assert_eq!(valid.max_resident_bytes, 32 * 1024 * 1024);
+    assert_eq!(valid.max_resident_lines, 250_000);
+    assert_eq!(valid.max_structural_units, 2_000_000);
+
+    let fallback = DocumentLoadingPreferences {
+        preset: DocumentLoadingPreset::HighPerformance,
+        max_resident_mib: Some(0),
+        max_resident_lines: Some(999),
+        max_structural_units: Some(9_999),
+    }
+    .policy()
+    .effective_limits();
+    assert_eq!(fallback, gmark_document_core::HIGH_PERFORMANCE_LIMITS);
+
+    let mixed_preferences = DocumentLoadingPreferences {
+        preset: DocumentLoadingPreset::LowMemory,
+        max_resident_mib: Some(24),
+        max_resident_lines: Some(999),
+        max_structural_units: Some(750_000),
+    };
+    let mixed = mixed_preferences.policy().effective_limits();
+    assert_eq!(mixed.max_resident_bytes, 24 * 1024 * 1024);
+    assert_eq!(
+        mixed.max_resident_lines,
+        gmark_document_core::LOW_MEMORY_LIMITS.max_resident_lines
+    );
+    assert_eq!(mixed.max_structural_units, 750_000);
+    assert!(mixed_preferences.has_invalid_override());
 }
 
 #[test]
@@ -298,6 +357,7 @@ fn saving_preferences_window_persists_selected_language() {
         recent_editing_commands: Vec::new(),
         keybindings: BTreeMap::new(),
         status_bar: StatusBarPreferences::default(),
+        document_loading: DocumentLoadingPreferences::default(),
     };
     save_app_preferences_with_dirs(&preferences, &dirs)
         .expect("preferences should save to config.toml");
@@ -309,6 +369,12 @@ fn saving_preferences_window_persists_selected_language() {
             action_id: "publish_document".into(),
         }],
         ..StatusBarPreferences::default()
+    };
+    let document_loading = DocumentLoadingPreferences {
+        preset: DocumentLoadingPreset::HighPerformance,
+        max_resident_mib: Some(96),
+        max_resident_lines: Some(300_000),
+        max_structural_units: Some(1_500_000),
     };
     let saved = save_preferences_from_window_with_dirs(
         StartupOpenPreference::LastOpenedFile,
@@ -326,6 +392,7 @@ fn saving_preferences_window_persists_selected_language() {
         "en-US",
         ImagePasteBehavior::CopyToNamedAssetsFolder,
         BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
+        &document_loading,
         &status_bar,
         &dirs,
     )
@@ -346,6 +413,7 @@ fn saving_preferences_window_persists_selected_language() {
         WorkspaceSidebarPosition::Right
     );
     assert!(saved.show_tab_bar_actions);
+    assert_eq!(saved.document_loading, document_loading);
     assert_eq!(
         saved.image_paste_behavior,
         ImagePasteBehavior::CopyToNamedAssetsFolder
@@ -690,7 +758,8 @@ async fn preferences_dropdowns_support_keyboard_navigation_and_commit(cx: &mut T
             assert_eq!(preferences.selected_theme_id, "gmark");
             assert!(!preferences.theme_dropdown_open);
             assert_eq!(cx.global::<ThemeManager>().current_theme_id(), "gmark");
-            assert!(preferences.dropdown_focus_handles[2].is_focused(window));
+            assert!(preferences.dropdown_focus_handles[PreferencesDropdown::Theme.index()]
+                .is_focused(window));
         })
         .unwrap();
 

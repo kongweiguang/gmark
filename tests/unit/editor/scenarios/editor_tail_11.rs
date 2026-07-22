@@ -8,21 +8,21 @@ async fn large_document_reopens_with_an_explicit_encoding_without_changing_tabs(
     let temp = tempfile::tempdir().expect("explicit encoding tempdir");
     let path = temp.path().join("explicit-encoding.md");
     fs::write(&path, "café\n").expect("explicit encoding fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("explicit encoding probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("explicit encoding source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("explicit encoding source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("explicit encoding large view");
     assert_eq!(
         large_view.read_with(visual, |view, _cx| view.encoding_label()),
@@ -32,7 +32,7 @@ async fn large_document_reopens_with_an_explicit_encoding_without_changing_tabs(
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| {
             view.reopen_with_encoding(
-                gmark_large_document::TextEncoding::Legacy("windows-1252".to_owned()),
+                gmark_paged_document::TextEncoding::Legacy("windows-1252".to_owned()),
                 window,
                 cx,
             )
@@ -64,7 +64,7 @@ async fn large_document_reopens_with_an_explicit_encoding_without_changing_tabs(
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| {
             view.reopen_with_encoding(
-                gmark_large_document::TextEncoding::Utf8 { bom: false },
+                gmark_paged_document::TextEncoding::Utf8 { bom: false },
                 window,
                 cx,
             )
@@ -75,10 +75,14 @@ async fn large_document_reopens_with_an_explicit_encoding_without_changing_tabs(
         "WINDOWS-1252",
         "dirty documents must not be discarded by an encoding reopen"
     );
-    assert!(
-        large_view
-            .read_with(visual, |view, _cx| view.error_for_test())
-            .is_some_and(|error| error.contains("Save or undo"))
+    let expected_error = large_view.read_with(visual, |_view, cx| {
+        cx.global::<I18nManager>()
+            .strings()
+            .large_document_text("reopen_dirty_error")
+    });
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.error_for_test()),
+        Some(expected_error)
     );
     visual.simulate_keystrokes("ctrl-z");
     visual.run_until_parked();
@@ -86,7 +90,7 @@ async fn large_document_reopens_with_an_explicit_encoding_without_changing_tabs(
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| {
             view.reopen_with_encoding(
-                gmark_large_document::TextEncoding::Utf8 { bom: false },
+                gmark_paged_document::TextEncoding::Utf8 { bom: false },
                 window,
                 cx,
             )
@@ -125,23 +129,27 @@ async fn large_document_interactive_soak(cx: &mut TestAppContext) {
     );
     let progress_path = std::env::var_os("GMARK_INTERACTIVE_SOAK_PROGRESS").map(PathBuf::from);
     let temp = tempfile::tempdir().expect("interactive soak tempdir");
-    let path = temp.path().join("interactive-soak.md");
+    let extension = fixture
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("txt");
+    let path = temp.path().join(format!("interactive-soak.{extension}"));
     fs::copy(&fixture, &path).expect("copy interactive soak fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("interactive soak probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("interactive soak source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("interactive soak source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.simulate_resize(size(px(1180.0), px(780.0)));
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("interactive soak large view");
 
     let ready_deadline = Instant::now() + Duration::from_secs(30);
@@ -169,43 +177,62 @@ async fn large_document_interactive_soak(cx: &mut TestAppContext) {
     let mut saves = 0u64;
     let mut searches = 0u64;
     let mut structure_transitions = 0u64;
+    let mut next_edit_at = Duration::ZERO;
+    let mut next_search_at = Duration::ZERO;
+    let mut next_save_at = Duration::ZERO;
     while started.elapsed() < duration {
         large_view.update(visual, |view, cx| view.scroll_page_for_test(true, cx));
         redraw(visual);
         large_view.update(visual, |view, cx| view.scroll_page_for_test(false, cx));
         redraw(visual);
 
-        let line = large_view.read_with(visual, |view, _cx| view.scroll_top_line_for_test());
-        visual.update(|window, cx| {
-            large_view.update(cx, |view, cx| {
-                view.begin_line_edit_for_test(line, window, cx)
+        let elapsed = started.elapsed();
+        if elapsed >= next_edit_at {
+            next_edit_at += Duration::from_secs(3);
+            let line = large_view.read_with(visual, |view, _cx| view.scroll_top_line_for_test());
+            visual.update(|window, cx| {
+                large_view.update(cx, |view, cx| {
+                    view.begin_line_edit_for_test(line, window, cx)
+                });
             });
-        });
-        if let Some((_, block)) =
-            large_view.read_with(visual, |view, _cx| view.active_edit_for_test())
-        {
-            block.update(visual, |block, cx| {
-                let end = block.display_text().len();
-                block.replace_text_in_visible_range(end..end, "x", None, false, cx);
+            if let Some((_, block)) =
+                large_view.read_with(visual, |view, _cx| view.active_edit_for_test())
+            {
+                block.update(visual, |block, cx| {
+                    let end = block.display_text().len();
+                    block.replace_text_in_visible_range(end..end, "x", None, false, cx);
+                });
+                edits += 1;
+            }
+            visual.run_until_parked();
+            visual.update(|window, cx| {
+                large_view.update(cx, |view, cx| view.undo_for_test(window, cx));
             });
-            edits += 1;
-        }
-        visual.run_until_parked();
-        visual.simulate_keystrokes("ctrl-z");
-        visual.run_until_parked();
-        visual.simulate_keystrokes("ctrl-y");
-        visual.run_until_parked();
-
-        if cycles.is_multiple_of(6_000) {
-            visual.simulate_keystrokes("ctrl-s");
             visual.run_until_parked();
-            saves += 1;
-        } else {
-            visual.simulate_keystrokes("ctrl-z");
+            visual.update(|window, cx| {
+                large_view.update(cx, |view, cx| view.redo_for_test(window, cx));
+            });
             visual.run_until_parked();
+
+            if elapsed >= next_save_at {
+                next_save_at += Duration::from_secs(15 * 60);
+                visual.update(|window, cx| {
+                    large_view.update(cx, |view, cx| {
+                        view.on_save_document(&SaveDocument, window, cx)
+                    });
+                });
+                visual.run_until_parked();
+                saves += 1;
+            } else {
+                visual.update(|window, cx| {
+                    large_view.update(cx, |view, cx| view.undo_for_test(window, cx));
+                });
+                visual.run_until_parked();
+            }
         }
 
-        if cycles.is_multiple_of(25) {
+        if elapsed >= next_search_at {
+            next_search_at += Duration::from_secs(45);
             visual.simulate_keystrokes("ctrl-f");
             redraw(visual);
             visual.simulate_keystrokes("ctrl-a");
@@ -214,7 +241,7 @@ async fn large_document_interactive_soak(cx: &mut TestAppContext) {
             visual.simulate_keystrokes("escape");
             searches += 1;
         }
-        if cycles.is_multiple_of(50)
+        if elapsed.as_secs().is_multiple_of(60)
             && large_view.read_with(visual, |view, _cx| view.has_structure_view())
         {
             large_view.update(visual, |view, cx| view.show_structure_view(cx));
@@ -227,7 +254,7 @@ async fn large_document_interactive_soak(cx: &mut TestAppContext) {
         assert!(large_view.read_with(visual, |view, _cx| view.error_for_test().is_none()));
         assert!(
             large_view.read_with(visual, |view, _cx| view.source_cache_len_for_test())
-                <= crate::large_file::MAX_SOURCE_CACHED_ROWS
+                <= crate::document_host::MAX_SOURCE_CACHED_ROWS
         );
         maximum_rss = maximum_rss.max(current_process_rss_mib().unwrap_or_default());
         cycles += 1;
@@ -280,7 +307,7 @@ async fn large_document_interactive_soak(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn large_markdown_switches_between_all_tables_and_keeps_source_mapping(
+async fn large_markdown_exposes_only_source_without_table_projection(
     cx: &mut TestAppContext,
 ) {
     init_editor_test_app(cx);
@@ -291,73 +318,34 @@ async fn large_markdown_switches_between_all_tables_and_keeps_source_mapping(
         "# Report\n\n| name | score |\n| --- | ---: |\n| Ada | 10 |\n\nBetween tables.\n\n| city | country | note |\n| :--- | :--- | ---: |\n| Paris | France | first |\n| Tokyo | Japan | second |\n\nDone.\n",
     )
     .expect("multi-table Markdown fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large Markdown probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large Markdown source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large Markdown source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.simulate_resize(size(px(1180.0), px(780.0)));
     visual.run_until_parked();
     redraw(visual);
 
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large Markdown view");
     assert!(large_view.read_with(visual, |view, _cx| view.source_view_for_test()));
-    let overflow = visual
-        .debug_bounds("status-bar-format-overflow-button")
-        .expect("large-file overflow button");
-    visual.simulate_click(overflow.center(), Modifiers::default());
-    redraw(visual);
-    let structure = visual
-        .debug_bounds("status-bar-large-structure")
-        .expect("structured data action");
-    visual.simulate_click(structure.center(), Modifiers::default());
-    redraw(visual);
     assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Source));
-    assert_eq!(
-        large_view.read_with(visual, |view, _cx| view.markdown_table_state_for_test()),
-        Some((0, 2, vec!["name".to_owned(), "score".to_owned()], 1))
-    );
-    assert!(
-        visual
-            .debug_bounds("large-file-markdown-table-switcher")
-            .is_some()
-    );
-
-    let next = visual
-        .debug_bounds("large-file-markdown-table-next")
-        .expect("next table button");
-    visual.simulate_click(next.center(), Modifiers::default());
-    visual.run_until_parked();
-    redraw(visual);
-    assert_eq!(
-        large_view.read_with(visual, |view, _cx| view.markdown_table_state_for_test()),
-        Some((
-            1,
-            2,
-            vec!["city".to_owned(), "country".to_owned(), "note".to_owned()],
-            2,
-        ))
-    );
-
-    large_view.update(visual, |view, cx| {
-        view.jump_structured_row_to_source_for_test(0, cx)
-    });
-    assert_eq!(
-        large_view.read_with(visual, |view, cx| view.cursor_position(cx)),
-        (11, 1)
-    );
+    assert!(!large_view.read_with(visual, |view, _cx| view.has_structure_view()));
+    assert!(large_view.read_with(visual, |view, _cx| view.markdown_table_state_for_test()).is_none());
+    assert!(visual.debug_bounds("status-bar-large-structure").is_none());
+    assert!(visual.debug_bounds("document-host-markdown-table-switcher").is_none());
 }
 
 #[gpui::test]
-async fn wide_large_csv_only_materializes_the_active_column_window(cx: &mut TestAppContext) {
+async fn wide_large_csv_exposes_only_source_without_column_projection(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let temp = tempfile::tempdir().expect("wide CSV tempdir");
     let path = temp.path().join("wide.csv");
@@ -372,51 +360,294 @@ async fn wide_large_csv_only_materializes_the_active_column_window(cx: &mut Test
         format!("{}\n{}\n", headers.join(","), values.join(",")),
     )
     .expect("wide CSV fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("wide CSV probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("wide CSV source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("wide CSV source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.simulate_resize(size(px(960.0), px(640.0)));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("wide CSV large view");
-    large_view.update(visual, |view, cx| view.show_structure_view(cx));
-    visual.run_until_parked();
-    redraw(visual);
-    visual.run_until_parked();
-    redraw(visual);
+    assert!(large_view.read_with(visual, |view, _cx| view.source_view_for_test()));
+    assert!(!large_view.read_with(visual, |view, _cx| view.has_structure_view()));
+    assert!(visual.debug_bounds("document-host-structured-column-pager").is_none());
+    assert!(visual.debug_bounds("document-host-structured-columns-next").is_none());
+}
 
+#[gpui::test]
+async fn csv_uses_all_four_modes_and_live_cell_edits_rebuild_the_table(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let temp = tempfile::tempdir().expect("CSV mode tempdir");
+    let path = temp.path().join("modes.csv");
+    fs::write(&path, "name,score\r\nAda,10\r\nBob,20\r\n").expect("CSV fixture");
+    let probe = gmark_paged_document::probe_file(
+        &path,
+        gmark_paged_document::ProbeOptions::default(),
+    )
+    .expect("CSV probe");
+    let source = gmark_paged_document::FileSource::open(&path).expect("CSV source");
+    let (editor, visual) = cx.add_window_view(move |_window, cx| {
+        Editor::from_source_backed_file(cx, path, probe, source)
+    });
+    visual.run_until_parked();
+    redraw(visual);
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Preview));
+    let large_view = editor
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
+        .expect("CSV SourceBacked view");
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.has_structure_view()),
+        "CSV index did not install"
+    );
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.structure_view_active()),
+        "CSV Preview did not activate"
+    );
+    assert!(visual.debug_bounds("document-host-structured-scroll").is_some());
     assert!(
         visual
-            .debug_bounds("large-file-structured-column-pager")
-            .is_some()
+            .debug_bounds("document-host-structured-filter-bar")
+            .is_none(),
+        "CSV Preview must not render the row filter bar"
     );
-    let (start, materialized) =
-        large_view.read_with(visual, |view, _cx| view.structured_column_window_for_test());
-    assert_eq!(start, 0);
-    assert!(materialized <= 16, "materialized {materialized} columns");
+    let preview_scroll = visual
+        .debug_bounds("document-host-structured-scroll")
+        .expect("CSV Preview scroll surface");
+    let preview_table = visual
+        .debug_bounds("document-host-structured-content")
+        .expect("CSV Preview table");
+    assert!(
+        f32::from(preview_table.left() - preview_scroll.left()).abs() <= 1.0,
+        "CSV tables must stay left-aligned in Preview"
+    );
+    let preview_row = visual
+        .debug_bounds("document-host-structured-row-0")
+        .expect("CSV Preview row");
+    visual.simulate_click(preview_row.center(), Modifiers::default());
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Preview));
+    assert!(large_view.read_with(visual, |view, _cx| view.structure_view_active()));
+    let preview_cell = visual
+        .debug_bounds("document-host-structured-cell-0-1")
+        .expect("CSV Preview score cell");
+    visual.simulate_click(preview_cell.center(), Modifiers::default());
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.structured_selected_cell_for_test()),
+        Some((Some(0), 1))
+    );
+    visual.update(|window, cx| {
+        large_view.update(cx, |view, cx| view.copy_for_test(window, cx));
+    });
+    assert_eq!(
+        visual.read_from_clipboard().and_then(|item| item.text()),
+        Some("10".to_owned()),
+        "CSV Preview must copy the selected cell content"
+    );
 
-    let next = visual
-        .debug_bounds("large-file-structured-columns-next")
-        .expect("next column window");
-    visual.simulate_click(next.center(), Modifiers::default());
+    visual.simulate_keystrokes("ctrl-f");
+    redraw(visual);
+    visual.simulate_input("Bob");
     visual.run_until_parked();
     redraw(visual);
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Preview));
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.structure_view_active()),
+        "CSV search must not replace Preview with Source"
+    );
+    assert!(visual.debug_bounds("document-host-structured-scroll").is_some());
+    visual.simulate_keystrokes("escape");
+
+    editor.update(visual, |editor, cx| {
+        editor.set_view_mode(ViewMode::Rendered, cx)
+    });
     visual.run_until_parked();
     redraw(visual);
-    let (start, materialized) =
-        large_view.read_with(visual, |view, _cx| view.structured_column_window_for_test());
-    assert_eq!(start, 16);
-    assert!(materialized <= 16, "materialized {materialized} columns");
+    assert!(large_view.read_with(visual, |view, _cx| view.delimited_live_for_test()));
+    assert!(visual.debug_bounds("document-host-structured-add-row").is_some());
+
+    let cell = visual
+        .debug_bounds("document-host-structured-cell-0-1")
+        .expect("editable score cell");
+    visual.simulate_click(cell.center(), Modifiers::default());
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.structured_selected_cell_for_test()),
+        Some((Some(0), 1))
+    );
+    visual.simulate_keystrokes("tab");
+    assert_ne!(
+        large_view.read_with(visual, |view, _cx| view.structured_selected_cell_for_test()),
+        Some((Some(0), 1)),
+        "Tab must move the selected cell"
+    );
+    visual.simulate_click(cell.center(), Modifiers::default());
+    visual.simulate_keystrokes("enter");
+    redraw(visual);
+    let input = large_view.read_with(visual, |view, _cx| view.structured_cell_input_for_test());
+    assert_eq!(input.read_with(visual, |block, _cx| block.host_text_size()), Some(12.0));
+    let cell_editor = visual
+        .debug_bounds("document-host-structured-cell-editor")
+        .expect("inline CSV cell editor");
+    assert!(
+        cell_editor.size.height <= cell.size.height,
+        "inline editing must not enlarge the table row"
+    );
+    visual.simulate_keystrokes("1");
+    redraw(visual);
+    assert_eq!(
+        input.read_with(visual, |block, _cx| block.display_text().to_owned()),
+        "101"
+    );
+    assert!(
+        visual
+            .debug_bounds("document-host-structured-cell-editor")
+            .is_some(),
+        "typing in one CSV cell must keep the inline editor mounted"
+    );
+    assert!(
+        visual
+            .debug_bounds("document-host-structured-cell-1-1")
+            .is_some(),
+        "typing in one CSV cell must not replace the table viewport"
+    );
+    input.update(visual, |block, cx| {
+        let len = block.display_text().len();
+        block.replace_text_in_visible_range(0..len, "11", None, false, cx);
+    });
+    let next_cell = visual
+        .debug_bounds("document-host-structured-cell-0-0")
+        .expect("next editable CSV cell");
+    visual.simulate_click(next_cell.center(), Modifiers::default());
+    redraw(visual);
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.has_structure_view()),
+        "committing a CSV cell must keep the existing table visible while its index catches up"
+    );
+    assert!(visual.debug_bounds("document-host-structured-scroll").is_some());
+    visual.run_until_parked();
+    redraw(visual);
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.source_text_for_test()),
+        "name,score\r\nAda,11\r\nBob,20\r\n"
+    );
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.structured_selected_cell_for_test()),
+        Some((Some(0), 0)),
+        "clicking another cell must commit the previous edit before moving selection"
+    );
+    visual
+        .executor()
+        .advance_clock(Duration::from_millis(250));
+    visual.run_until_parked();
+    assert!(
+        large_view.read_with(visual, |view, _cx| view
+            .structured_loaded_row_count_for_test())
+            > 0,
+        "installing the refreshed CSV index must retain loaded rows to avoid a blank frame"
+    );
+    assert!(large_view.read_with(visual, |view, _cx| view.delimited_live_for_test()));
+
+    large_view.update(visual, |view, cx| {
+        view.insert_delimited_column_for_test(2, "Column 3", cx)
+    });
+    visual.run_until_parked();
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.has_structure_view()),
+        "changing CSV columns must keep Live table rendering mounted"
+    );
+    visual
+        .executor()
+        .advance_clock(Duration::from_millis(250));
+    visual.run_until_parked();
+    redraw(visual);
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.source_text_for_test()),
+        "name,score,Column 3\r\nAda,11,\r\nBob,20,\r\n"
+    );
+
+    let add_row = visual
+        .debug_bounds("document-host-structured-add-row")
+        .expect("add row action");
+    visual.simulate_click(add_row.center(), Modifiers::default());
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.delimited_live_for_test()),
+        "adding a CSV row must not switch Live editing back to Source"
+    );
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.has_structure_view()),
+        "adding a CSV row must keep the table mounted while its index catches up"
+    );
+    visual.run_until_parked();
+    redraw(visual);
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.source_text_for_test()),
+        "name,score,Column 3\r\nAda,11,\r\nBob,20,\r\n,,\r\n"
+    );
+    visual.update(|window, cx| {
+        large_view.update(cx, |view, cx| view.on_undo(&Undo, window, cx));
+    });
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.has_structure_view()),
+        "undo in CSV Live editing must not fall back to Source"
+    );
+    visual.run_until_parked();
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.source_text_for_test()),
+        "name,score,Column 3\r\nAda,11,\r\nBob,20,\r\n"
+    );
+    visual.update(|window, cx| {
+        large_view.update(cx, |view, cx| {
+            view.on_redo(&crate::components::Redo, window, cx)
+        });
+    });
+    assert!(
+        large_view.read_with(visual, |view, _cx| view.has_structure_view()),
+        "redo in CSV Live editing must not fall back to Source"
+    );
+    visual
+        .executor()
+        .advance_clock(Duration::from_millis(250));
+    visual.run_until_parked();
+    assert_eq!(
+        large_view.read_with(visual, |view, _cx| view.source_text_for_test()),
+        "name,score,Column 3\r\nAda,11,\r\nBob,20,\r\n,,\r\n"
+    );
+
+    editor.update(visual, |editor, cx| editor.set_view_mode(ViewMode::Split, cx));
+    visual.run_until_parked();
+    redraw(visual);
+    assert!(visual.debug_bounds("document-host-split-view").is_some());
+    let split_source = visual
+        .debug_bounds("document-host-split-source")
+        .expect("CSV Split source");
+    let split_preview = visual
+        .debug_bounds("document-host-split-structure")
+        .expect("CSV Split preview");
+    assert!(
+        split_source.right() <= split_preview.left(),
+        "CSV Split must place Source on the left and Preview on the right"
+    );
+    let split_row = visual
+        .debug_bounds("document-host-structured-row-0")
+        .expect("CSV Split row");
+    visual.simulate_click(split_row.center(), Modifiers::default());
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Split));
+    assert!(large_view.read_with(visual, |view, _cx| view.structured_split_active()));
+    editor.update(visual, |editor, cx| editor.set_view_mode(ViewMode::Source, cx));
+    assert!(large_view.read_with(visual, |view, _cx| view.source_view_for_test()));
+    editor.update(visual, |editor, cx| editor.set_view_mode(ViewMode::Preview, cx));
+    visual.run_until_parked();
+    redraw(visual);
+    assert!(visual.debug_bounds("document-host-structured-scroll").is_some());
 }
 
 #[gpui::test]
@@ -427,21 +658,21 @@ async fn large_log_follow_and_external_conflict_preserve_local_edits(cx: &mut Te
     let temp = tempfile::tempdir().expect("large log tempdir");
     let path = temp.path().join("follow.log");
     fs::write(&path, "first\n").expect("large log fixture");
-    let probe = gmark_large_document::probe_file(
+    let probe = gmark_paged_document::probe_file(
         &path,
-        gmark_large_document::ProbeOptions {
-            large_file_threshold: 1,
-            ..gmark_large_document::ProbeOptions::default()
+        gmark_paged_document::ProbeOptions {
+            max_resident_bytes: 1,
+            ..gmark_paged_document::ProbeOptions::default()
         },
     )
     .expect("large log probe");
-    let source = gmark_large_document::FileSource::open(&path).expect("large log source");
+    let source = gmark_paged_document::FileSource::open(&path).expect("large log source");
     let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_large_file(cx, path, probe, source));
+        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
     visual.run_until_parked();
     redraw(visual);
     let large_view = editor
-        .read_with(visual, |editor, _cx| editor.source_surface.clone())
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large log view");
     assert!(large_view.read_with(visual, |view, _cx| view.follow_enabled()));
     editor.update(visual, |editor, cx| {
@@ -493,11 +724,11 @@ async fn large_log_follow_and_external_conflict_preserve_local_edits(cx: &mut Te
     redraw(visual);
     assert!(matches!(
         large_view.read_with(visual, |view, _cx| view.pending_external_change_for_test()),
-        Some(gmark_large_document::ExternalChange::Appended { .. })
+        Some(gmark_paged_document::ExternalChange::Appended { .. })
     ));
     assert!(
         visual
-            .debug_bounds("large-file-external-change-banner")
+            .debug_bounds("document-host-external-change-banner")
             .is_some()
     );
     assert!(

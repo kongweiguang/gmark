@@ -26,9 +26,11 @@ pub(crate) const ABOUT_GITHUB_URL: &str = "https://github.com/kongweiguang/gmark
 /// Rows within this many pixels of the viewport stay mounted, so a fast flick
 /// paints them before they scroll in instead of showing a blank edge.
 const RENDER_OVERDRAW_PX: f32 = 800.0;
+/// 小文档完整挂载更稳定；达到该行数后，块级裁剪才有足够收益覆盖布局复杂度。
+pub(super) const RENDER_ROW_VIRTUALIZATION_THRESHOLD: usize = 512;
 const CHEVRON_RIGHT_ICON: &str = "icon/ui/chevron-right.svg";
 const MENU_LAUNCHER_ICON: &str = "icon/gmark-icon.svg";
-// Canonical 应用图标包含 G 与 M↓ 两层细节，20px 才能在高密度标题栏中保持辨识度。
+// Canonical 应用图标包含 G 与 M 两层细节，20px 才能在高密度标题栏中保持辨识度。
 const MENU_LAUNCHER_ICON_SIZE: f32 = 20.0;
 const EXPORT_PROGRESS_ICON: &str = "icon/ui/file-output.svg";
 const CLOSE_ICON: &str = "icon/ui/close.svg";
@@ -88,6 +90,11 @@ pub(crate) fn editor_top_padding(typewriter_mode: bool, viewport_height: f32) ->
     } else {
         EDITOR_READING_TOP_PADDING
     }
+}
+
+/// Source 是同一种代码阅读表面，不因 Resident/SourceBacked 或文件格式改变顶部节奏。
+pub(crate) fn source_editor_top_padding(dimensions: &ThemeDimensions) -> f32 {
+    dimensions.editor_padding
 }
 
 pub(super) fn editor_bottom_padding(viewport_height: f32, dimensions: &ThemeDimensions) -> f32 {

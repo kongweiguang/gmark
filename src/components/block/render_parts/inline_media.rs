@@ -615,11 +615,19 @@ impl Block {
 
         if self.is_read_only() {
             return base
+                // Preview 只禁止正文变更，不应同时失去文本焦点、选择和复制能力。
+                .key_context(BLOCK_EDITOR_CONTEXT)
+                .track_focus(&self.focus_handle)
+                .on_action(cx.listener(Self::on_select_all))
+                .on_action(cx.listener(Self::on_copy))
+                .on_action(cx.listener(Self::on_copy_as_markdown))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(Self::on_read_only_mouse_down),
                 )
-                .on_mouse_up(MouseButton::Left, cx.listener(Self::on_read_only_mouse_up));
+                .on_mouse_up(MouseButton::Left, cx.listener(Self::on_read_only_mouse_up))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_read_only_mouse_up))
+                .on_mouse_move(cx.listener(Self::on_mouse_move));
         }
 
         let base = base
@@ -686,6 +694,10 @@ impl Block {
                 .on_action(cx.listener(Self::on_italic_selection))
                 .on_action(cx.listener(Self::on_strikethrough_selection))
                 .on_action(cx.listener(Self::on_underline_selection))
+                .on_action(cx.listener(Self::on_highlight_selection))
+                .on_action(cx.listener(Self::on_superscript_selection))
+                .on_action(cx.listener(Self::on_subscript_selection))
+                .on_action(cx.listener(Self::on_inline_math_selection))
                 .on_action(cx.listener(Self::on_code_selection))
                 .on_action(cx.listener(Self::on_link_selection))
         }

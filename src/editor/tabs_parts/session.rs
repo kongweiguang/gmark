@@ -1,10 +1,32 @@
 // @author kongweiguang
 
 use super::*;
+use crate::editor::document_session::EditorDocumentSession;
 
 impl Editor {
     pub(crate) fn is_document_dirty(&self) -> bool {
-        self.document_dirty
+        let dirty = if self.document_host.is_some() {
+            self.document_dirty
+        } else {
+            self.source_document.is_dirty()
+        };
+        #[cfg(test)]
+        {
+            // 旧 UI fixture 可能只设置边沿缓存；生产构建不会把该缓存作为正文真值。
+            dirty || self.document_dirty
+        }
+        #[cfg(not(test))]
+        dirty
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_document_dirty_for_test(&mut self, dirty: bool) {
+        self.document_dirty = dirty;
+        if dirty {
+            self.source_document.mark_dirty();
+        } else {
+            self.source_document.mark_persisted();
+        }
     }
 
     pub(in crate::editor) fn dismiss_tab_context_menu(&mut self) -> bool {
@@ -28,6 +50,7 @@ impl Editor {
 
     pub(in crate::editor) fn workspace_session_snapshot(
         &self,
+        cx: &App,
     ) -> crate::config::workspace_session::WorkspaceSession {
         let active_path = self.file_path.as_ref();
         let mut active_index = 0usize;
@@ -52,26 +75,36 @@ impl Editor {
                 record.pinned,
             );
             let (view_mode, selection, scroll_offset) = if index == self.tabs.active {
-                (
-                    self.view_mode,
-                    &self.last_selection_snapshot,
-                    self.scroll_handle.offset(),
-                )
+                if let Some(host) = self.document_host.as_ref() {
+                    let (selection, scroll) = host.read(cx).workspace_source_state();
+                    (self.view_mode, selection, scroll)
+                } else {
+                    (
+                        self.view_mode,
+                        self.last_selection_snapshot.source_selection(),
+                        self.scroll_handle.offset(),
+                    )
+                }
             } else {
                 let snapshot = record
                     .snapshot
                     .as_ref()
                     .expect("inactive tab must own a snapshot");
-                (
-                    snapshot.view_mode,
-                    &snapshot.selection,
-                    snapshot.scroll_offset,
-                )
+                if let Some(host) = snapshot.document_host.as_ref() {
+                    let (selection, scroll) = host.read(cx).workspace_source_state();
+                    (snapshot.view_mode, selection, scroll)
+                } else {
+                    (
+                        snapshot.view_mode,
+                        snapshot.selection.source_selection(),
+                        snapshot.scroll_offset,
+                    )
+                }
             };
             tab.view_mode = Some(Self::session_view_mode(view_mode).to_owned());
             tab.selection = Some(
                 crate::config::workspace_session::WorkspaceSessionSelection::from_source_selection(
-                    selection.source_selection(),
+                    selection,
                 ),
             );
             tab.scroll_x = Some(f32::from(scroll_offset.x));
@@ -152,7 +185,7 @@ impl Editor {
         {
             let generation = self.tabs.session_generation.wrapping_add(1);
             self.tabs.session_generation = generation;
-            let session = self.workspace_session_snapshot();
+            let session = self.workspace_session_snapshot(cx);
             SESSION_WRITE_GENERATIONS
                 .get_or_init(|| Mutex::new(HashMap::new()))
                 .lock()
@@ -197,8 +230,16 @@ impl Editor {
     }
 
     pub(in crate::editor) fn sync_workspace_session_view_state(&mut self, cx: &mut Context<Self>) {
-        let scroll = self.scroll_handle.offset();
-        let range = self.last_selection_snapshot.range();
+        let (selection, scroll) = self.document_host.as_ref().map_or_else(
+            || {
+                (
+                    self.last_selection_snapshot.source_selection(),
+                    self.scroll_handle.offset(),
+                )
+            },
+            |host| host.read(cx).workspace_source_state(),
+        );
+        let range = selection.range();
         let signature = SessionViewSignature {
             tab_id: self.tabs.records[self.tabs.active].id,
             mode: match self.view_mode {
@@ -207,9 +248,9 @@ impl Editor {
                 ViewMode::Preview => 2,
                 ViewMode::Split => 3,
             },
-            selection_start: range.start,
-            selection_end: range.end,
-            selection_reversed: self.last_selection_snapshot.reversed(),
+            selection_start: usize::try_from(range.start).unwrap_or(usize::MAX),
+            selection_end: usize::try_from(range.end).unwrap_or(usize::MAX),
+            selection_reversed: selection.reversed(),
             scroll_x_bits: f32::from(scroll.x).to_bits(),
             scroll_y_bits: f32::from(scroll.y).to_bits(),
         };
@@ -219,10 +260,12 @@ impl Editor {
         }
     }
 
-    pub(in crate::editor) fn persist_workspace_session_before_quit(&self) {
+    pub(in crate::editor) fn persist_workspace_session_before_quit(&self, cx: &App) {
+        #[cfg(test)]
+        let _ = cx;
         #[cfg(not(test))]
         {
-            let session = self.workspace_session_snapshot();
+            let session = self.workspace_session_snapshot(cx);
             let result = SESSION_WRITE_LOCK
                 .lock()
                 .map_err(|_| anyhow::anyhow!("workspace session write lock poisoned"))
@@ -251,17 +294,52 @@ impl Editor {
         };
         self.tabs.session_id = session_id;
         self.tabs.records[0].pinned = first.pinned;
-        if matches!(
-            first.opened,
-            crate::document_io::OpenedDocument::Resident(_)
-        ) {
-            self.apply_restored_tab_state(first, cx);
+        match &first.opened {
+            crate::document_io::OpenedDocument::Resident(_) => {
+                self.apply_restored_tab_state(first, cx);
+            }
+            crate::document_io::OpenedDocument::ResidentFormat(probe)
+                if matches!(
+                    probe.format,
+                    gmark_document_core::DocumentFormat::Json
+                        | gmark_document_core::DocumentFormat::Delimited { .. }
+                ) =>
+            {
+                let restored = Self::restored_view_mode(first.view_mode.as_deref());
+                let mode = match (&probe.format, restored) {
+                    (gmark_document_core::DocumentFormat::Json, ViewMode::Rendered) => {
+                        ViewMode::Preview
+                    }
+                    (_, mode) => mode,
+                };
+                self.set_view_mode(mode, cx);
+            }
+            crate::document_io::OpenedDocument::ResidentFormat(_)
+            | crate::document_io::OpenedDocument::Paged(_) => {
+                self.set_view_mode(ViewMode::Source, cx);
+            }
+        }
+        if let Some(host) = self.document_host.clone() {
+            let selection = first
+                .selection
+                .as_ref()
+                .map(|selection| {
+                    selection.source_selection_for_range(selection.start..selection.end)
+                })
+                .unwrap_or_default();
+            host.update(cx, |host, cx| {
+                host.restore_workspace_source_state(
+                    selection,
+                    first.scroll_y.unwrap_or_default(),
+                    cx,
+                )
+            });
         }
         for tab in restored.into_iter().skip(1) {
             let Some(mut snapshot) = Self::snapshot_for_restored_document(&tab, cx) else {
                 continue;
             };
-            Self::apply_restored_snapshot_state(&mut snapshot, &tab);
+            Self::apply_restored_snapshot_state(&mut snapshot, &tab, cx);
             self.tabs.records.push(TabRecord {
                 id: uuid::Uuid::new_v4(),
                 pinned: tab.pinned,
@@ -293,10 +371,11 @@ impl Editor {
     }
 
     pub(super) fn restored_view_mode(mode: Option<&str>) -> ViewMode {
-        match mode {
+        match mode.map(str::to_ascii_lowercase).as_deref() {
             Some("source") => ViewMode::Source,
-            Some("preview") => ViewMode::Preview,
+            Some("preview" | "structure") => ViewMode::Preview,
             Some("split") => ViewMode::Split,
+            Some("live" | "rendered") => ViewMode::Rendered,
             _ => ViewMode::Rendered,
         }
     }
@@ -325,8 +404,45 @@ impl Editor {
     pub(super) fn apply_restored_snapshot_state(
         snapshot: &mut DocumentTabSnapshot,
         tab: &RestoredTab,
+        cx: &mut Context<Self>,
     ) {
-        if snapshot.source_surface.is_some() {
+        if snapshot.document_host.is_some() {
+            snapshot.view_mode = match &tab.opened {
+                crate::document_io::OpenedDocument::ResidentFormat(probe)
+                    if matches!(
+                        probe.format,
+                        gmark_document_core::DocumentFormat::Json
+                            | gmark_document_core::DocumentFormat::Delimited { .. }
+                    ) =>
+                {
+                    let restored = Self::restored_view_mode(tab.view_mode.as_deref());
+                    match (&probe.format, restored) {
+                        (gmark_document_core::DocumentFormat::Json, ViewMode::Rendered) => {
+                            ViewMode::Preview
+                        }
+                        (_, mode) => mode,
+                    }
+                }
+                crate::document_io::OpenedDocument::ResidentFormat(_)
+                | crate::document_io::OpenedDocument::Paged(_) => ViewMode::Source,
+                crate::document_io::OpenedDocument::Resident(_) => snapshot.view_mode,
+            };
+            if let Some(host) = snapshot.document_host.as_ref() {
+                let selection = tab
+                    .selection
+                    .as_ref()
+                    .map(|selection| {
+                        selection.source_selection_for_range(selection.start..selection.end)
+                    })
+                    .unwrap_or_default();
+                host.update(cx, |host, cx| {
+                    host.restore_workspace_source_state(
+                        selection,
+                        tab.scroll_y.unwrap_or_default(),
+                        cx,
+                    )
+                });
+            }
             return;
         }
         snapshot.view_mode = if snapshot.source_encoding.is_utf8() {
@@ -474,15 +590,20 @@ impl Editor {
         self.file_watch_guard = None;
 
         DocumentTabSnapshot {
-            source_surface: self.source_surface.take(),
-            source_document: mem::replace(&mut self.source_document, SourceDocument::new("")),
+            document_host: self.document_host.take(),
+            source_document: mem::replace(
+                &mut self.source_document,
+                EditorDocumentSession::new(SourceDocument::new("")),
+            ),
             source_encoding: mem::replace(
                 &mut self.source_encoding,
                 crate::document_io::DocumentEncoding::Utf8,
             ),
+            document_kind: self.document_kind,
             file_path: self.file_path.take(),
+            file_open_failure: self.file_open_failure.take(),
             saved_file_fingerprint: self.saved_file_fingerprint.take(),
-            document_dirty: self.document_dirty,
+            document_dirty: self.is_document_dirty(),
             view_mode: self.view_mode,
             selection,
             scroll_offset: self.scroll_handle.offset(),
@@ -508,9 +629,9 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.accessibility_revision = None;
-        self.source_surface = snapshot.source_surface.clone();
-        if let Some(large_file) = self.source_surface.as_ref() {
-            large_file.update(cx, |view, cx| view.resume_after_closed_tab(cx));
+        self.document_host = snapshot.document_host.clone();
+        if let Some(document_host) = self.document_host.as_ref() {
+            document_host.update(cx, |view, cx| view.resume_after_closed_tab(cx));
         }
         let source = snapshot.source_document.text();
         let target_mode = snapshot.view_mode;
@@ -522,8 +643,15 @@ impl Editor {
 
         self.source_document = snapshot.source_document;
         self.source_encoding = snapshot.source_encoding;
+        self.document_kind = snapshot.document_kind;
+        self.file_open_failure = snapshot.file_open_failure;
         self.saved_file_fingerprint = snapshot.saved_file_fingerprint;
         self.document_dirty = snapshot.document_dirty;
+        if snapshot.document_dirty {
+            self.source_document.mark_dirty();
+        } else {
+            self.source_document.mark_persisted();
+        }
         self.pending_window_edited = snapshot.document_dirty;
         self.pending_window_title_refresh = true;
         self.undo_history = snapshot.undo_history;
@@ -555,14 +683,18 @@ impl Editor {
         self.restore_pending_workspace_navigation(pending_navigation);
         self.apply_pending_workspace_navigation(cx);
         self.restart_file_watcher(cx);
-        if self.document_dirty {
+        if self.is_document_dirty() {
             self.schedule_recovery_journal(cx);
             self.schedule_auto_save(cx);
         }
         cx.notify();
     }
 
-    pub(super) fn switch_to_tab_index(&mut self, target: usize, cx: &mut Context<Self>) -> bool {
+    pub(in crate::editor) fn switch_to_tab_index(
+        &mut self,
+        target: usize,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if target == self.tabs.active
             || target >= self.tabs.records.len()
             || !self.can_switch_tabs()
@@ -631,17 +763,16 @@ impl Editor {
                     Ok(crate::document_io::OpenedDocument::Resident(opened)) => {
                         editor.install_new_tab(opened, path, cx)
                     }
-                    Ok(crate::document_io::OpenedDocument::Large(probe)) => {
-                        match gmark_large_document::FileSource::open(&path) {
-                            Ok(source) => editor.install_new_large_tab(path, probe, source, cx),
-                            Err(error) => {
-                                editor.set_workspace_operation_error(error.to_string(), cx)
-                            }
+                    Ok(
+                        crate::document_io::OpenedDocument::ResidentFormat(probe)
+                        | crate::document_io::OpenedDocument::Paged(probe),
+                    ) => match gmark_paged_document::FileSource::open(&path) {
+                        Ok(source) => editor.install_new_source_backed_tab(path, probe, source, cx),
+                        Err(error) => {
+                            editor.install_file_open_failure_tab(path, error.to_string(), cx)
                         }
-                    }
-                    Err(error) => {
-                        editor.set_workspace_operation_error(error.to_string(), cx);
-                    }
+                    },
+                    Err(error) => editor.install_file_open_failure_tab(path, error.to_string(), cx),
                 }
             });
         }));

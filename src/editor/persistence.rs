@@ -6,10 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use gmark_document::atomic_write;
 use gpui::*;
 
-use super::{Editor, ExternalConflictPreview};
+use super::{DocumentKind, Editor, ExternalConflictPreview};
 use crate::i18n::I18nManager;
 use crate::perf;
 
@@ -122,7 +121,7 @@ impl Editor {
         } else {
             (
                 std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                Some("untitled.md".to_string()),
+                Some(self.document_kind.untitled_name().to_owned()),
             )
         }
     }
@@ -144,11 +143,13 @@ impl Editor {
         self.external_conflict_preview = None;
         self.external_conflict_restore_focus = None;
         self.allow_external_overwrite_once = false;
+        self.document_kind = DocumentKind::from_path(&path);
         self.file_path = Some(path);
         if path_changed {
             self.restart_file_watcher(cx);
         }
         self.document_dirty = false;
+        self.source_document.mark_persisted();
         self.pending_window_edited = false;
         self.pending_window_title_refresh = true;
         self.pending_close_after_save = false;
@@ -192,10 +193,12 @@ impl Editor {
         self.external_conflict_preview = None;
         self.external_conflict_restore_focus = None;
         self.allow_external_overwrite_once = false;
+        self.document_kind = DocumentKind::from_path(&path);
         self.file_path = Some(path);
         if path_changed {
             self.restart_file_watcher(cx);
         }
+        self.source_document.mark_persisted_snapshot(&saved_source);
         self.checkpoint_recovery_journal_with_snapshot(saved_source, saved_format);
         self.document_dirty = true;
         self.pending_window_edited = true;

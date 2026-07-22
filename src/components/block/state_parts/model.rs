@@ -388,6 +388,11 @@ pub enum BlockEvent {
         prompt_target: String,
         open_target: String,
     },
+    /// Open the current cached Mermaid SVG in an editor-level read-only viewer.
+    RequestOpenMermaidOverlay {
+        preview_key: u64,
+        rendered: crate::components::MermaidSvgRender,
+    },
     /// Jump from a rendered footnote reference to the corresponding
     /// in-place footnote definition block.
     RequestJumpToFootnoteDefinition { id: String },
@@ -411,8 +416,6 @@ pub enum BlockEvent {
         index: usize,
         hovered: bool,
     },
-    /// Select one native table row or column for batch operations.
-    RequestSelectTableAxis { kind: TableAxisKind, index: usize },
     /// Open the axis context menu for a native table row or column.
     RequestOpenTableAxisMenu {
         kind: TableAxisKind,

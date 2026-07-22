@@ -119,12 +119,13 @@ impl Block {
                                         });
                                     });
                                 })
-                                .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                                     let _ = select_block.update(cx, |_block, cx| {
                                         cx.stop_propagation();
-                                        cx.emit(BlockEvent::RequestSelectTableAxis {
+                                        cx.emit(BlockEvent::RequestOpenTableAxisMenu {
                                             kind: TableAxisKind::Column,
                                             index: column,
+                                            position: event.position,
                                         });
                                     });
                                 })
@@ -190,12 +191,13 @@ impl Block {
                             });
                         });
                     })
-                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                    .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                         let _ = header_select_block.update(cx, |_block, cx| {
                             cx.stop_propagation();
-                            cx.emit(BlockEvent::RequestSelectTableAxis {
+                            cx.emit(BlockEvent::RequestOpenTableAxisMenu {
                                 kind: TableAxisKind::Row,
                                 index: 0,
+                                position: event.position,
                             });
                         });
                     })
@@ -246,12 +248,13 @@ impl Block {
                                     });
                                 });
                             })
-                            .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                            .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                                 let _ = select_block.update(cx, |_block, cx| {
                                     cx.stop_propagation();
-                                    cx.emit(BlockEvent::RequestSelectTableAxis {
+                                    cx.emit(BlockEvent::RequestOpenTableAxisMenu {
                                         kind: TableAxisKind::Column,
                                         index: column,
+                                        position: event.position,
                                     });
                                 });
                             })
@@ -323,12 +326,13 @@ impl Block {
                                     });
                                 });
                             })
-                            .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                            .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                                 let _ = select_block.update(cx, |_block, cx| {
                                     cx.stop_propagation();
-                                    cx.emit(BlockEvent::RequestSelectTableAxis {
+                                    cx.emit(BlockEvent::RequestOpenTableAxisMenu {
                                         kind: TableAxisKind::Row,
                                         index: visual_row,
+                                        position: event.position,
                                     });
                                 });
                             })

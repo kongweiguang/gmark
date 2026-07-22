@@ -6,6 +6,10 @@
 //! list items render a marker column (bullet / ordinal), and raw Markdown
 //! fallback renders as plain text.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::Duration;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -143,6 +147,8 @@ fn render_complex_warning(message: String, theme: &Theme, id: &'static str) -> A
         .debug_selector(move || id.to_owned())
         .h(px(22.0))
         .w_full()
+        .min_w(px(0.0))
+        .max_w(Length::Definite(relative(1.0)))
         .px(px(6.0))
         .flex()
         .items_center()
@@ -184,6 +190,8 @@ fn render_math_svg_content(
         .id("math-rendered-content")
         .debug_selector(|| "math-rendered-content".to_owned())
         .w_full()
+        .min_w(px(0.0))
+        .max_w(Length::Definite(relative(1.0)))
         .flex()
         .justify_center()
         .py(px(theme.dimensions.block_padding_y.max(6.0)))
@@ -212,6 +220,9 @@ fn render_mermaid_svg_content(
         .id("mermaid-rendered-content")
         .debug_selector(|| "mermaid-rendered-content".to_owned())
         .w_full()
+        .min_w(px(0.0))
+        .max_w(Length::Definite(relative(1.0)))
+        .overflow_hidden()
         .flex()
         .justify_center()
         .py(px(block_padding_y.max(6.0)))

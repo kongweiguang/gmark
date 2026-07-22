@@ -11,7 +11,8 @@ use anyhow::{Context as _, Result};
 use gpui::*;
 
 use super::{
-    Block, BlockKind, BlockRecord, ContextMenuState, Editor, UndoSelectionSnapshot, ViewMode,
+    Block, BlockKind, BlockRecord, ContextMenuState, DocumentKind, Editor, UndoSelectionSnapshot,
+    ViewMode,
     render::{
         DialogButtonKind, DialogTitleIcon, dialog_actions, dialog_button, dialog_content,
         dialog_panel, dialog_title_with_icon, modal_overlay,
@@ -26,6 +27,7 @@ use crate::window_chrome::middle_ellipsis;
 
 const FOLDER_ICON: &str = "icon/workspace/folder.svg";
 const MARKDOWN_ICON: &str = "icon/workspace/markdown.svg";
+const FILE_ICON: &str = "icon/ui/file.svg";
 const FILES_TAB_ICON: &str = "icon/ui/files.svg";
 const OUTLINE_TAB_ICON: &str = "icon/ui/outline.svg";
 const SEARCH_TAB_ICON: &str = "icon/ui/search.svg";
@@ -206,7 +208,7 @@ impl Render for WorkspaceDragPreview {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum WorkspaceTreeKind {
     Directory(PathBuf),
-    MarkdownFile(PathBuf),
+    File(PathBuf),
     Heading { line: usize, level: u8 },
 }
 
@@ -325,7 +327,9 @@ pub(super) fn is_markdown_file(path: &Path) -> bool {
 }
 
 fn collect_markdown_paths(node: &WorkspaceTreeNode, paths: &mut Vec<PathBuf>) {
-    if let WorkspaceTreeKind::MarkdownFile(path) = &node.kind {
+    if let WorkspaceTreeKind::File(path) = &node.kind
+        && is_markdown_file(path)
+    {
         paths.push(path.clone());
     }
     for child in &node.children {
@@ -373,7 +377,7 @@ fn rank_quick_open_paths(root: &Path, paths: Vec<PathBuf>, query: &str) -> Vec<Q
     matches
 }
 
-fn subsequence_score(candidate: &str, query: &str) -> Option<i64> {
+pub(super) fn subsequence_score(candidate: &str, query: &str) -> Option<i64> {
     let candidate_chars = candidate.chars().collect::<Vec<_>>();
     let query_chars = query
         .chars()
@@ -411,6 +415,57 @@ fn subsequence_score(candidate: &str, query: &str) -> Option<i64> {
         }
     }
     None
+}
+
+impl WorkspaceState {
+    /// 返回文件树最近一次扫描的 Markdown 快照；补全不得在每次按键时重新遍历磁盘。
+    pub(super) fn markdown_snapshot(&self) -> Option<(PathBuf, Vec<PathBuf>)> {
+        fn collect(node: &WorkspaceTreeNode, paths: &mut Vec<PathBuf>) {
+            if let WorkspaceTreeKind::File(path) = &node.kind
+                && is_markdown_file(path)
+            {
+                paths.push(path.clone());
+            }
+            for child in &node.children {
+                collect(child, paths);
+            }
+        }
+
+        let root = self.root.clone()?;
+        let tree = self.file_tree.as_ref()?;
+        let mut paths = Vec::new();
+        collect(tree, &mut paths);
+        Some((root, paths))
+    }
+
+    #[cfg(test)]
+    pub(super) fn install_markdown_snapshot_for_test(
+        &mut self,
+        root: PathBuf,
+        paths: Vec<PathBuf>,
+    ) {
+        self.root = Some(root.clone());
+        self.file_tree = Some(WorkspaceTreeNode {
+            id: root.to_string_lossy().to_string(),
+            label: root
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| root.to_string_lossy().to_string()),
+            kind: WorkspaceTreeKind::Directory(root),
+            children: paths
+                .into_iter()
+                .map(|path| WorkspaceTreeNode {
+                    id: path.to_string_lossy().to_string(),
+                    label: path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    kind: WorkspaceTreeKind::File(path),
+                    children: Vec::new(),
+                })
+                .collect(),
+        });
+    }
 }
 
 fn search_workspace(
@@ -523,19 +578,16 @@ fn scan_workspace_dir(path: &Path) -> Result<WorkspaceTreeNode> {
         .require_git(false)
         .build();
     for entry in walker.filter_map(|entry| entry.ok()) {
-        if entry.depth() == 0
-            || !entry.file_type().is_some_and(|kind| kind.is_file())
-            || !is_markdown_file(entry.path())
-        {
+        if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
-        insert_workspace_markdown_file(&mut root, path, entry.path());
+        insert_workspace_file(&mut root, path, entry.path());
     }
     sort_workspace_tree(&mut root);
     Ok(root)
 }
 
-fn insert_workspace_markdown_file(root: &mut WorkspaceTreeNode, base: &Path, file: &Path) {
+fn insert_workspace_file(root: &mut WorkspaceTreeNode, base: &Path, file: &Path) {
     let Some(parent) = file.parent() else {
         return;
     };
@@ -566,7 +618,7 @@ fn insert_workspace_markdown_file(root: &mut WorkspaceTreeNode, base: &Path, fil
     current.children.push(WorkspaceTreeNode {
         id: file_node_id(file),
         label: file_label(file),
-        kind: WorkspaceTreeKind::MarkdownFile(file.to_path_buf()),
+        kind: WorkspaceTreeKind::File(file.to_path_buf()),
         children: Vec::new(),
     });
 }

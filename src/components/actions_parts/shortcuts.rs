@@ -203,6 +203,19 @@ fn key_binding_for(
         ShortcutCommand::UnderlineSelection => KeyBinding::new(key, UnderlineSelection, context),
         ShortcutCommand::CodeSelection => KeyBinding::new(key, CodeSelection, context),
         ShortcutCommand::LinkSelection => KeyBinding::new(key, LinkSelection, context),
+        ShortcutCommand::HighlightSelection => KeyBinding::new(key, HighlightSelection, context),
+        ShortcutCommand::SuperscriptSelection => {
+            KeyBinding::new(key, SuperscriptSelection, context)
+        }
+        ShortcutCommand::SubscriptSelection => KeyBinding::new(key, SubscriptSelection, context),
+        ShortcutCommand::InlineMathSelection => KeyBinding::new(key, InlineMathSelection, context),
+        ShortcutCommand::SetParagraph => KeyBinding::new(key, SetParagraph, context),
+        ShortcutCommand::SetHeading1 => KeyBinding::new(key, SetHeading1, context),
+        ShortcutCommand::SetHeading2 => KeyBinding::new(key, SetHeading2, context),
+        ShortcutCommand::SetHeading3 => KeyBinding::new(key, SetHeading3, context),
+        ShortcutCommand::SetHeading4 => KeyBinding::new(key, SetHeading4, context),
+        ShortcutCommand::SetHeading5 => KeyBinding::new(key, SetHeading5, context),
+        ShortcutCommand::SetHeading6 => KeyBinding::new(key, SetHeading6, context),
         ShortcutCommand::IndentBlock => KeyBinding::new(key, IndentBlock, context),
         ShortcutCommand::OutdentBlock => KeyBinding::new(key, OutdentBlock, context),
         ShortcutCommand::ExitCodeBlock => KeyBinding::new(key, ExitCodeBlock, context),

@@ -90,6 +90,7 @@ impl PreferencesWindow {
             || self.image_paste_behavior != self.saved_image_paste_behavior
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
+            || self.document_loading != self.saved_document_loading
             || self.status_bar_enabled != self.saved_status_bar_enabled
             || self.status_bar_show_word_count != self.saved_status_bar_show_word_count
             || self.status_bar_show_cursor_position != self.saved_status_bar_show_cursor_position
@@ -173,6 +174,7 @@ impl PreferencesWindow {
     pub(super) fn close_all_dropdowns(&mut self) {
         self.startup_dropdown_open = false;
         self.auto_save_dropdown_open = false;
+        self.document_loading_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.language_dropdown_open = false;
         self.image_dropdown_open = false;
@@ -183,6 +185,7 @@ impl PreferencesWindow {
         match dropdown {
             PreferencesDropdown::Startup => self.startup_dropdown_open,
             PreferencesDropdown::AutoSave => self.auto_save_dropdown_open,
+            PreferencesDropdown::DocumentLoadingPreset => self.document_loading_dropdown_open,
             PreferencesDropdown::Theme => self.theme_dropdown_open,
             PreferencesDropdown::Language => self.language_dropdown_open,
             PreferencesDropdown::Image => self.image_dropdown_open,
@@ -196,6 +199,9 @@ impl PreferencesWindow {
             match dropdown {
                 PreferencesDropdown::Startup => self.startup_dropdown_open = true,
                 PreferencesDropdown::AutoSave => self.auto_save_dropdown_open = true,
+                PreferencesDropdown::DocumentLoadingPreset => {
+                    self.document_loading_dropdown_open = true
+                }
                 PreferencesDropdown::Theme => self.theme_dropdown_open = true,
                 PreferencesDropdown::Language => self.language_dropdown_open = true,
                 PreferencesDropdown::Image => self.image_dropdown_open = true,
@@ -209,6 +215,7 @@ impl PreferencesWindow {
     pub(super) fn dropdown_option_count(&self, dropdown: PreferencesDropdown) -> usize {
         match dropdown {
             PreferencesDropdown::Startup | PreferencesDropdown::AutoSave => 2,
+            PreferencesDropdown::DocumentLoadingPreset => 3,
             PreferencesDropdown::Theme => self.theme_options.len(),
             PreferencesDropdown::Language => self.language_options.len(),
             PreferencesDropdown::Image => 4,
@@ -225,6 +232,11 @@ impl PreferencesWindow {
             PreferencesDropdown::AutoSave => match self.auto_save {
                 AutoSavePreference::Off => 0,
                 AutoSavePreference::AfterDelay => 1,
+            },
+            PreferencesDropdown::DocumentLoadingPreset => match self.document_loading.preset {
+                DocumentLoadingPreset::Balanced => 0,
+                DocumentLoadingPreset::LowMemory => 1,
+                DocumentLoadingPreset::HighPerformance => 2,
             },
             PreferencesDropdown::Theme => self
                 .theme_options
@@ -268,6 +280,19 @@ impl PreferencesWindow {
             PreferencesDropdown::AutoSave => {
                 self.auto_save =
                     [AutoSavePreference::Off, AutoSavePreference::AfterDelay][index.min(1)];
+                self.close_all_dropdowns();
+                cx.notify();
+            }
+            PreferencesDropdown::DocumentLoadingPreset => {
+                self.document_loading.preset = [
+                    DocumentLoadingPreset::Balanced,
+                    DocumentLoadingPreset::LowMemory,
+                    DocumentLoadingPreset::HighPerformance,
+                ][index.min(2)];
+                // 选择预设表示回到预设基线；高级阈值之后可再逐项覆盖。
+                self.document_loading.max_resident_mib = None;
+                self.document_loading.max_resident_lines = None;
+                self.document_loading.max_structural_units = None;
                 self.close_all_dropdowns();
                 cx.notify();
             }
@@ -523,8 +548,48 @@ impl PreferencesWindow {
                     .saturating_add(EDITOR_CONTENT_WIDTH_STEP)
                     .min(MAX_EDITOR_CONTENT_WIDTH);
             }
+            PreferencesStepperControl::ResidentMibDecrease => {
+                let value = self.document_loading.effective_max_resident_mib();
+                self.document_loading.max_resident_mib = Some(value.saturating_sub(1).max(1));
+            }
+            PreferencesStepperControl::ResidentMibIncrease => {
+                let value = self.document_loading.effective_max_resident_mib();
+                self.document_loading.max_resident_mib = Some(value.saturating_add(1).min(1_024));
+            }
+            PreferencesStepperControl::ResidentLinesDecrease => {
+                let value = self.document_loading.effective_max_resident_lines();
+                self.document_loading.max_resident_lines =
+                    Some(value.saturating_sub(10_000).max(1_000));
+            }
+            PreferencesStepperControl::ResidentLinesIncrease => {
+                let value = self.document_loading.effective_max_resident_lines();
+                self.document_loading.max_resident_lines =
+                    Some(value.saturating_add(10_000).min(10_000_000));
+            }
+            PreferencesStepperControl::StructuralUnitsDecrease => {
+                let value = self.document_loading.effective_max_structural_units();
+                self.document_loading.max_structural_units =
+                    Some(value.saturating_sub(50_000).max(10_000));
+            }
+            PreferencesStepperControl::StructuralUnitsIncrease => {
+                let value = self.document_loading.effective_max_structural_units();
+                self.document_loading.max_structural_units =
+                    Some(value.saturating_add(50_000).min(50_000_000));
+            }
         }
-        self.preview_editor_typography(cx);
+        if matches!(
+            control,
+            PreferencesStepperControl::FontSizeDecrease
+                | PreferencesStepperControl::FontSizeIncrease
+                | PreferencesStepperControl::LineHeightDecrease
+                | PreferencesStepperControl::LineHeightIncrease
+                | PreferencesStepperControl::ContentWidthDecrease
+                | PreferencesStepperControl::ContentWidthIncrease
+        ) {
+            self.preview_editor_typography(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     /// 主题预览属于可丢弃的窗口草稿；任何未保存关闭都必须恢复打开窗口时的基线。
@@ -612,6 +677,7 @@ impl PreferencesWindow {
             &self.selected_language_id,
             self.image_paste_behavior,
             self.keybindings.clone(),
+            &self.document_loading,
             &StatusBarPreferences {
                 enabled: self.status_bar_enabled,
                 show_word_count: self.status_bar_show_word_count,
@@ -700,6 +766,7 @@ impl PreferencesWindow {
         self.saved_language_id = self.selected_language_id.clone();
         self.saved_image_paste_behavior = self.image_paste_behavior;
         self.saved_keybindings = normalize_shortcut_config(&self.keybindings);
+        self.saved_document_loading = self.document_loading.clone();
         self.saved_status_bar_enabled = self.status_bar_enabled;
         self.saved_status_bar_show_word_count = self.status_bar_show_word_count;
         self.saved_status_bar_show_cursor_position = self.status_bar_show_cursor_position;

@@ -554,7 +554,7 @@ impl Editor {
         }
 
         self.apply_selection_snapshot_in_current_mode(
-            &UndoSelectionSnapshot::collapsed(start, gmark_large_document::SourceAffinity::Before),
+            &UndoSelectionSnapshot::collapsed(start, gmark_document_core::SourceAffinity::Before),
             cx,
         );
         if !virtual_edit {

@@ -2,7 +2,7 @@
 
 //! Pure command metadata and availability decisions shared by contextual editing UI.
 
-use super::BlockKind;
+use super::{BlockKind, CalloutVariant};
 use gpui::{App, AppContext, Global};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -11,6 +11,9 @@ pub(crate) enum EditingCommandId {
     Heading1,
     Heading2,
     Heading3,
+    Heading4,
+    Heading5,
+    Heading6,
     BulletedList,
     NumberedList,
     TaskList,
@@ -19,6 +22,14 @@ pub(crate) enum EditingCommandId {
     Table,
     Image,
     Math,
+    Mermaid,
+    CalloutNote,
+    CalloutTip,
+    CalloutImportant,
+    CalloutWarning,
+    CalloutCaution,
+    FootnoteDefinition,
+    FootnoteReference,
     HorizontalRule,
     DuplicateBlock,
     MoveBlockUp,
@@ -27,8 +38,12 @@ pub(crate) enum EditingCommandId {
     Bold,
     Italic,
     Underline,
+    Highlight,
+    Superscript,
+    Subscript,
     Strikethrough,
     InlineCode,
+    InlineMath,
     Link,
     ClearFormatting,
 }
@@ -49,6 +64,22 @@ pub(crate) struct EditingCommandDescriptor {
     pub(crate) icon_path: &'static str,
     pub(crate) shortcut: Option<&'static str>,
     pub(crate) aliases: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EditingCommandSurfaces {
+    pub(crate) slash: bool,
+    pub(crate) block_menu: bool,
+    pub(crate) transform: bool,
+    pub(crate) insert: bool,
+    pub(crate) inline: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EditingCommandSpec {
+    pub(crate) id: EditingCommandId,
+    pub(crate) descriptor: EditingCommandDescriptor,
+    pub(crate) surfaces: EditingCommandSurfaces,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -135,6 +166,9 @@ pub(crate) enum EditingCommandPlan {
     InsertTable,
     InsertImage,
     InsertMath,
+    InsertMermaid,
+    InsertFootnoteDefinition,
+    InsertFootnoteReference,
     InsertHorizontalRule,
     DuplicateBlock,
     MoveBlock(i32),
@@ -142,11 +176,14 @@ pub(crate) enum EditingCommandPlan {
     ApplyInline(EditingCommandId),
 }
 
-pub(crate) const SLASH_COMMANDS: [EditingCommandId; 17] = [
+pub(crate) const SLASH_COMMANDS: [EditingCommandId; 28] = [
     EditingCommandId::Paragraph,
     EditingCommandId::Heading1,
     EditingCommandId::Heading2,
     EditingCommandId::Heading3,
+    EditingCommandId::Heading4,
+    EditingCommandId::Heading5,
+    EditingCommandId::Heading6,
     EditingCommandId::BulletedList,
     EditingCommandId::NumberedList,
     EditingCommandId::TaskList,
@@ -155,6 +192,14 @@ pub(crate) const SLASH_COMMANDS: [EditingCommandId; 17] = [
     EditingCommandId::Table,
     EditingCommandId::Image,
     EditingCommandId::Math,
+    EditingCommandId::Mermaid,
+    EditingCommandId::CalloutNote,
+    EditingCommandId::CalloutTip,
+    EditingCommandId::CalloutImportant,
+    EditingCommandId::CalloutWarning,
+    EditingCommandId::CalloutCaution,
+    EditingCommandId::FootnoteDefinition,
+    EditingCommandId::FootnoteReference,
     EditingCommandId::HorizontalRule,
     EditingCommandId::DuplicateBlock,
     EditingCommandId::MoveBlockUp,
@@ -162,11 +207,14 @@ pub(crate) const SLASH_COMMANDS: [EditingCommandId; 17] = [
     EditingCommandId::DeleteBlock,
 ];
 
-pub(crate) const TRANSFORM_COMMANDS: [EditingCommandId; 9] = [
+pub(crate) const TRANSFORM_COMMANDS: [EditingCommandId; 12] = [
     EditingCommandId::Paragraph,
     EditingCommandId::Heading1,
     EditingCommandId::Heading2,
     EditingCommandId::Heading3,
+    EditingCommandId::Heading4,
+    EditingCommandId::Heading5,
+    EditingCommandId::Heading6,
     EditingCommandId::BulletedList,
     EditingCommandId::NumberedList,
     EditingCommandId::TaskList,
@@ -175,18 +223,23 @@ pub(crate) const TRANSFORM_COMMANDS: [EditingCommandId; 9] = [
 ];
 
 /// 插入入口共用这一份清单，避免块操作、右键菜单和斜杠菜单的能力漂移。
-pub(crate) const INSERT_COMMANDS: [EditingCommandId; 4] = [
+pub(crate) const INSERT_COMMANDS: [EditingCommandId; 6] = [
     EditingCommandId::Table,
     EditingCommandId::Image,
     EditingCommandId::Math,
+    EditingCommandId::Mermaid,
+    EditingCommandId::FootnoteDefinition,
     EditingCommandId::HorizontalRule,
 ];
 
-pub(crate) const BLOCK_MENU_COMMANDS: [EditingCommandId; 17] = [
+pub(crate) const BLOCK_MENU_COMMANDS: [EditingCommandId; 28] = [
     EditingCommandId::Paragraph,
     EditingCommandId::Heading1,
     EditingCommandId::Heading2,
     EditingCommandId::Heading3,
+    EditingCommandId::Heading4,
+    EditingCommandId::Heading5,
+    EditingCommandId::Heading6,
     EditingCommandId::BulletedList,
     EditingCommandId::NumberedList,
     EditingCommandId::TaskList,
@@ -195,6 +248,14 @@ pub(crate) const BLOCK_MENU_COMMANDS: [EditingCommandId; 17] = [
     EditingCommandId::Table,
     EditingCommandId::Image,
     EditingCommandId::Math,
+    EditingCommandId::Mermaid,
+    EditingCommandId::CalloutNote,
+    EditingCommandId::CalloutTip,
+    EditingCommandId::CalloutImportant,
+    EditingCommandId::CalloutWarning,
+    EditingCommandId::CalloutCaution,
+    EditingCommandId::FootnoteDefinition,
+    EditingCommandId::FootnoteReference,
     EditingCommandId::HorizontalRule,
     EditingCommandId::DuplicateBlock,
     EditingCommandId::MoveBlockUp,
@@ -202,12 +263,16 @@ pub(crate) const BLOCK_MENU_COMMANDS: [EditingCommandId; 17] = [
     EditingCommandId::DeleteBlock,
 ];
 
-pub(crate) const INLINE_COMMANDS: [EditingCommandId; 7] = [
+pub(crate) const INLINE_COMMANDS: [EditingCommandId; 11] = [
     EditingCommandId::Bold,
     EditingCommandId::Italic,
     EditingCommandId::Underline,
+    EditingCommandId::Highlight,
+    EditingCommandId::Superscript,
+    EditingCommandId::Subscript,
     EditingCommandId::Strikethrough,
     EditingCommandId::InlineCode,
+    EditingCommandId::InlineMath,
     EditingCommandId::Link,
     EditingCommandId::ClearFormatting,
 ];
@@ -220,6 +285,9 @@ impl EditingCommandId {
             Heading1 => "heading_1",
             Heading2 => "heading_2",
             Heading3 => "heading_3",
+            Heading4 => "heading_4",
+            Heading5 => "heading_5",
+            Heading6 => "heading_6",
             BulletedList => "bulleted_list",
             NumberedList => "numbered_list",
             TaskList => "task_list",
@@ -228,6 +296,14 @@ impl EditingCommandId {
             Table => "table",
             Image => "image",
             Math => "math",
+            Mermaid => "mermaid",
+            CalloutNote => "callout_note",
+            CalloutTip => "callout_tip",
+            CalloutImportant => "callout_important",
+            CalloutWarning => "callout_warning",
+            CalloutCaution => "callout_caution",
+            FootnoteDefinition => "footnote_definition",
+            FootnoteReference => "footnote_reference",
             HorizontalRule => "horizontal_rule",
             DuplicateBlock => "duplicate_block",
             MoveBlockUp => "move_block_up",
@@ -236,18 +312,22 @@ impl EditingCommandId {
             Bold => "bold",
             Italic => "italic",
             Underline => "underline",
+            Highlight => "highlight",
+            Superscript => "superscript",
+            Subscript => "subscript",
             Strikethrough => "strikethrough",
             InlineCode => "inline_code",
+            InlineMath => "inline_math",
             Link => "link",
             ClearFormatting => "clear_formatting",
         }
     }
 
     pub(crate) fn from_stable_id(id: &str) -> Option<Self> {
-        SLASH_COMMANDS
+        editing_command_specs()
             .into_iter()
-            .chain(INLINE_COMMANDS)
-            .find(|command| command.stable_id() == id)
+            .find(|spec| spec.id.stable_id() == id)
+            .map(|spec| spec.id)
     }
 
     pub(crate) fn for_block_kind(kind: &BlockKind) -> Option<Self> {
@@ -256,6 +336,9 @@ impl EditingCommandId {
             BlockKind::Heading { level: 1 } => Some(Self::Heading1),
             BlockKind::Heading { level: 2 } => Some(Self::Heading2),
             BlockKind::Heading { level: 3 } => Some(Self::Heading3),
+            BlockKind::Heading { level: 4 } => Some(Self::Heading4),
+            BlockKind::Heading { level: 5 } => Some(Self::Heading5),
+            BlockKind::Heading { level: 6 } => Some(Self::Heading6),
             BlockKind::BulletedListItem => Some(Self::BulletedList),
             BlockKind::NumberedListItem => Some(Self::NumberedList),
             BlockKind::TaskListItem { .. } => Some(Self::TaskList),
@@ -296,6 +379,27 @@ impl EditingCommandId {
                 "heading_3",
                 "icon/ui/heading-3.svg",
                 &["heading 3", "h3", "标题 3", "bt3"],
+            ),
+            Heading4 => descriptor(
+                self,
+                Transform,
+                "heading_4",
+                "icon/ui/type.svg",
+                &["heading 4", "h4", "标题 4", "bt4"],
+            ),
+            Heading5 => descriptor(
+                self,
+                Transform,
+                "heading_5",
+                "icon/ui/type.svg",
+                &["heading 5", "h5", "标题 5", "bt5"],
+            ),
+            Heading6 => descriptor(
+                self,
+                Transform,
+                "heading_6",
+                "icon/ui/type.svg",
+                &["heading 6", "h6", "标题 6", "bt6"],
             ),
             BulletedList => descriptor(
                 self,
@@ -367,6 +471,67 @@ impl EditingCommandId {
                 "icon/ui/sigma.svg",
                 &["math", "formula", "equation", "公式", "数学", "gs", "sx"],
             ),
+            Mermaid => descriptor(
+                self,
+                Insert,
+                "mermaid",
+                "icon/ui/code.svg",
+                &["mermaid", "diagram", "flowchart", "图表", "流程图"],
+            ),
+            CalloutNote => descriptor(
+                self,
+                Insert,
+                "callout_note",
+                "icon/ui/quote.svg",
+                &["note callout", "note", "提示块", "笔记"],
+            ),
+            CalloutTip => descriptor(
+                self,
+                Insert,
+                "callout_tip",
+                "icon/ui/quote.svg",
+                &["tip callout", "tip", "技巧", "建议"],
+            ),
+            CalloutImportant => descriptor(
+                self,
+                Insert,
+                "callout_important",
+                "icon/ui/quote.svg",
+                &["important callout", "important", "重要"],
+            ),
+            CalloutWarning => descriptor(
+                self,
+                Insert,
+                "callout_warning",
+                "icon/ui/quote.svg",
+                &["warning callout", "warning", "警告"],
+            ),
+            CalloutCaution => descriptor(
+                self,
+                Insert,
+                "callout_caution",
+                "icon/ui/quote.svg",
+                &["caution callout", "caution", "危险", "注意"],
+            ),
+            FootnoteDefinition => descriptor(
+                self,
+                Insert,
+                "footnote_definition",
+                "icon/ui/type.svg",
+                &["footnote definition", "footnote", "脚注定义", "脚注"],
+            ),
+            FootnoteReference => descriptor(
+                self,
+                Insert,
+                "footnote_reference",
+                "icon/ui/type.svg",
+                &[
+                    "footnote reference",
+                    "add footnote",
+                    "添加脚注引用",
+                    "脚注引用",
+                ],
+            ),
             HorizontalRule => descriptor(
                 self,
                 Insert,
@@ -431,6 +596,27 @@ impl EditingCommandId {
                 "icon/ui/type.svg",
                 &["underline", "下划线", "xhx"],
             ),
+            Highlight => descriptor(
+                self,
+                Inline,
+                "highlight",
+                "icon/ui/type.svg",
+                &["highlight", "mark", "高亮", "标记", "gl"],
+            ),
+            Superscript => descriptor(
+                self,
+                Inline,
+                "superscript",
+                "icon/ui/type.svg",
+                &["superscript", "上标", "sb"],
+            ),
+            Subscript => descriptor(
+                self,
+                Inline,
+                "subscript",
+                "icon/ui/type.svg",
+                &["subscript", "下标", "xb"],
+            ),
             Strikethrough => descriptor(
                 self,
                 Inline,
@@ -444,6 +630,19 @@ impl EditingCommandId {
                 "inline_code",
                 "icon/ui/code.svg",
                 &["inline code", "行内代码", "hndm"],
+            ),
+            InlineMath => descriptor(
+                self,
+                Inline,
+                "inline_math",
+                "icon/ui/sigma.svg",
+                &[
+                    "inline math",
+                    "inline formula",
+                    "行内数学",
+                    "行内公式",
+                    "hngs",
+                ],
             ),
             Link => descriptor(
                 self,
@@ -465,7 +664,8 @@ impl EditingCommandId {
     pub(crate) fn is_available(self, context: EditingContext) -> bool {
         use EditingCommandId::*;
         match self {
-            Bold | Italic | Underline | Strikethrough | InlineCode | ClearFormatting => {
+            Bold | Italic | Underline | Highlight | Superscript | Subscript | Strikethrough
+            | InlineCode | ClearFormatting => {
                 context.editable_rich_text() && context.has_selection()
             }
             Link => {
@@ -473,12 +673,19 @@ impl EditingCommandId {
                     && context.has_selection()
                     && !context.cross_block_selection()
             }
+            InlineMath => context.editable_rich_text() && !context.cross_block_selection(),
             DuplicateBlock | DeleteBlock => context.editable_block(),
             MoveBlockUp => context.can_move_up(),
             MoveBlockDown => context.can_move_down(),
-            Table | Image | Math | HorizontalRule => context.editable_block(),
-            Paragraph | Heading1 | Heading2 | Heading3 | BulletedList | NumberedList | TaskList
-            | Quote | CodeBlock => context.editable_rich_block(),
+            Table | Image | Math | Mermaid | FootnoteDefinition | FootnoteReference
+            | HorizontalRule => context.editable_block(),
+            CalloutNote | CalloutTip | CalloutImportant | CalloutWarning | CalloutCaution => {
+                context.editable_rich_block()
+            }
+            Paragraph | Heading1 | Heading2 | Heading3 | Heading4 | Heading5 | Heading6
+            | BulletedList | NumberedList | TaskList | Quote | CodeBlock => {
+                context.editable_rich_block()
+            }
         }
     }
 
@@ -489,6 +696,9 @@ impl EditingCommandId {
             Heading1 => EditingCommandPlan::ChangeBlockKind(BlockKind::Heading { level: 1 }),
             Heading2 => EditingCommandPlan::ChangeBlockKind(BlockKind::Heading { level: 2 }),
             Heading3 => EditingCommandPlan::ChangeBlockKind(BlockKind::Heading { level: 3 }),
+            Heading4 => EditingCommandPlan::ChangeBlockKind(BlockKind::Heading { level: 4 }),
+            Heading5 => EditingCommandPlan::ChangeBlockKind(BlockKind::Heading { level: 5 }),
+            Heading6 => EditingCommandPlan::ChangeBlockKind(BlockKind::Heading { level: 6 }),
             BulletedList => EditingCommandPlan::ChangeBlockKind(BlockKind::BulletedListItem),
             NumberedList => EditingCommandPlan::ChangeBlockKind(BlockKind::NumberedListItem),
             TaskList => {
@@ -501,16 +711,96 @@ impl EditingCommandId {
             Table => EditingCommandPlan::InsertTable,
             Image => EditingCommandPlan::InsertImage,
             Math => EditingCommandPlan::InsertMath,
+            Mermaid => EditingCommandPlan::InsertMermaid,
+            FootnoteDefinition => EditingCommandPlan::InsertFootnoteDefinition,
+            FootnoteReference => EditingCommandPlan::InsertFootnoteReference,
+            CalloutNote => {
+                EditingCommandPlan::ChangeBlockKind(BlockKind::Callout(CalloutVariant::Note))
+            }
+            CalloutTip => {
+                EditingCommandPlan::ChangeBlockKind(BlockKind::Callout(CalloutVariant::Tip))
+            }
+            CalloutImportant => {
+                EditingCommandPlan::ChangeBlockKind(BlockKind::Callout(CalloutVariant::Important))
+            }
+            CalloutWarning => {
+                EditingCommandPlan::ChangeBlockKind(BlockKind::Callout(CalloutVariant::Warning))
+            }
+            CalloutCaution => {
+                EditingCommandPlan::ChangeBlockKind(BlockKind::Callout(CalloutVariant::Caution))
+            }
             HorizontalRule => EditingCommandPlan::InsertHorizontalRule,
             DuplicateBlock => EditingCommandPlan::DuplicateBlock,
             MoveBlockUp => EditingCommandPlan::MoveBlock(-1),
             MoveBlockDown => EditingCommandPlan::MoveBlock(1),
             DeleteBlock => EditingCommandPlan::DeleteBlock,
-            Bold | Italic | Underline | Strikethrough | InlineCode | Link | ClearFormatting => {
+            Bold | Italic | Underline | Highlight | Superscript | Subscript | Strikethrough
+            | InlineCode | InlineMath | Link | ClearFormatting => {
                 EditingCommandPlan::ApplyInline(self)
             }
         }
     }
+}
+
+/// 单一命令注册表视图。旧数组暂作为无分配的兼容入口，所有消费者所需的
+/// 元数据与 surface 声明都从这里聚合，后续新增命令必须首先进入 `ALL_COMMANDS`。
+pub(crate) fn editing_command_specs() -> Vec<EditingCommandSpec> {
+    const ALL_COMMANDS: &[EditingCommandId] = &[
+        EditingCommandId::Paragraph,
+        EditingCommandId::Heading1,
+        EditingCommandId::Heading2,
+        EditingCommandId::Heading3,
+        EditingCommandId::Heading4,
+        EditingCommandId::Heading5,
+        EditingCommandId::Heading6,
+        EditingCommandId::BulletedList,
+        EditingCommandId::NumberedList,
+        EditingCommandId::TaskList,
+        EditingCommandId::Quote,
+        EditingCommandId::CodeBlock,
+        EditingCommandId::Table,
+        EditingCommandId::Image,
+        EditingCommandId::Math,
+        EditingCommandId::Mermaid,
+        EditingCommandId::CalloutNote,
+        EditingCommandId::CalloutTip,
+        EditingCommandId::CalloutImportant,
+        EditingCommandId::CalloutWarning,
+        EditingCommandId::CalloutCaution,
+        EditingCommandId::FootnoteDefinition,
+        EditingCommandId::FootnoteReference,
+        EditingCommandId::HorizontalRule,
+        EditingCommandId::DuplicateBlock,
+        EditingCommandId::MoveBlockUp,
+        EditingCommandId::MoveBlockDown,
+        EditingCommandId::DeleteBlock,
+        EditingCommandId::Bold,
+        EditingCommandId::Italic,
+        EditingCommandId::Underline,
+        EditingCommandId::Highlight,
+        EditingCommandId::Superscript,
+        EditingCommandId::Subscript,
+        EditingCommandId::Strikethrough,
+        EditingCommandId::InlineCode,
+        EditingCommandId::InlineMath,
+        EditingCommandId::Link,
+        EditingCommandId::ClearFormatting,
+    ];
+    ALL_COMMANDS
+        .iter()
+        .copied()
+        .map(|id| EditingCommandSpec {
+            id,
+            descriptor: id.descriptor(),
+            surfaces: EditingCommandSurfaces {
+                slash: SLASH_COMMANDS.contains(&id),
+                block_menu: BLOCK_MENU_COMMANDS.contains(&id),
+                transform: TRANSFORM_COMMANDS.contains(&id),
+                insert: INSERT_COMMANDS.contains(&id),
+                inline: INLINE_COMMANDS.contains(&id),
+            },
+        })
+        .collect()
 }
 
 pub(crate) struct EditingCommandHistory {
@@ -595,6 +885,13 @@ fn descriptor(
         localization_key,
         icon_path,
         shortcut: match id {
+            EditingCommandId::Paragraph => Some("Mod-Alt-0"),
+            EditingCommandId::Heading1 => Some("Mod-Alt-1"),
+            EditingCommandId::Heading2 => Some("Mod-Alt-2"),
+            EditingCommandId::Heading3 => Some("Mod-Alt-3"),
+            EditingCommandId::Heading4 => Some("Mod-Alt-4"),
+            EditingCommandId::Heading5 => Some("Mod-Alt-5"),
+            EditingCommandId::Heading6 => Some("Mod-Alt-6"),
             EditingCommandId::Bold => Some("Mod-B"),
             EditingCommandId::Italic => Some("Mod-I"),
             EditingCommandId::Underline => Some("Mod-U"),

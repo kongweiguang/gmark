@@ -2,7 +2,7 @@
 
 use super::{
     DocumentEncoding, DocumentOpenPolicy, OpenedDocument, decode_markdown_bytes,
-    document_open_policy, open_document,
+    document_open_policy, open_document, open_document_with_policy, read_resident_text_from_probe,
 };
 
 #[test]
@@ -36,7 +36,7 @@ fn rejects_malformed_utf16_and_binary_controls() {
 }
 
 #[test]
-fn every_non_markdown_text_uses_the_source_backed_tab_at_any_size() {
+fn regular_non_markdown_formats_keep_resident_strategy_and_format_capabilities() {
     let dir = tempfile::tempdir().unwrap();
     for (name, text) in [
         ("small.json", "{\"ok\":true}"),
@@ -46,22 +46,23 @@ fn every_non_markdown_text_uses_the_source_backed_tab_at_any_size() {
     ] {
         let path = dir.path().join(name);
         std::fs::write(&path, text).unwrap();
-        assert!(matches!(
-            open_document(&path).unwrap(),
-            OpenedDocument::Large(_)
-        ));
+        let OpenedDocument::ResidentFormat(probe) = open_document(&path).unwrap() else {
+            panic!("structured text uses the format host");
+        };
+        assert_eq!(probe.strategy, gmark_paged_document::OpenStrategy::Resident);
     }
 
     for name in ["small.txt", "small.log", "small.rs", "README"] {
         let plain = dir.path().join(name);
         std::fs::write(&plain, "plain text").unwrap();
         let opened = open_document(&plain).unwrap();
-        let OpenedDocument::Large(probe) = opened else {
-            panic!("non-Markdown text must use Source-backed storage: {name}");
+        let OpenedDocument::ResidentFormat(probe) = opened else {
+            panic!("plain text must use the Source host: {name}");
         };
+        assert_eq!(probe.strategy, gmark_paged_document::OpenStrategy::Resident);
         assert_eq!(
             document_open_policy(&plain, &probe),
-            DocumentOpenPolicy::SourceBacked
+            DocumentOpenPolicy::ResidentFormat
         );
     }
 
@@ -75,6 +76,11 @@ fn every_non_markdown_text_uses_the_source_backed_tab_at_any_size() {
         opened.encoding,
         DocumentEncoding::Legacy("UTF-16LE".to_owned())
     );
+    assert_eq!(
+        opened.text_encoding,
+        gmark_document_core::TextEncoding::Utf16Le
+    );
+    assert!(opened.file_identity.is_some());
 }
 
 #[test]
@@ -87,4 +93,53 @@ fn resident_markdown_keeps_the_regular_editor_policy() {
         open_document(&path).unwrap(),
         OpenedDocument::Resident(_)
     ));
+}
+
+#[test]
+fn resident_markdown_freezes_limits_and_rejects_a_replaced_probe_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("policy.md");
+    std::fs::write(&path, "# title\n").unwrap();
+    let policy = gmark_document_core::LoadingPolicy {
+        max_resident_bytes: Some(8),
+        max_resident_lines: Some(1_234),
+        max_structural_units: Some(56_789),
+        ..gmark_document_core::LoadingPolicy::default()
+    };
+    let OpenedDocument::Resident(opened) = open_document_with_policy(&path, policy).unwrap() else {
+        panic!("exact byte threshold remains Resident");
+    };
+    assert_eq!(opened.loading_limits, policy.effective_limits());
+
+    let options = gmark_paged_document::ProbeOptions {
+        max_resident_bytes: 8,
+        max_resident_lines: 1_234,
+        max_structural_units: 56_789,
+        ..gmark_paged_document::ProbeOptions::default()
+    };
+    let stale_probe = gmark_paged_document::probe_file(&path, options).unwrap();
+    let replacement = dir.path().join("replacement.md");
+    std::fs::write(&replacement, "# other\n").unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(replacement, &path).unwrap();
+    assert!(read_resident_text_from_probe(&path, &stale_probe, policy.effective_limits()).is_err());
+}
+
+#[test]
+fn loading_policy_can_force_safe_source_without_changing_global_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("small.md");
+    std::fs::write(&path, "# title\n").unwrap();
+    let opened = open_document_with_policy(
+        &path,
+        gmark_document_core::LoadingPolicy {
+            force_safe_source: true,
+            ..gmark_document_core::LoadingPolicy::default()
+        },
+    )
+    .unwrap();
+    let OpenedDocument::Paged(probe) = opened else {
+        panic!("safe mode must force Paged Source");
+    };
+    assert!(probe.force_safe_source);
 }

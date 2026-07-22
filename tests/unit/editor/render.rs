@@ -1,7 +1,7 @@
 // @author kongweiguang
 
 use super::{
-    INTEGRATED_MENU_LEFT, MENU_ICON_SLOT, MENU_SHORTCUT_SLOT, NoRecentFiles,
+    INTEGRATED_MENU_LEFT, MENU_ICON_SLOT, MENU_SHORTCUT_GAP, MENU_SHORTCUT_SLOT, NoRecentFiles,
     RenderedRowSpacingInfo, callout_row_top_gap, clamped_floating_panel_origin,
     clamped_split_pane_ratio, compact_menu_panel_height, editor_tab_strip_insets,
     editor_text_font_for_family, floating_submenu_x, import_menu_split_index,
@@ -12,12 +12,12 @@ use super::{
     supports_in_window_menu_for_target_os, tibetan_font_fallbacks_for_target_os,
     top_level_menu_button_width, visible_menu_button_count,
 };
-use crate::components::{AddLanguageConfig, AddThemeConfig, SaveDocument};
+use crate::components::{AddLanguageConfig, AddThemeConfig, SaveDocument, Undo};
 use crate::config::WorkspaceSidebarPosition;
 use crate::theme::Theme;
 use gpui::{
     Context, InteractiveElement, IntoElement, KeyBinding, OwnedMenu, OwnedMenuItem, ParentElement,
-    Render, Styled, Window, div, hsla,
+    Render, Styled, Window, div, hsla, px,
 };
 use uuid::Uuid;
 
@@ -81,7 +81,7 @@ async fn fallback_menu_icon_slot_has_stable_two_x_bounds(cx: &mut gpui::TestAppC
     assert_eq!(f32::from(slot.size.height), MENU_ICON_SLOT);
     let shortcut = visual.debug_bounds("menu-shortcut-slot-test").unwrap();
     assert!(f32::from(shortcut.size.width) >= MENU_SHORTCUT_SLOT);
-    assert!(shortcut.left() >= slot.right());
+    assert!(shortcut.left() >= slot.right() + px(MENU_SHORTCUT_GAP));
     visual.update(|window, _cx| assert_eq!(window.scale_factor(), 2.0));
 }
 
@@ -96,9 +96,20 @@ async fn fallback_menu_shortcut_uses_highest_precedence_window_keymap(
     visual.update(|window, _cx| {
         assert_eq!(
             menu_shortcut_text(window, &SaveDocument).as_deref(),
-            Some("ctrl-alt-S")
+            Some("Ctrl+Alt+S")
         );
         assert_eq!(menu_shortcut_text(window, &NoRecentFiles), None);
+    });
+}
+
+#[gpui::test]
+async fn fallback_menu_shortcut_resolves_editor_context_bindings(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        cx.bind_keys([KeyBinding::new("ctrl-z", Undo, Some("BlockEditor"))]);
+    });
+    let (_view, visual) = cx.add_window_view(|_window, _cx| MenuIconSlotTestView);
+    visual.update(|window, _cx| {
+        assert_eq!(menu_shortcut_text(window, &Undo).as_deref(), Some("Ctrl+Z"));
     });
 }
 

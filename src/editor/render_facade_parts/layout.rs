@@ -34,12 +34,100 @@ pub(in crate::editor) fn floating_submenu_x(
 }
 
 pub(super) fn menu_shortcut_text(window: &Window, action: &dyn Action) -> Option<String> {
-    let text = window.keystroke_text_for(action);
-    (!text.is_empty() && text != action.name()).then_some(text)
+    let binding = preferred_menu_binding(window.bindings_for_action(action)).or_else(|| {
+        // 菜单浮层会接管焦点，不能只按浮层的上下文查询，否则编辑命令看起来像是没有快捷键。
+        let editor_context = KeyContext::parse("BlockEditor").expect("known editor key context");
+        preferred_menu_binding(window.bindings_for_action_in_context(action, editor_context))
+    })?;
+    Some(
+        binding
+            .keystrokes()
+            .iter()
+            .map(menu_keystroke_text)
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn preferred_menu_binding(bindings: Vec<KeyBinding>) -> Option<KeyBinding> {
+    // 默认表同时注册跨平台按键。菜单应优先展示当前平台惯用的那一个，避免 Windows 显示 Win+G。
+    #[cfg(target_os = "macos")]
+    let preferred = bindings.iter().rfind(|binding| {
+        binding
+            .keystrokes()
+            .iter()
+            .any(|keystroke| keystroke.modifiers().platform)
+    });
+    #[cfg(not(target_os = "macos"))]
+    let preferred = bindings.iter().rfind(|binding| {
+        binding
+            .keystrokes()
+            .iter()
+            .all(|keystroke| !keystroke.modifiers().platform)
+    });
+    preferred
+        .cloned()
+        .or_else(|| bindings.into_iter().next_back())
+}
+
+fn menu_keystroke_text(keystroke: &KeybindingKeystroke) -> String {
+    let modifiers = keystroke.modifiers();
+    let mut parts = Vec::with_capacity(6);
+    if modifiers.control {
+        parts.push("Ctrl".to_owned());
+    }
+    if modifiers.alt {
+        parts.push("Alt".to_owned());
+    }
+    if modifiers.shift {
+        parts.push("Shift".to_owned());
+    }
+    if modifiers.platform {
+        #[cfg(target_os = "macos")]
+        parts.push("Cmd".to_owned());
+        #[cfg(target_os = "windows")]
+        parts.push("Win".to_owned());
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        parts.push("Super".to_owned());
+    }
+    if modifiers.function {
+        parts.push("Fn".to_owned());
+    }
+    parts.push(menu_key_text(keystroke.key()));
+    parts.join("+")
+}
+
+fn menu_key_text(key: &str) -> String {
+    if key.len() == 1
+        || key.strip_prefix('f').is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+        })
+    {
+        key.to_uppercase()
+    } else {
+        match key {
+            "pageup" => "Page Up".to_owned(),
+            "pagedown" => "Page Down".to_owned(),
+            "backspace" => "Backspace".to_owned(),
+            "delete" => "Delete".to_owned(),
+            "escape" => "Esc".to_owned(),
+            "enter" => "Enter".to_owned(),
+            "space" => "Space".to_owned(),
+            "tab" => "Tab".to_owned(),
+            "left" => "Left".to_owned(),
+            "right" => "Right".to_owned(),
+            "up" => "Up".to_owned(),
+            "down" => "Down".to_owned(),
+            "home" => "Home".to_owned(),
+            "end" => "End".to_owned(),
+            other => other.to_owned(),
+        }
+    }
 }
 
 pub(super) fn menu_shortcut_slot(text: String, theme: &Theme) -> Div {
     div()
+        .ml(px(MENU_SHORTCUT_GAP))
         .min_w(px(MENU_SHORTCUT_SLOT))
         .max_w(px(100.0))
         .flex_shrink_0()

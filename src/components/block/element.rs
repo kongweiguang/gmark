@@ -153,6 +153,10 @@ fn build_text_runs(
 
         let mut background_color = if show_inline_code_backgrounds && inline_style.code {
             Some(code_bg)
+        } else if inline_style.highlight {
+            // 高亮是内容语义而非临时选区；沿用主题感知的行内代码底色，保证
+            // 自定义浅/深主题下仍有可读对比度，后续主题令牌可无损替换。
+            Some(code_bg.opacity(0.72))
         } else {
             base_run.background_color
         };

@@ -185,16 +185,6 @@ impl Editor {
         cx.notify();
     }
 
-    pub(in crate::editor) fn set_workspace_operation_error(
-        &mut self,
-        error: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.workspace.operation_error = Some(error);
-        self.workspace.is_open = true;
-        cx.notify();
-    }
-
     pub(in crate::editor) fn workspace_can_undo_file_operation(&self) -> bool {
         self.workspace.undo_file_operation.is_some() && self.workspace.file_operation_task.is_none()
     }

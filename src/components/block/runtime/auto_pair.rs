@@ -147,6 +147,20 @@ fn auto_pair_edit(
         return None;
     }
 
+    // 空段落首个反引号仍创建行内代码对；连续输入第二、第三个反引号时，
+    // 把这组输入提升为单个围栏前缀，并让第三次按键停在围栏末尾。
+    // 这样既保留一键行内代码，也让 ```language + Enter 可达。
+    if input == "`" && source == "``" && selection == (1..1) {
+        return Some(AutoPairEdit::Replace {
+            range: 0..2,
+            text: "```".to_owned(),
+            selected_range_relative: 3..3,
+        });
+    }
+    if input == "`" && source == "```" && selection == (3..3) {
+        return Some(AutoPairEdit::MoveTo(3));
+    }
+
     if collapsed && markdown_closing_marker(input).is_some_and(|marker| next == Some(marker)) {
         if matches!(input, "*" | "_" | "`") && previous == next && selection.start > 0 {
             let marker = input.as_bytes()[0] as char;

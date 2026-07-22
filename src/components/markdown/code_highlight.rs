@@ -635,6 +635,12 @@ pub(crate) fn highlight_code_block(
     source: &str,
 ) -> Option<CodeHighlightResult> {
     let key = resolve_code_language_key(language)?;
+    if key == CodeLanguageKey::Json {
+        return Some(CodeHighlightResult {
+            language: key,
+            spans: source_highlight_fallback(key, source),
+        });
+    }
 
     #[cfg(feature = "code-highlight-core")]
     if let Some(config) = CODE_HIGHLIGHT_REGISTRY.config_for(key) {
@@ -644,7 +650,7 @@ pub(crate) fn highlight_code_block(
             Err(_) => {
                 return Some(CodeHighlightResult {
                     language: key,
-                    spans: Vec::new(),
+                    spans: source_highlight_fallback(key, source),
                 });
             }
         };
@@ -655,7 +661,7 @@ pub(crate) fn highlight_code_block(
             let Ok(event) = event else {
                 return Some(CodeHighlightResult {
                     language: key,
-                    spans: Vec::new(),
+                    spans: source_highlight_fallback(key, source),
                 });
             };
 
@@ -676,6 +682,9 @@ pub(crate) fn highlight_code_block(
             }
         }
 
+        if spans.is_empty() {
+            spans = source_highlight_fallback(key, source);
+        }
         return Some(CodeHighlightResult {
             language: key,
             spans,
@@ -684,8 +693,100 @@ pub(crate) fn highlight_code_block(
 
     Some(CodeHighlightResult {
         language: key,
-        spans: Vec::new(),
+        spans: source_highlight_fallback(key, source),
     })
+}
+
+/// 大文件 Source 按可见行高亮，单行通常不是完整 JSON 文档。Tree-sitter 在这类
+/// 片段上可能不给出 capture；轻量 fallback 只识别 JSON 稳定词法单元，不猜结构。
+fn source_highlight_fallback(key: CodeLanguageKey, source: &str) -> Vec<CodeHighlightSpan> {
+    if key != CodeLanguageKey::Json {
+        return Vec::new();
+    }
+
+    let bytes = source.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                let start = index;
+                index += 2;
+                while bytes.get(index).is_some_and(|byte| *byte != b'\n') {
+                    index += 1;
+                }
+                push_highlight_span(&mut spans, start..index, CodeHighlightClass::Comment);
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                let start = index;
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+                push_highlight_span(&mut spans, start..index, CodeHighlightClass::Comment);
+            }
+            b'"' => {
+                let start = index;
+                index += 1;
+                let mut escaped = false;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    index += 1;
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'"' {
+                        break;
+                    }
+                }
+                let mut next = index;
+                while bytes.get(next).is_some_and(u8::is_ascii_whitespace) {
+                    next += 1;
+                }
+                let class = if bytes.get(next) == Some(&b':') {
+                    CodeHighlightClass::Property
+                } else {
+                    CodeHighlightClass::String
+                };
+                push_highlight_span(&mut spans, start..index, class);
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = index;
+                index += 1;
+                while bytes.get(index).is_some_and(|byte| {
+                    matches!(*byte, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                }) {
+                    index += 1;
+                }
+                push_highlight_span(&mut spans, start..index, CodeHighlightClass::Number);
+            }
+            b't' if source[index..].starts_with("true") => {
+                push_highlight_span(&mut spans, index..index + 4, CodeHighlightClass::Constant);
+                index += 4;
+            }
+            b'f' if source[index..].starts_with("false") => {
+                push_highlight_span(&mut spans, index..index + 5, CodeHighlightClass::Constant);
+                index += 5;
+            }
+            b'n' if source[index..].starts_with("null") => {
+                push_highlight_span(&mut spans, index..index + 4, CodeHighlightClass::Constant);
+                index += 4;
+            }
+            b'{' | b'}' | b'[' | b']' | b':' | b',' => {
+                push_highlight_span(
+                    &mut spans,
+                    index..index + 1,
+                    CodeHighlightClass::Punctuation,
+                );
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    spans
 }
 
 fn push_highlight_span(

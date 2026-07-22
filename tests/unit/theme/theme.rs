@@ -254,18 +254,18 @@ fn light_theme_uses_light_palette_without_changing_layout_tokens() {
     let light = Theme::light_theme();
 
     assert_eq!(light.name, "gmark Light");
-    assert_eq!(light.colors.editor_background, rgba(0xffffffff).into());
+    assert_eq!(light.colors.editor_background, rgba(0xf7f8f3ff).into());
     assert_eq!(light.colors.text_default, rgba(0x1d1d1fff).into());
     assert_eq!(light.colors.text_link, rgba(0x0a66c2ff).into());
-    assert_eq!(light.colors.chrome_background, rgba(0xf6f6f7ff).into());
-    assert_eq!(light.colors.sidebar_background, rgba(0xf5f5f7ff).into());
-    assert_eq!(light.colors.tab_strip_background, rgba(0xf2f2f4ff).into());
-    assert_eq!(light.colors.tab_active_background, rgba(0xffffffff).into());
+    assert_eq!(light.colors.chrome_background, rgba(0xf1f3edff).into());
+    assert_eq!(light.colors.sidebar_background, rgba(0xf3f5efff).into());
+    assert_eq!(light.colors.tab_strip_background, rgba(0xecefe8ff).into());
+    assert_eq!(light.colors.tab_active_background, rgba(0xf7f8f3ff).into());
     assert_ne!(light.colors.chrome_background, light.colors.dialog_surface);
-    assert_eq!(light.colors.code_bg, rgba(0xf5f5f7ff).into());
+    assert_eq!(light.colors.code_bg, rgba(0xf0f2ecff).into());
     assert_eq!(
         light.colors.code_language_input_border,
-        rgba(0xd2d2d7ff).into()
+        rgba(0xd4d7cfff).into()
     );
     assert_eq!(
         light.colors.table_cell_active_outline,
@@ -546,7 +546,7 @@ fn theme_manager_switches_builtin_themes() {
     assert_eq!(manager.current().name, "gmark Light");
     assert_eq!(
         manager.current().colors.editor_background,
-        rgba(0xffffffff).into()
+        Theme::light_theme().colors.editor_background
     );
 
     assert!(manager.set_theme_by_id("gmark"));
@@ -592,6 +592,16 @@ fn system_theme_keeps_mode_identity_and_editor_overrides() {
     assert_eq!(manager.current().typography.text_line_height, 1.75);
     assert_eq!(manager.current().dimensions.centered_max_width, 1040.0);
     assert!(!manager.update_system_appearance(WindowAppearance::Dark));
+}
+
+#[test]
+fn editor_content_width_override_supports_the_1600_px_limit() {
+    let mut manager = ThemeManager::default();
+    manager.set_editor_content_width(1600);
+    assert_eq!(manager.current().dimensions.centered_max_width, 1600.0);
+
+    manager.set_editor_content_width(u16::MAX);
+    assert_eq!(manager.current().dimensions.centered_max_width, 1600.0);
 }
 
 #[test]

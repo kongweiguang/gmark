@@ -148,7 +148,7 @@ impl ThemeManager {
     pub fn set_editor_content_width(&mut self, content_width: u16) {
         self.editor_content_width_override = Some(content_width);
         let mut theme = (*self.current).clone();
-        theme.dimensions.centered_max_width = f32::from(content_width.clamp(680, 1200));
+        theme.dimensions.centered_max_width = f32::from(content_width.clamp(680, 1600));
         self.current = Arc::new(theme);
     }
 

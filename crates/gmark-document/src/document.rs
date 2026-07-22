@@ -147,6 +147,34 @@ impl DocumentSnapshot {
     }
 }
 
+impl gmark_document_core::DocumentSnapshot for DocumentSnapshot {
+    fn revision(&self) -> gmark_document_core::DocumentRevision {
+        gmark_document_core::DocumentRevision(self.revision.get())
+    }
+
+    fn len(&self) -> u64 {
+        u64::try_from(self.source.len()).unwrap_or(u64::MAX)
+    }
+
+    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, gmark_document_core::SnapshotError> {
+        let len = u64::try_from(DocumentSnapshot::len(self)).unwrap_or(u64::MAX);
+        if range.start > range.end || range.end > len {
+            return Err(gmark_document_core::SnapshotError::InvalidRange {
+                start: range.start,
+                end: range.end,
+                len,
+            });
+        }
+        let start = usize::try_from(range.start)
+            .map_err(|_| gmark_document_core::SnapshotError::RangeTooLarge)?;
+        let end = usize::try_from(range.end)
+            .map_err(|_| gmark_document_core::SnapshotError::RangeTooLarge)?;
+        self.text_for_range(start..end)
+            .map(String::into_bytes)
+            .map_err(|error| gmark_document_core::SnapshotError::Read(error.to_string()))
+    }
+}
+
 #[derive(Clone)]
 struct HistoryEntry {
     forward: Vec<TextEdit>,
@@ -155,6 +183,7 @@ struct HistoryEntry {
 }
 
 /// 源码优先文档，负责 revision、transaction 和 undo/redo 历史。
+#[derive(Clone)]
 pub struct SourceDocument {
     revision: Revision,
     source: Rope,

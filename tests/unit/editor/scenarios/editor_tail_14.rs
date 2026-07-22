@@ -16,7 +16,7 @@ async fn external_conflict_reload_replaces_local_document_with_disk_version(
     visual_cx.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.sync_source_document_from_projection("local version");
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             assert!(!editor.save_to_existing_path(&path, window, cx));
             editor.on_reload_external_conflict(&ClickEvent::default(), window, cx);
         });
@@ -46,7 +46,7 @@ async fn external_conflict_save_as_and_cancel_preserve_disk_and_close_intent(
     visual_cx.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.sync_source_document_from_projection("local version");
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             editor.pending_close_after_save = true;
             editor.save_document(window, cx);
         });
@@ -89,7 +89,7 @@ async fn external_conflict_handles_deleted_and_invalid_utf8_disk_files(cx: &mut 
     visual_cx.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.sync_source_document_from_projection("local version");
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             assert!(!editor.save_to_existing_path(&path, window, cx));
             let preview = editor.external_conflict_preview.as_ref().unwrap();
             assert!(preview.disk_error.is_some());
@@ -127,7 +127,7 @@ async fn external_conflict_overwrite_completes_pending_close_save(cx: &mut TestA
     visual_cx.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.sync_source_document_from_projection("local version");
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             editor.pending_close_after_save = true;
             assert!(!editor.save_to_existing_path(&path, window, cx));
             assert!(editor.pending_close_after_save);

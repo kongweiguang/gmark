@@ -458,6 +458,20 @@
             assert!(icon.bottom() <= row.bottom());
         }
 
+        // 第一项与下一行语言控件在几何上重叠；菜单必须最后绘制并接收点击。
+        let first_theme_option = visual
+            .debug_bounds("preferences-theme-option-0")
+            .unwrap();
+        visual.simulate_click(first_theme_option.center(), Modifiers::default());
+        visual.run_until_parked();
+        handle
+            .update(&mut visual, |preferences, _window, _cx| {
+                assert_eq!(preferences.selected_theme_id, "system");
+                assert!(!preferences.theme_dropdown_open);
+                assert!(!preferences.language_dropdown_open);
+            })
+            .expect("preferences window should be readable");
+
         handle
             .update(&mut visual, |preferences, _window, cx| {
                 preferences.restore_saved_theme(cx);
@@ -589,7 +603,7 @@
             .update(&mut visual, |preferences, _window, cx| {
                 assert_eq!(preferences.editor_font_size, 17);
                 assert_eq!(preferences.editor_line_height_percent, 165);
-                assert_eq!(preferences.editor_content_width, 1200);
+                assert_eq!(preferences.editor_content_width, 1240);
                 assert_eq!(preferences.editor_font_family, preferences.font_options[1]);
                 assert!(preferences.has_unsaved_changes());
                 assert_eq!(
@@ -608,7 +622,7 @@
                         .current()
                         .dimensions
                         .centered_max_width,
-                    1200.0
+                    1240.0
                 );
                 assert_eq!(
                     EditorSettings::editor_font_family(cx),

@@ -51,6 +51,7 @@ pub(super) fn build_menus(
                     MenuItem::action(strings.menu_close_tab.clone(), CloseTab),
                     MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                     MenuItem::action(strings.menu_open_file.clone(), OpenFile),
+                    MenuItem::action(strings.menu_open_safe_source.clone(), OpenSafeSource),
                     MenuItem::action(strings.menu_open_folder.clone(), OpenFolder),
                     MenuItem::submenu(Menu {
                         name: strings.menu_open_recent_file.clone().into(),
@@ -113,6 +114,7 @@ pub(super) fn build_menus(
                     MenuItem::action(strings.menu_close_tab.clone(), CloseTab),
                     MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                     MenuItem::action(strings.menu_open_file.clone(), OpenFile),
+                    MenuItem::action(strings.menu_open_safe_source.clone(), OpenSafeSource),
                     MenuItem::action(strings.menu_open_folder.clone(), OpenFolder),
                     MenuItem::submenu(Menu {
                         name: strings.menu_open_recent_file.clone().into(),
@@ -275,6 +277,57 @@ pub(crate) fn install_menus(cx: &mut App) {
 pub(super) fn prompt_and_open_files(cx: &mut App) {
     let error_window = cx.active_window();
     prompt_and_open_files_with_error_window(cx, error_window);
+}
+
+pub(super) fn prompt_and_open_safe_source(cx: &mut App) {
+    let error_window = cx.active_window();
+    prompt_and_open_safe_source_with_error_window(cx, error_window);
+}
+
+pub(super) fn prompt_and_open_safe_source_with_error_window(
+    cx: &mut App,
+    error_window: Option<AnyWindowHandle>,
+) {
+    let prompt_title = cx
+        .global::<I18nManager>()
+        .strings()
+        .menu_open_safe_source
+        .clone();
+    let prompt = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: true,
+        prompt: Some(prompt_title.into()),
+    });
+    cx.spawn(async move |cx| match prompt.await {
+        Ok(Ok(Some(paths))) => {
+            let _ = cx.update(move |cx| {
+                for path in paths {
+                    if let Err(error) = open_file_in_safe_source_window(cx, &path) {
+                        let title = cx
+                            .global::<I18nManager>()
+                            .strings()
+                            .open_failed_title
+                            .clone();
+                        show_window_prompt(error_window, &title, &error.to_string(), cx);
+                    }
+                }
+            });
+        }
+        Ok(Err(error)) => {
+            let detail = error.to_string();
+            let _ = cx.update(move |cx| {
+                let title = cx
+                    .global::<I18nManager>()
+                    .strings()
+                    .open_failed_title
+                    .clone();
+                show_window_prompt(error_window, &title, &detail, cx);
+            });
+        }
+        Ok(Ok(None)) | Err(_) => {}
+    })
+    .detach();
 }
 
 pub(super) fn prompt_and_open_files_with_error_window(
@@ -466,6 +519,9 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &OpenFile, cx| {
         dispatch_menu_action(&OpenFile, cx);
     });
+    cx.on_action(|_: &OpenSafeSource, cx| {
+        dispatch_menu_action(&OpenSafeSource, cx);
+    });
     cx.on_action(|_: &OpenFolder, cx| {
         dispatch_menu_action(&OpenFolder, cx);
     });
@@ -547,6 +603,10 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &UnderlineSelection, cx| {
         dispatch_menu_action(&UnderlineSelection, cx);
     });
+    cx.on_action(|_: &HighlightSelection, cx| dispatch_menu_action(&HighlightSelection, cx));
+    cx.on_action(|_: &SuperscriptSelection, cx| dispatch_menu_action(&SuperscriptSelection, cx));
+    cx.on_action(|_: &SubscriptSelection, cx| dispatch_menu_action(&SubscriptSelection, cx));
+    cx.on_action(|_: &InlineMathSelection, cx| dispatch_menu_action(&InlineMathSelection, cx));
     cx.on_action(|_: &CodeSelection, cx| {
         dispatch_menu_action(&CodeSelection, cx);
     });
@@ -556,6 +616,9 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &SetHeading1, cx| dispatch_menu_action(&SetHeading1, cx));
     cx.on_action(|_: &SetHeading2, cx| dispatch_menu_action(&SetHeading2, cx));
     cx.on_action(|_: &SetHeading3, cx| dispatch_menu_action(&SetHeading3, cx));
+    cx.on_action(|_: &SetHeading4, cx| dispatch_menu_action(&SetHeading4, cx));
+    cx.on_action(|_: &SetHeading5, cx| dispatch_menu_action(&SetHeading5, cx));
+    cx.on_action(|_: &SetHeading6, cx| dispatch_menu_action(&SetHeading6, cx));
     cx.on_action(|_: &SetParagraph, cx| dispatch_menu_action(&SetParagraph, cx));
     cx.on_action(|_: &SetBulletedList, cx| dispatch_menu_action(&SetBulletedList, cx));
     cx.on_action(|_: &SetNumberedList, cx| dispatch_menu_action(&SetNumberedList, cx));

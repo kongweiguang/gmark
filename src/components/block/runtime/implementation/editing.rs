@@ -100,6 +100,9 @@ impl Block {
                     InlineFormat::Italic => EditingCommandId::Italic,
                     InlineFormat::Strikethrough => EditingCommandId::Strikethrough,
                     InlineFormat::Underline => EditingCommandId::Underline,
+                    InlineFormat::Highlight => EditingCommandId::Highlight,
+                    InlineFormat::Superscript => EditingCommandId::Superscript,
+                    InlineFormat::Subscript => EditingCommandId::Subscript,
                     InlineFormat::Code => EditingCommandId::InlineCode,
                 };
                 cx.emit(BlockEvent::RequestEditingCommand { command });
@@ -117,6 +120,9 @@ impl Block {
             InlineFormat::Italic => next_title.toggle_italic(selection.clone()),
             InlineFormat::Strikethrough => next_title.toggle_strikethrough(selection.clone()),
             InlineFormat::Underline => next_title.toggle_underline(selection.clone()),
+            InlineFormat::Highlight => next_title.toggle_highlight(selection.clone()),
+            InlineFormat::Superscript => next_title.toggle_superscript(selection.clone()),
+            InlineFormat::Subscript => next_title.toggle_subscript(selection.clone()),
             InlineFormat::Code => next_title.toggle_code(selection.clone()),
         };
         if !changed {
@@ -162,6 +168,25 @@ impl Block {
             false,
             cx,
         );
+    }
+
+    pub(crate) fn insert_inline_math(&mut self, cx: &mut Context<Self>) {
+        if self.editor_selection_range.is_some() {
+            return;
+        }
+        if self.uses_raw_text_editing() || self.is_read_only() {
+            return;
+        }
+        let range = self.selection_clean_range();
+        let (text, selected) = if range.is_empty() {
+            ("$  $".to_owned(), 2..2)
+        } else {
+            let selected_text = self.display_text()[range.clone()].to_owned();
+            let len = selected_text.len();
+            (format!("${selected_text}$"), 1..len + 1)
+        };
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.replace_text_in_visible_range(range, &text, Some(selected), false, cx);
     }
 
     pub(crate) fn toggle_inline_link(&mut self, cx: &mut Context<Self>) {

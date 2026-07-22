@@ -140,6 +140,97 @@ impl TableData {
         }
     }
 
+    /// Inserts an empty row at a visual index (`0` is the header).
+    pub fn insert_empty_visual_row(&mut self, visual_index: usize) -> bool {
+        self.normalize_shape();
+        if visual_index > self.rows.len() + 1 {
+            return false;
+        }
+        let empty = (0..self.column_count())
+            .map(|_| InlineTextTree::plain(String::new()))
+            .collect::<Vec<_>>();
+        if visual_index == 0 {
+            let previous = std::mem::replace(&mut self.header, empty);
+            self.rows.insert(0, previous);
+        } else {
+            self.rows.insert(visual_index - 1, empty);
+        }
+        true
+    }
+
+    /// Duplicates one visual row immediately after itself.
+    pub fn duplicate_visual_row(&mut self, visual_index: usize) -> bool {
+        self.normalize_shape();
+        let row = if visual_index == 0 {
+            self.header.clone()
+        } else if let Some(row) = self.rows.get(visual_index - 1) {
+            row.clone()
+        } else {
+            return false;
+        };
+        self.rows.insert(visual_index, row);
+        true
+    }
+
+    pub fn insert_empty_column(&mut self, column: usize, alignment: TableColumnAlignment) -> bool {
+        self.normalize_shape();
+        if column > self.column_count() {
+            return false;
+        }
+        self.header
+            .insert(column, InlineTextTree::plain(String::new()));
+        self.alignments.insert(column, alignment);
+        for row in &mut self.rows {
+            row.insert(column, InlineTextTree::plain(String::new()));
+        }
+        true
+    }
+
+    /// Duplicates one column immediately to its right, including alignment.
+    pub fn duplicate_column(&mut self, column: usize) -> bool {
+        self.normalize_shape();
+        if column >= self.column_count() {
+            return false;
+        }
+        self.header.insert(column + 1, self.header[column].clone());
+        self.alignments.insert(column + 1, self.alignments[column]);
+        for row in &mut self.rows {
+            row.insert(column + 1, row[column].clone());
+        }
+        true
+    }
+
+    /// Clears a rectangular visual-cell selection without changing table shape.
+    pub fn clear_cell_rectangle(
+        &mut self,
+        rows: std::ops::RangeInclusive<usize>,
+        columns: std::ops::RangeInclusive<usize>,
+    ) -> bool {
+        self.normalize_shape();
+        let (row_start, row_end) = (*rows.start(), *rows.end());
+        let (column_start, column_end) = (*columns.start(), *columns.end());
+        if row_start > row_end
+            || column_start > column_end
+            || row_end > self.rows.len()
+            || column_end >= self.column_count()
+        {
+            return false;
+        }
+        let mut changed = false;
+        for visual_row in row_start..=row_end {
+            let row = if visual_row == 0 {
+                &mut self.header
+            } else {
+                &mut self.rows[visual_row - 1]
+            };
+            for cell in &mut row[column_start..=column_end] {
+                changed |= !cell.visible_text().is_empty();
+                *cell = InlineTextTree::plain(String::new());
+            }
+        }
+        changed
+    }
+
     /// Sets the alignment of one column if it exists.
     pub fn set_column_alignment(&mut self, column: usize, alignment: TableColumnAlignment) {
         self.normalize_shape();
@@ -526,8 +617,12 @@ fn split_table_cells(line: &str) -> Option<Vec<String>> {
     let mut cells = Vec::new();
     let mut current = String::new();
     let mut escaping = false;
+    let chars = inner.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    let mut code_ticks = None;
 
-    for ch in inner.chars() {
+    while index < chars.len() {
+        let ch = chars[index];
         if escaping {
             match ch {
                 '|' | '\\' => current.push(ch),
@@ -537,17 +632,34 @@ fn split_table_cells(line: &str) -> Option<Vec<String>> {
                 }
             }
             escaping = false;
+            index += 1;
+            continue;
+        }
+
+        if ch == '`' {
+            let run = chars[index..]
+                .iter()
+                .take_while(|candidate| **candidate == '`')
+                .count();
+            current.extend(std::iter::repeat_n('`', run));
+            match code_ticks {
+                Some(open) if open == run => code_ticks = None,
+                None => code_ticks = Some(run),
+                _ => {}
+            }
+            index += run;
             continue;
         }
 
         match ch {
-            '\\' => escaping = true,
-            '|' => {
+            '\\' if code_ticks.is_none() => escaping = true,
+            '|' if code_ticks.is_none() => {
                 cells.push(current.trim().to_string());
                 current.clear();
             }
             _ => current.push(ch),
         }
+        index += 1;
     }
 
     if escaping {
@@ -737,6 +849,41 @@ pub fn parse_table_body_row(line: &str, columns: usize) -> Option<Vec<InlineText
             .map(|cell| InlineTextTree::from_markdown(&cell))
             .collect(),
     )
+}
+
+/// Parses incomplete GFM table body rows for an explicit merge affordance.
+/// Unlike ordinary GFM body parsing, fragment rows must already match the
+/// target width so accepting a merge can never silently pad or drop cells.
+pub fn parse_table_fragment_rows(
+    lines: &[String],
+    columns: usize,
+) -> Option<Vec<Vec<InlineTextTree>>> {
+    if lines.is_empty() || columns < 2 {
+        return None;
+    }
+
+    let mut rows = Vec::with_capacity(lines.len());
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !(trimmed.starts_with('|') || trimmed.ends_with('|')) {
+            return None;
+        }
+        let cells = split_table_cells(line)?;
+        if cells.len() != columns
+            || cells
+                .iter()
+                .all(|cell| parse_alignment_cell(cell).is_some())
+        {
+            return None;
+        }
+        rows.push(
+            cells
+                .into_iter()
+                .map(|cell| InlineTextTree::from_markdown(&cell))
+                .collect(),
+        );
+    }
+    Some(rows)
 }
 
 /// Serializes native table data to canonical pipe-table Markdown lines.

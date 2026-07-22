@@ -175,10 +175,10 @@
         visual.simulate_keystrokes("enter");
         visual.run_until_parked();
         visual.update(|window, cx| window.draw(cx).clear());
-        editor.update(visual, |editor, _cx| {
+        editor.update(visual, |editor, cx| {
             assert_eq!(editor.workspace_panel_width(), None);
             assert_eq!(
-                editor.workspace_session_snapshot().workspace_panel_width,
+                editor.workspace_session_snapshot(cx).workspace_panel_width,
                 None
             );
             assert_eq!(editor.source_document.text(), source);

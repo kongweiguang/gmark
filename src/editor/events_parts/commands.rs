@@ -3,6 +3,26 @@
 use super::*;
 
 impl Editor {
+    pub(in crate::editor) fn next_footnote_id(markdown: &str) -> String {
+        (1usize..)
+            .map(|index| format!("note-{index}"))
+            .find(|id| !markdown.contains(&format!("[^{id}]")))
+            .unwrap_or_else(|| "note-1".to_owned())
+    }
+
+    pub(in crate::editor) fn new_footnote_definition_block(
+        cx: &mut Context<Self>,
+        id: String,
+    ) -> Entity<super::Block> {
+        let definition = Self::new_block(
+            cx,
+            BlockRecord::with_plain_text(BlockKind::FootnoteDefinition, id),
+        );
+        let body = Self::new_block(cx, BlockRecord::paragraph(String::new()));
+        definition.update(cx, |definition, _cx| definition.children = vec![body]);
+        definition
+    }
+
     pub(super) fn handle_paste_image_request(
         &mut self,
         block: Entity<super::Block>,
@@ -173,9 +193,31 @@ impl Editor {
                 self.document.rebuild_metadata_and_snapshot(cx);
                 self.focus_block(block.entity_id());
             }
+            EditingCommandPlan::InsertFootnoteReference => {
+                let id = Self::next_footnote_id(&self.document.markdown_text(cx));
+                let reference = format!("[^{id}]");
+                let result = cleaned_title.replace_visible_range(
+                    cursor..cursor,
+                    &reference,
+                    InlineInsertionAttributes::default(),
+                );
+                let next_cursor = result.map_offset(cursor + reference.len());
+                Self::set_block_title_and_kind(&block, original_kind, result.tree, next_cursor, cx);
+                let definition = Self::new_footnote_definition_block(cx, id);
+                self.document.insert_blocks_at(
+                    None,
+                    self.document.root_count(),
+                    vec![definition],
+                    cx,
+                );
+                self.document.rebuild_metadata_and_snapshot(cx);
+                self.focus_block(block.entity_id());
+            }
             EditingCommandPlan::InsertTable
             | EditingCommandPlan::InsertImage
             | EditingCommandPlan::InsertMath
+            | EditingCommandPlan::InsertMermaid
+            | EditingCommandPlan::InsertFootnoteDefinition
             | EditingCommandPlan::InsertHorizontalRule => {
                 let inserted = match command.plan() {
                     EditingCommandPlan::InsertTable => {
@@ -186,6 +228,14 @@ impl Editor {
                     }
                     EditingCommandPlan::InsertMath => {
                         Self::new_block(cx, BlockRecord::math("$$\n\n$$"))
+                    }
+                    EditingCommandPlan::InsertMermaid => Self::new_block(
+                        cx,
+                        BlockRecord::mermaid("```mermaid\nflowchart TD\n    A --> B\n```"),
+                    ),
+                    EditingCommandPlan::InsertFootnoteDefinition => {
+                        let id = Self::next_footnote_id(&self.document.markdown_text(cx));
+                        Self::new_footnote_definition_block(cx, id)
                     }
                     EditingCommandPlan::InsertHorizontalRule => Self::new_block(
                         cx,
@@ -238,6 +288,8 @@ impl Editor {
                             2
                         } else if command == SlashCommand::Math {
                             3
+                        } else if command == SlashCommand::Mermaid {
+                            "```mermaid\n".len()
                         } else {
                             0
                         };
@@ -248,7 +300,17 @@ impl Editor {
                         );
                         cx.notify();
                     });
-                    self.focus_block(inserted.entity_id());
+                    let focus = if command == SlashCommand::FootnoteDefinition {
+                        inserted
+                            .read(cx)
+                            .children
+                            .first()
+                            .map(Entity::entity_id)
+                            .unwrap_or_else(|| inserted.entity_id())
+                    } else {
+                        inserted.entity_id()
+                    };
+                    self.focus_block(focus);
                 }
             }
             EditingCommandPlan::DuplicateBlock => {

@@ -689,6 +689,84 @@ async fn removing_the_only_table_leaves_one_empty_paragraph(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+async fn table_insert_and_duplicate_commands_are_single_undo_steps(cx: &mut TestAppContext) {
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        let initial_history = editor.undo_history.len();
+        editor.insert_table_row(&table, 1, cx);
+        assert_eq!(editor.undo_history.len(), initial_history + 1);
+        assert_eq!(table.read(cx).record.table.as_ref().unwrap().rows.len(), 2);
+
+        editor.duplicate_table_column(&table, 0, cx);
+        assert_eq!(editor.undo_history.len(), initial_history + 2);
+        let data = table.read(cx).record.table.as_ref().unwrap();
+        assert_eq!(data.column_count(), 3);
+        assert_eq!(data.header[0].visible_text(), data.header[1].visible_text());
+    });
+}
+
+#[gpui::test]
+async fn escape_enters_rectangular_table_selection_and_delete_clears_cells(
+    cx: &mut TestAppContext,
+) {
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+    let escape = KeyDownEvent {
+        keystroke: Keystroke::parse("escape").expect("valid escape"),
+        is_held: false,
+    };
+    let extend = KeyDownEvent {
+        keystroke: Keystroke::parse("shift-right").expect("valid shifted arrow"),
+        is_held: false,
+    };
+    let delete = KeyDownEvent {
+        keystroke: Keystroke::parse("delete").expect("valid delete"),
+        is_held: false,
+    };
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        let first = table.read(cx).table_runtime.as_ref().unwrap().header[0].clone();
+        editor.active_entity_id = Some(first.entity_id());
+        assert!(editor.handle_table_cell_selection_key(&escape, cx));
+        assert!(editor.handle_table_cell_selection_key(&extend, cx));
+        let selection = editor.table_cell_rectangle.expect("rectangle selection");
+        assert_eq!(selection.columns(), 0..=1);
+
+        assert!(editor.handle_table_cell_selection_key(&delete, cx));
+        let table = table.read(cx).record.table.as_ref().unwrap();
+        assert!(table.header.iter().all(|cell| cell.visible_text().is_empty()));
+        assert_eq!(editor.undo_history.len(), 1);
+    });
+}
+
+#[gpui::test]
+async fn tsv_paste_expands_table_once_without_tiling(cx: &mut TestAppContext) {
+    let markdown = ["| A |", "| --- |", "| 1 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        editor.table_cell_rectangle = Some(crate::editor::table_selection::TableCellRectangle {
+            table_block_id: table.entity_id(),
+            anchor: crate::components::TableCellPosition { row: 1, column: 0 },
+            focus: crate::components::TableCellPosition { row: 1, column: 0 },
+        });
+        assert!(editor.paste_table_cells_tsv("x\ty\nz\tw", cx));
+        let data = table.read(cx).record.table.as_ref().unwrap();
+        assert_eq!(data.rows.len(), 2);
+        assert_eq!(data.column_count(), 2);
+        assert_eq!(data.rows[0][0].visible_text(), "x");
+        assert_eq!(data.rows[0][1].visible_text(), "y");
+        assert_eq!(data.rows[1][0].visible_text(), "z");
+        assert_eq!(data.rows[1][1].visible_text(), "w");
+        assert_eq!(editor.undo_history.len(), 1);
+    });
+}
+
+#[gpui::test]
 async fn standalone_root_image_installs_runtime_and_resolves_relative_path(
     cx: &mut TestAppContext,
 ) {
@@ -736,4 +814,3 @@ async fn standalone_root_image_with_underscores_installs_runtime(cx: &mut TestAp
         assert_eq!(editor.document.markdown_text(cx), markdown);
     });
 }
-

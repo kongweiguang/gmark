@@ -522,6 +522,9 @@ pub(super) fn apply_extra_style_to_fragments(
         if extra_style.code {
             fragment.style.code = true;
         }
+        if extra_style.highlight {
+            fragment.style.highlight = true;
+        }
         if extra_style.has_script() {
             fragment.style.script = extra_style.script;
         }
@@ -538,6 +541,8 @@ pub(super) fn match_open_delimiter(tokens: &[CharToken], index: usize) -> Option
         Some(Delimiter::Underline)
     } else if matches_sequence(tokens, index, "~~") {
         Some(Delimiter::StrikethroughMarkdown)
+    } else if is_double_equals_delimiter(tokens, index) && can_open_emphasis(tokens, index, 2) {
+        Some(Delimiter::HighlightMarkdown)
     } else if matches_sequence(tokens, index, "^") && can_open_script(tokens, index, '^') {
         Some(Delimiter::SuperscriptMarkdown)
     } else if is_single_tilde_delimiter(tokens, index) && can_open_script(tokens, index, '~') {
@@ -631,7 +636,12 @@ pub(super) fn has_closing_delimiter(
             continue;
         }
 
-        if matches_sequence(tokens, cursor, &close_str) {
+        let closes = if delimiter == Delimiter::HighlightMarkdown {
+            is_double_equals_delimiter(tokens, cursor)
+        } else {
+            matches_sequence(tokens, cursor, &close_str)
+        };
+        if closes {
             // Emphasis spans must enclose at least one character; a close
             // sitting immediately after the open (e.g. `**` or `*` `*`) is an
             // empty span and is treated as literal text instead.

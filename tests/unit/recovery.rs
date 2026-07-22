@@ -15,14 +15,14 @@ fn selection(offset: usize) -> RecoverySelection {
 #[test]
 fn recovery_journal_preserves_source_anchor_affinity_and_direction() {
     let temp = tempfile::tempdir().unwrap();
-    let source_selection = gmark_large_document::SourceSelection {
-        anchor: gmark_large_document::SourceAnchor::new(
+    let source_selection = gmark_paged_document::SourceSelection {
+        anchor: gmark_paged_document::SourceAnchor::new(
             12,
-            gmark_large_document::SourceAffinity::After,
+            gmark_paged_document::SourceAffinity::After,
         ),
-        head: gmark_large_document::SourceAnchor::new(
+        head: gmark_paged_document::SourceAnchor::new(
             4,
-            gmark_large_document::SourceAffinity::Before,
+            gmark_paged_document::SourceAffinity::Before,
         ),
     };
     let persisted = RecoverySelection::from_source_selection(source_selection);
@@ -367,4 +367,36 @@ fn long_session_compacts_atomically_and_preserves_latest_mode_and_selection() {
     assert_eq!(recovered.selection, selection(source.len()));
     assert_eq!(recovered.view_mode, "rendered");
     assert!(journal.edit_count < 20);
+}
+
+#[test]
+fn resident_recovery_backend_accepts_the_shared_source_transaction_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut journal = RecoveryJournal::create(temp.path(), None, "base".to_owned()).unwrap();
+    let source_selection = gmark_document_core::SourceSelection::collapsed(
+        6,
+        gmark_document_core::SourceAffinity::After,
+    );
+    gmark_document_core::RecoveryBackend::record(
+        &mut journal,
+        &gmark_document_core::RecoveryRecord {
+            action: gmark_document_core::RecoveryAction::Transaction(
+                gmark_document_core::Transaction::new(
+                    gmark_document_core::DocumentRevision(0),
+                    vec![gmark_document_core::SourceEdit::new(0..4, "edited")],
+                ),
+            ),
+            selection: Some(source_selection),
+            view_id: gmark_document_core::DocumentViewId::source(),
+        },
+    )
+    .unwrap();
+
+    let recovered = replay_journal(&journal.journal_path).unwrap();
+    assert_eq!(recovered.source, "edited");
+    assert_eq!(
+        recovered.selection,
+        RecoverySelection::from_source_selection(source_selection)
+    );
+    assert_eq!(recovered.view_mode, "source");
 }

@@ -173,8 +173,8 @@ impl Editor {
             self.cancel_external_conflict(cx);
             return;
         }
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |view, cx| {
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |view, cx| {
                 view.on_dismiss_transient_ui(&DismissTransientUi, window, cx);
             });
         }
@@ -294,6 +294,15 @@ impl Editor {
         let inserted = match command.plan() {
             EditingCommandPlan::InsertImage => Self::new_block(cx, BlockRecord::paragraph("![]()")),
             EditingCommandPlan::InsertMath => Self::new_block(cx, BlockRecord::math("$$\n\n$$")),
+            EditingCommandPlan::InsertMermaid => Self::new_block(
+                cx,
+                BlockRecord::mermaid("```mermaid\nflowchart TD\n    A --> B\n```"),
+            ),
+            EditingCommandPlan::InsertFootnoteDefinition => {
+                let id = Self::next_footnote_id(&self.document.markdown_text(cx));
+                Self::new_footnote_definition_block(cx, id)
+            }
+            EditingCommandPlan::InsertFootnoteReference => return,
             EditingCommandPlan::InsertHorizontalRule => Self::new_block(
                 cx,
                 BlockRecord::new(BlockKind::Separator, InlineTextTree::plain(String::new())),
@@ -321,6 +330,7 @@ impl Editor {
             let target = match command {
                 EditingCommandId::Image => 2,
                 EditingCommandId::Math => 3,
+                EditingCommandId::Mermaid => "```mermaid\n".len(),
                 _ => 0,
             };
             inserted.assign_collapsed_selection_offset(
@@ -330,7 +340,17 @@ impl Editor {
             );
             cx.notify();
         });
-        self.focus_block(inserted.entity_id());
+        let focus = if command == EditingCommandId::FootnoteDefinition {
+            inserted
+                .read(cx)
+                .children
+                .first()
+                .map(Entity::entity_id)
+                .unwrap_or_else(|| inserted.entity_id())
+        } else {
+            inserted.entity_id()
+        };
+        self.focus_block(focus);
         EditingCommandHistory::record(command, cx);
         self.mark_dirty(cx);
         self.finalize_pending_undo_capture(cx);
@@ -428,12 +448,17 @@ impl Editor {
                 }
             }
             TableInsertTarget::Append => {
-                self.document.insert_blocks_at(
-                    None,
-                    self.document.root_count(),
-                    vec![new_block.clone()],
-                    cx,
-                );
+                let insert_at = self
+                    .document
+                    .first_root()
+                    .filter(|root| {
+                        self.document.root_count() == 1
+                            && root.read(cx).kind() == BlockKind::Paragraph
+                            && root.read(cx).display_text().is_empty()
+                    })
+                    .map_or_else(|| self.document.root_count(), |_| 0);
+                self.document
+                    .insert_blocks_at(None, insert_at, vec![new_block.clone()], cx);
             }
         }
 
@@ -442,6 +467,8 @@ impl Editor {
         // Add a trailing empty paragraph to land on when nothing follows it.
         self.ensure_trailing_paragraph_after_structural(&new_block, cx);
 
+        // 先提交源码事务，再为最终块实体安装 runtime；反过来会让投影同步清掉刚创建的 cell。
+        self.mark_dirty(cx);
         self.rebuild_table_runtimes(cx);
         if let Some(first_cell) = new_block
             .read(cx)
@@ -452,7 +479,6 @@ impl Editor {
             self.focus_block(first_cell.entity_id());
         }
         EditingCommandHistory::record(EditingCommandId::Table, cx);
-        self.mark_dirty(cx);
         self.finalize_pending_undo_capture(cx);
         self.request_active_block_scroll_into_view(cx);
         cx.notify();
@@ -511,6 +537,106 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.on_apply_column_alignment(TableColumnAlignment::Right, cx);
+    }
+
+    fn apply_selected_table_row_command(
+        &mut self,
+        offset: usize,
+        duplicate: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        if selection.kind != TableAxisKind::Row {
+            return;
+        }
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        if duplicate {
+            self.duplicate_table_row(&table_block, selection.index, cx);
+        } else {
+            self.insert_table_row(&table_block, selection.index + offset, cx);
+        }
+    }
+
+    pub(in crate::editor) fn on_insert_table_row_before(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_selected_table_row_command(0, false, cx);
+    }
+
+    pub(in crate::editor) fn on_insert_table_row_after(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_selected_table_row_command(1, false, cx);
+    }
+
+    pub(in crate::editor) fn on_duplicate_table_row(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_selected_table_row_command(0, true, cx);
+    }
+
+    fn apply_selected_table_column_command(
+        &mut self,
+        offset: usize,
+        duplicate: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        if selection.kind != TableAxisKind::Column {
+            return;
+        }
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        if duplicate {
+            self.duplicate_table_column(&table_block, selection.index, cx);
+        } else {
+            self.insert_table_column(&table_block, selection.index + offset, cx);
+        }
+    }
+
+    pub(in crate::editor) fn on_insert_table_column_before(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_selected_table_column_command(0, false, cx);
+    }
+
+    pub(in crate::editor) fn on_insert_table_column_after(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_selected_table_column_command(1, false, cx);
+    }
+
+    pub(in crate::editor) fn on_duplicate_table_column(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_selected_table_column_command(0, true, cx);
     }
 
     pub(in crate::editor) fn on_move_table_row_up(
@@ -631,13 +757,10 @@ impl Editor {
             .as_ref()
             .map(|table| table.rows.len());
         self.close_context_menu(cx);
-        // Visual index 0 is the header: deleting it promotes the first body row,
-        // unless there is no body row left, in which case it was the table's last
-        // row and the whole table is removed.
+        // Visual index 0 is the header. The last row is never removed implicitly;
+        // users must choose the explicit “Delete Table” command beside it.
         if selection.index == 0 {
-            if row_count == Some(0) {
-                self.remove_table_block(&table_block, cx);
-            } else {
+            if row_count != Some(0) {
                 self.delete_table_header_row(&table_block, cx);
             }
         } else {
@@ -681,12 +804,27 @@ impl Editor {
             .as_ref()
             .map(|table| table.column_count());
         self.close_context_menu(cx);
-        // Removing the only column empties the table, so drop the whole block.
-        if column_count == Some(1) {
-            self.remove_table_block(&table_block, cx);
-        } else {
+        // The only column is protected; the adjacent explicit table action owns
+        // destructive whole-table removal and makes the consequence unambiguous.
+        if column_count.is_some_and(|count| count > 1) {
             self.delete_table_column(&table_block, selection.index, cx);
         }
+    }
+
+    pub(in crate::editor) fn on_delete_selected_table(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        self.remove_table_block(&table_block, cx);
     }
 
     pub(super) fn render_axis_menu_item(

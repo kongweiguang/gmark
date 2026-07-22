@@ -10,6 +10,7 @@ impl Editor {
         self.saved_file_fingerprint = crate::recovery::fingerprint_file(&path).ok();
         self.external_file_conflict = false;
         self.allow_external_overwrite_once = false;
+        self.document_kind = DocumentKind::from_path(&path);
         self.file_path = Some(path);
         if path_changed {
             self.restart_file_watcher(cx);
@@ -103,7 +104,7 @@ impl Editor {
                     }
 
                     let write_started = super::perf::start();
-                    let result = atomic_write(&worker_path, &bytes);
+                    let result = gmark_document::atomic_write_verified(&worker_path, &bytes);
                     if let Some(started) = write_started {
                         let detail = result.as_ref().err().map(|error| error.stage().to_string());
                         super::perf::emit(
@@ -181,7 +182,7 @@ impl Editor {
                         error = Some(detail);
                     }
                 }
-                if std::mem::take(&mut editor.save_queued) && editor.document_dirty {
+                if std::mem::take(&mut editor.save_queued) && editor.is_document_dirty() {
                     editor.pending_save = true;
                     cx.notify();
                 }
@@ -245,7 +246,7 @@ impl Editor {
             );
         }
         let write_started = super::perf::start();
-        let result = atomic_write(path, &bytes);
+        let result = gmark_document::atomic_write_verified(path, &bytes);
         if let Some(started) = write_started {
             let detail = result.as_ref().err().map(|error| error.stage().to_string());
             super::perf::emit(
@@ -419,6 +420,7 @@ impl Editor {
         let saved_revision = snapshot.revision();
         let saved_document_epoch = self.document_epoch;
         let (default_dir, suggested_name) = self.save_dialog_defaults();
+        let document_kind = self.document_kind;
         let prompt = cx.prompt_for_new_path(&default_dir, suggested_name.as_deref());
         let weak_editor = cx.entity().downgrade();
         let weak_editor_for_cancel = weak_editor.clone();
@@ -466,9 +468,7 @@ impl Editor {
                 }
             };
 
-            if path.extension().is_none() {
-                path.set_extension("md");
-            }
+            document_kind.apply_default_extension(&mut path);
 
             let worker_format = source_format.clone();
             let result = cx
@@ -493,7 +493,7 @@ impl Editor {
                         );
                     }
                     let write_started = super::perf::start();
-                    let write_result = atomic_write(&path, &bytes);
+                    let write_result = gmark_document::atomic_write_verified(&path, &bytes);
                     if let Some(started) = write_started {
                         let detail = write_result
                             .as_ref()
@@ -596,7 +596,7 @@ impl Editor {
     }
 
     pub(crate) fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.source_surface.is_some() {
+        if self.document_host.is_some() {
             self.save_large_document_via_prompt(window, cx);
             return;
         }
@@ -608,10 +608,11 @@ impl Editor {
     }
 
     fn save_large_document_via_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(large_file) = self.source_surface.disk_view_cloned() else {
+        let Some(document_host) = self.document_host.clone() else {
             return;
         };
         let (default_dir, suggested_name) = self.save_dialog_defaults();
+        let document_kind = self.document_kind;
         let prompt = cx.prompt_for_new_path(&default_dir, suggested_name.as_deref());
         let window_handle = window.window_handle();
         let weak_editor = cx.entity().downgrade();
@@ -645,10 +646,8 @@ impl Editor {
                     return;
                 }
             };
-            if path.extension().is_none() {
-                path.set_extension("md");
-            }
-            let _ = large_file.update(cx, move |view, cx| {
+            document_kind.apply_default_extension(&mut path);
+            let _ = document_host.update(cx, move |view, cx| {
                 view.save_as_path(path, window_handle, cx);
             });
         })

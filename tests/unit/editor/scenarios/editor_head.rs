@@ -240,6 +240,11 @@ async fn rendered_block_surfaces_share_the_paragraph_content_edges(cx: &mut Test
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, source.to_owned(), None));
     visual.simulate_resize(size(px(1600.0), px(1200.0)));
     redraw(visual);
+    // LaTeX 与 Mermaid 都在防抖后异步生成 SVG；布局断言必须观察最终 surface，
+    // 不能把 pending placeholder 当成生产渲染结果。
+    visual.executor().advance_clock(Duration::from_millis(300));
+    visual.run_until_parked();
+    redraw(visual);
 
     let baseline = editor.read_with(visual, |editor, cx| {
         editor
@@ -300,7 +305,23 @@ async fn specialized_rendered_surfaces_share_the_paragraph_content_edges(cx: &mu
     );
     let (editor, visual) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, source.to_owned(), None));
+    editor.update(visual, |editor, cx| {
+        let baseline = editor
+            .document
+            .visible_blocks()
+            .iter()
+            .find(|visible| visible.entity.read(cx).display_text() == "alignment baseline")
+            .expect("baseline paragraph")
+            .entity
+            .clone();
+        editor.focus_block(baseline.entity_id());
+    });
     visual.simulate_resize(size(px(1600.0), px(1200.0)));
+    redraw(visual);
+    // LaTeX 与 Mermaid 都在防抖后异步生成 SVG；布局断言必须观察最终 surface，
+    // 不能把 pending placeholder 当成生产渲染结果。
+    visual.executor().advance_clock(Duration::from_millis(300));
+    visual.run_until_parked();
     redraw(visual);
 
     let baseline = editor.read_with(visual, |editor, cx| {

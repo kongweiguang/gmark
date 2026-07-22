@@ -1,0 +1,19 @@
+# @author kongweiguang
+
+[package]
+name = "gmark-json-graph"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+gmark-document-core = { path = "../gmark-document-core" }
+serde_json = "1"
+thiserror = "2"

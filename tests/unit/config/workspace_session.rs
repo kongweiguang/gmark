@@ -191,12 +191,12 @@ fn registry_v7_selection_without_affinity_uses_directional_defaults() {
     assert_eq!(source.anchor.byte_offset, 9);
     assert_eq!(
         source.anchor.affinity,
-        gmark_large_document::SourceAffinity::After
+        gmark_paged_document::SourceAffinity::After
     );
     assert_eq!(source.head.byte_offset, 2);
     assert_eq!(
         source.head.affinity,
-        gmark_large_document::SourceAffinity::Before
+        gmark_paged_document::SourceAffinity::Before
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -299,14 +299,14 @@ fn invalid_view_state_is_normalized_before_persistence() {
 fn workspace_session_round_trips_source_anchor_affinity() {
     let root = temp_root("selection-affinity");
     let dirs = GmarkConfigDirs::from_root(&root);
-    let source_selection = gmark_large_document::SourceSelection {
-        anchor: gmark_large_document::SourceAnchor::new(
+    let source_selection = gmark_paged_document::SourceSelection {
+        anchor: gmark_paged_document::SourceAnchor::new(
             9,
-            gmark_large_document::SourceAffinity::After,
+            gmark_paged_document::SourceAffinity::After,
         ),
-        head: gmark_large_document::SourceAnchor::new(
+        head: gmark_paged_document::SourceAnchor::new(
             2,
-            gmark_large_document::SourceAffinity::Before,
+            gmark_paged_document::SourceAffinity::Before,
         ),
     };
     let mut tab = WorkspaceSessionTab::new(PathBuf::from("a.md"), false);

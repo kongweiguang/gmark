@@ -116,9 +116,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_go_to_line(action, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_go_to_line(action, window, cx);
             });
         }
     }
@@ -169,8 +169,8 @@ impl Editor {
                     self.on_go_to_line_action(&crate::components::GoToLine, window, cx)
                 }
                 crate::accessibility::ERROR_ID => {
-                    if let Some(large_file) = self.source_surface.disk_view_cloned() {
-                        large_file.update(cx, |view, cx| view.activate_accessibility_error(cx));
+                    if let Some(document_host) = self.document_host.clone() {
+                        document_host.update(cx, |view, cx| view.activate_accessibility_error(cx));
                     }
                 }
                 _ => {}
@@ -195,8 +195,8 @@ mod document_view;
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(large_file) = self.source_surface.as_ref() {
-            let dirty = large_file.read(cx).is_dirty();
+        if let Some(document_host) = self.document_host.as_ref() {
+            let dirty = document_host.read(cx).is_dirty();
             self.document_dirty = dirty;
             self.pending_window_edited = dirty;
         }
@@ -220,6 +220,8 @@ impl Render for Editor {
         self.apply_pending_focus(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
+        self.source_document
+            .sync_source_selection(self.last_selection_snapshot.source_selection());
         self.refresh_find_if_stale(cx);
         self.sync_workspace_session_view_state(cx);
         self.sync_pending_save(window, cx);
@@ -280,6 +282,7 @@ impl Render for Editor {
             .capture_action(cx.listener(Self::on_copy_capture))
             .capture_action(cx.listener(Self::on_copy_as_markdown_capture))
             .capture_action(cx.listener(Self::on_cut_capture))
+            .capture_action(cx.listener(Self::on_paste_capture))
             .capture_action(cx.listener(Self::on_delete_capture))
             .capture_action(cx.listener(Self::on_delete_back_capture))
             .capture_key_down(cx.listener(Self::on_editor_key_down_capture))
@@ -538,7 +541,16 @@ impl Render for Editor {
         } else {
             content_area.into_any_element()
         };
-        let editor_content = self.source_surface.render_content(resident_content);
+        let editor_content = if let Some(document_host) = self.document_host.as_ref() {
+            div()
+                .id("document-host-tab-content")
+                .debug_selector(|| "document-host-tab-content".to_owned())
+                .size_full()
+                .child(document_host.clone())
+                .into_any_element()
+        } else {
+            resident_content
+        };
         let editor_content = div()
             .id("editor-content")
             .debug_selector(|| "editor-content".to_owned())
@@ -631,6 +643,18 @@ impl Render for Editor {
         } else {
             base
         };
+        let base =
+            if let Some(prompt) = self.render_table_fragment_merge_prompt(&theme, &strings, cx) {
+                base.child(prompt)
+            } else {
+                base
+            };
+        let base =
+            if let Some(completion) = self.render_workspace_link_completion(&theme, &strings, cx) {
+                base.child(completion)
+            } else {
+                base
+            };
         let base = if let Some(workspace_dialog) =
             self.render_workspace_operation_dialog_overlay(&theme, &strings, cx)
         {
@@ -657,8 +681,21 @@ impl Render for Editor {
         } else {
             base
         };
+        let base = if let Some(new_tab_menu) =
+            self.render_new_tab_menu_overlay(&theme, &strings, window, cx)
+        {
+            base.child(new_tab_menu)
+        } else {
+            base
+        };
         let base = if self.export_in_progress {
             base.child(self.render_export_progress(&theme, status_bar_height, cx))
+        } else {
+            base
+        };
+        let base = if let Some(overlay) = self.render_diagram_overlay(&theme, &strings, window, cx)
+        {
+            base.child(overlay)
         } else {
             base
         };

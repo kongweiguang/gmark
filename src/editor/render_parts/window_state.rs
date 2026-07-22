@@ -30,7 +30,8 @@ impl Editor {
     pub(super) fn sync_window_title(&mut self, window: &mut Window, strings: &I18nStrings) {
         if self.pending_window_title_refresh {
             self.pending_window_title_refresh = false;
-            let title = Self::window_title(self.file_path.as_deref(), self.document_dirty, strings);
+            let title =
+                Self::window_title(self.file_path.as_deref(), self.is_document_dirty(), strings);
             window.set_window_title(&title);
         }
     }

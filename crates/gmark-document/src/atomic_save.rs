@@ -35,6 +35,8 @@ pub enum AtomicWriteStage {
     SyncPersisted,
     /// 同步父目录元数据。
     SyncDirectory,
+    /// 保存完成后重新读取目标并核对全部字节。
+    VerifyPersisted,
 }
 
 impl fmt::Display for AtomicWriteStage {
@@ -50,6 +52,7 @@ impl fmt::Display for AtomicWriteStage {
             Self::PersistTemporary => "persist-temporary",
             Self::SyncPersisted => "sync-persisted",
             Self::SyncDirectory => "sync-directory",
+            Self::VerifyPersisted => "verify-persisted",
         };
         formatter.write_str(label)
     }
@@ -58,7 +61,10 @@ impl fmt::Display for AtomicWriteStage {
 impl AtomicWriteStage {
     /// 原子替换完成后再失败时，目标文件可能已经包含新内容。
     pub fn target_may_have_changed(self) -> bool {
-        matches!(self, Self::SyncPersisted | Self::SyncDirectory)
+        matches!(
+            self,
+            Self::SyncPersisted | Self::SyncDirectory | Self::VerifyPersisted
+        )
     }
 }
 
@@ -105,6 +111,28 @@ impl AtomicWriteError {
 /// 继承其权限。
 pub fn atomic_write(path: impl AsRef<Path>, contents: &[u8]) -> Result<(), AtomicWriteError> {
     atomic_write_with_stage_hook(path.as_ref(), contents, |_| Ok(()))
+}
+
+/// 原子替换后重新打开目标并逐字节验证；只有回读一致才可提交新的文档基线。
+pub fn atomic_write_verified(
+    path: impl AsRef<Path>,
+    contents: &[u8],
+) -> Result<(), AtomicWriteError> {
+    let path = path.as_ref();
+    atomic_write(path, contents)?;
+    let persisted = fs::read(path)
+        .map_err(|error| AtomicWriteError::new(path, AtomicWriteStage::VerifyPersisted, error))?;
+    if persisted != contents {
+        return Err(AtomicWriteError::new(
+            path,
+            AtomicWriteStage::VerifyPersisted,
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "persisted bytes differ from the save snapshot",
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn atomic_write_with_stage_hook(

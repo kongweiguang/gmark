@@ -11,10 +11,10 @@ impl Editor {
 
     pub(super) fn capture_source_selection_snapshot(&self, cx: &App) -> UndoSelectionSnapshot {
         if self.view_mode == ViewMode::Preview {
-            return self.remember_source_surface_selection(self.last_selection_snapshot);
+            return self.last_selection_snapshot;
         }
         if let Some(snapshot) = self.cross_block_source_selection_snapshot(cx) {
-            return self.remember_source_surface_selection(snapshot);
+            return snapshot;
         }
 
         if matches!(self.view_mode, ViewMode::Source | ViewMode::Split) {
@@ -29,11 +29,11 @@ impl Editor {
                     )
                 })
                 .unwrap_or_else(Self::empty_selection_snapshot);
-            return self.remember_source_surface_selection(snapshot);
+            return snapshot;
         }
 
         let Some(target) = self.current_edit_target_from_state(cx) else {
-            return self.remember_source_surface_selection(self.last_selection_snapshot);
+            return self.last_selection_snapshot;
         };
         let mapping = self
             .build_source_target_mapping_for_entity(target.entity_id(), cx)
@@ -43,7 +43,7 @@ impl Editor {
                     .find(|mapping| mapping.entity.entity_id() == target.entity_id())
             });
         let Some(mapping) = mapping else {
-            return self.remember_source_surface_selection(self.last_selection_snapshot);
+            return self.last_selection_snapshot;
         };
 
         let selected_range = target.read(cx).selected_range.clone();
@@ -56,19 +56,7 @@ impl Editor {
         let end = mapping.full_source_range.start
             + mapping.content_to_source[content_range.end.min(max_offset)];
 
-        self.remember_source_surface_selection(UndoSelectionSnapshot::from_range(
-            start..end,
-            target.read(cx).selection_reversed,
-        ))
-    }
-
-    fn remember_source_surface_selection(
-        &self,
-        snapshot: UndoSelectionSnapshot,
-    ) -> UndoSelectionSnapshot {
-        self.source_surface
-            .sync_resident_selection(snapshot.source_selection());
-        snapshot
+        UndoSelectionSnapshot::from_range(start..end, target.read(cx).selection_reversed)
     }
 
     pub(super) fn capture_history_entry(&self, kind: UndoCaptureKind, cx: &App) -> HistoryEntry {
@@ -210,8 +198,8 @@ impl Editor {
         snapshot: &UndoSelectionSnapshot,
         cx: &mut Context<Self>,
     ) {
-        self.source_surface
-            .sync_resident_selection(snapshot.source_selection());
+        self.source_document
+            .sync_source_selection(snapshot.source_selection());
         let range = snapshot.range();
         let reversed = snapshot.reversed();
         match self.view_mode {

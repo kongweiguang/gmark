@@ -298,6 +298,13 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 原生表格容器包裹着独立的单元格编辑器；容器不得重复处理从单元格冒泡的点击，
+        // 否则会在单元格请求聚焦后立即把焦点抢回表格块。
+        if self.kind() == BlockKind::Table && self.table_runtime.is_some() {
+            self.is_selecting = false;
+            return;
+        }
+
         if self.showing_rendered_image() {
             self.is_selecting = false;
             if event.click_count >= 2 {
@@ -344,12 +351,22 @@ impl Block {
     pub(crate) fn on_read_only_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.is_selecting = false;
         if self.pointer_link_hit(event.position).is_some() {
+            self.is_selecting = false;
             cx.stop_propagation();
+            return;
+        }
+
+        self.focus_handle.focus(window);
+        self.is_selecting = true;
+        let offset = self.index_for_mouse_position(event.position);
+        if event.modifiers.shift {
+            self.select_to(offset, cx);
+        } else {
+            self.move_to(offset, cx);
         }
     }
 
@@ -359,7 +376,9 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(link) = self.pointer_link_hit(event.position) {
+        let was_selecting = self.is_selecting;
+        self.is_selecting = false;
+        if !was_selecting && let Some(link) = self.pointer_link_hit(event.position) {
             self.open_rendered_link(&link, cx);
         }
     }
@@ -648,6 +667,42 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         self.toggle_inline_format(InlineFormat::Underline, cx);
+    }
+
+    pub(crate) fn on_highlight_selection(
+        &mut self,
+        _: &HighlightSelection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Highlight, cx);
+    }
+
+    pub(crate) fn on_superscript_selection(
+        &mut self,
+        _: &SuperscriptSelection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Superscript, cx);
+    }
+
+    pub(crate) fn on_subscript_selection(
+        &mut self,
+        _: &SubscriptSelection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Subscript, cx);
+    }
+
+    pub(crate) fn on_inline_math_selection(
+        &mut self,
+        _: &InlineMathSelection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.insert_inline_math(cx);
     }
 
     pub(crate) fn on_code_selection(

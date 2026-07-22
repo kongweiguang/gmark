@@ -126,6 +126,19 @@ impl Block {
                 .record
                 .title
                 .selection_has_style(range, StyleFlag::Underline),
+            ToolbarCommand::Highlight => self
+                .record
+                .title
+                .selection_has_style(range, StyleFlag::Highlight),
+            ToolbarCommand::Superscript => self
+                .record
+                .title
+                .selection_has_style(range, StyleFlag::Superscript),
+            ToolbarCommand::Subscript => self
+                .record
+                .title
+                .selection_has_style(range, StyleFlag::Subscript),
+            ToolbarCommand::InlineMath => false,
             ToolbarCommand::Link => self.record.title.selection_has_link(range),
             ToolbarCommand::Overflow => self.selection_toolbar_overflow_open,
             ToolbarCommand::ClearFormatting => false,
@@ -167,6 +180,12 @@ impl Block {
             ToolbarCommand::Code => self.toggle_inline_format(InlineFormat::Code, cx),
             ToolbarCommand::Link => self.toggle_inline_link(cx),
             ToolbarCommand::Underline => self.toggle_inline_format(InlineFormat::Underline, cx),
+            ToolbarCommand::Highlight => self.toggle_inline_format(InlineFormat::Highlight, cx),
+            ToolbarCommand::Superscript => self.toggle_inline_format(InlineFormat::Superscript, cx),
+            ToolbarCommand::Subscript => self.toggle_inline_format(InlineFormat::Subscript, cx),
+            ToolbarCommand::InlineMath => {
+                self.insert_inline_math(cx);
+            }
             ToolbarCommand::ClearFormatting => self.clear_inline_formatting(cx),
             ToolbarCommand::Overflow => {
                 self.selection_toolbar_overflow_open = !self.selection_toolbar_overflow_open;
@@ -399,7 +418,11 @@ impl Block {
                     ToolbarCommand::Italic => symbol.italic(),
                     ToolbarCommand::Strikethrough => symbol.line_through(),
                     ToolbarCommand::Underline => symbol.underline(),
-                    ToolbarCommand::ClearFormatting => symbol,
+                    ToolbarCommand::Superscript
+                    | ToolbarCommand::Subscript
+                    | ToolbarCommand::InlineMath
+                    | ToolbarCommand::Highlight
+                    | ToolbarCommand::ClearFormatting => symbol,
                     ToolbarCommand::BlockType => symbol,
                     _ => symbol,
                 }
@@ -499,11 +522,6 @@ impl Block {
                 self.render_selection_toolbar_button(command, show_block_type_label, theme, cx)
             })
             .collect::<Vec<_>>();
-        let overflow_width = 32.0;
-        let overflow_on_right =
-            position.left + toolbar_width + TOOLBAR_GAP + overflow_width + VIEWPORT_INSET
-                <= f32::from(viewport.width);
-        let overflow_on_left = position.left >= VIEWPORT_INSET + overflow_width + TOOLBAR_GAP;
         let overflow = self.selection_toolbar_overflow_open.then(|| {
             let menu = div()
                 .id("selection-toolbar-overflow-menu")
@@ -516,17 +534,21 @@ impl Block {
                 .border_color(c.dialog_border)
                 .rounded(px(6.0))
                 .shadow_md()
-                .child(self.render_selection_toolbar_button(
-                    ToolbarCommand::ClearFormatting,
-                    false,
-                    theme,
-                    cx,
-                ));
-            if overflow_on_right {
-                menu.left(px(toolbar_width + 4.0))
-            } else if overflow_on_left {
-                menu.right(px(toolbar_width + 4.0))
-            } else if position.above {
+                .flex()
+                .flex_col()
+                .children(
+                    [
+                        ToolbarCommand::Underline,
+                        ToolbarCommand::Highlight,
+                        ToolbarCommand::Superscript,
+                        ToolbarCommand::Subscript,
+                        ToolbarCommand::InlineMath,
+                        ToolbarCommand::ClearFormatting,
+                    ]
+                    .into_iter()
+                    .map(|command| self.render_selection_toolbar_button(command, false, theme, cx)),
+                );
+            if position.above {
                 menu.bottom(px(TOOLBAR_HEIGHT + 4.0))
             } else {
                 menu.top(px(TOOLBAR_HEIGHT + 4.0))

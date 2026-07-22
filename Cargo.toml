@@ -2,7 +2,7 @@
 
 [package]
 name = "gmark"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 authors = ["kongweiguang"]
@@ -12,9 +12,12 @@ license = "GPL-3.0-or-later"
 [workspace]
 members = [
     ".",
+    "crates/gmark-document-core",
     "crates/gmark-document",
+    "crates/gmark-document-runtime",
     "crates/gmark-fuzz-support",
-    "crates/gmark-large-document",
+    "crates/gmark-json-graph",
+    "crates/gmark-paged-document",
     "crates/gmark-recovery-codec",
     "xtask",
 ]
@@ -87,8 +90,13 @@ code-highlight-config = [
 
 [dependencies]
 anyhow = "1"
+csv = "1"
+tempfile = "=3.27.0"
 gmark-document = { path = "crates/gmark-document" }
-gmark-large-document = { path = "crates/gmark-large-document" }
+gmark-document-core = { path = "crates/gmark-document-core" }
+gmark-document-runtime = { path = "crates/gmark-document-runtime" }
+gmark-json-graph = { path = "crates/gmark-json-graph" }
+gmark-paged-document = { package = "gmark-paged-document", path = "crates/gmark-paged-document" }
 gmark-recovery-codec = { path = "crates/gmark-recovery-codec" }
 base64 = "0.22.1"
 uuid = "1.23"
@@ -163,7 +171,6 @@ accesskit_unix = { version = "=0.22.1", default-features = false, features = ["a
 gpui = { version = "=0.2.2", features = ["test-support"] }
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support", "html_reports"] }
 sysinfo = "=0.31.4"
-tempfile = "=3.27.0"
 unicode-segmentation = "1.13"
 resvg = { version = "=0.45.1", default-features = false }
 

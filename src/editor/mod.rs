@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gmark_document::{Revision, SourceDocument};
-use gmark_large_document::{SourceAffinity, SourceSelection};
+use gmark_paged_document::{SourceAffinity, SourceSelection};
 use gpui::*;
 
 use self::context_menu::{ContextMenuState, TableInsertDialogState};
@@ -32,7 +32,9 @@ mod auto_save;
 mod close;
 mod command_palette;
 mod context_menu;
+mod diagram_overlay;
 mod document;
+mod document_session;
 mod encoding;
 mod events;
 mod export;
@@ -41,20 +43,22 @@ mod file_watch;
 mod find_replace;
 mod focus_modes;
 mod history;
+mod link_completion;
 pub(crate) use crate::perf;
 mod persistence;
 mod projection;
 mod recovery;
 mod render;
-pub(crate) use render::editor_top_padding;
+pub(crate) use render::source_editor_top_padding;
 mod runtime_context;
 mod selection;
 mod source_format;
 mod source_mapping;
-mod source_surface;
 mod spellcheck;
 mod status_bar;
 mod table_edit;
+mod table_fragment;
+mod table_selection;
 mod tabs;
 pub(crate) use tabs::{DetachedTab, RestoredTab};
 #[cfg(test)]
@@ -67,8 +71,8 @@ mod window_state;
 mod workspace;
 mod workspace_file_ops;
 
+use self::document_session::EditorDocumentSession;
 use self::projection::PreparedSplitProjection;
-use self::source_surface::SourceSurface;
 use self::status_bar::StatusBarState;
 use self::virtual_surface::VirtualSurfaceState;
 use self::workspace::WorkspaceState;
@@ -78,6 +82,54 @@ use self::workspace::WorkspaceState;
 pub(crate) struct PendingOpenLink {
     pub(crate) prompt_target: String,
     pub(crate) open_target: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TableFragmentMergeDirection {
+    IntoPrevious,
+    IntoNext,
+}
+
+#[derive(Clone)]
+struct TableFragmentMergeTarget {
+    table_id: EntityId,
+    direction: TableFragmentMergeDirection,
+    rows: Vec<Vec<InlineTextTree>>,
+}
+
+#[derive(Clone)]
+struct TableFragmentMergeState {
+    base_revision: Revision,
+    parent_id: Option<EntityId>,
+    fragment_ids: Vec<EntityId>,
+    targets: Vec<TableFragmentMergeTarget>,
+}
+
+#[derive(Clone)]
+struct DiagramOverlayState {
+    block_id: EntityId,
+    preview_key: u64,
+    rendered: crate::components::MermaidSvgRender,
+    actual_size: bool,
+    close_focus_handle: FocusHandle,
+    focus_close_on_render: bool,
+}
+
+#[derive(Clone, Debug)]
+struct WorkspaceLinkCandidate {
+    path: PathBuf,
+    relative_workspace_path: String,
+    title: String,
+    disambiguate: bool,
+}
+
+#[derive(Clone, Debug)]
+struct WorkspaceLinkCompletionState {
+    block_id: EntityId,
+    base_revision: Revision,
+    trigger_range: std::ops::Range<usize>,
+    selected: usize,
+    candidates: Vec<WorkspaceLinkCandidate>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -97,12 +149,14 @@ pub struct Editor {
     accessibility_bridge: Option<crate::accessibility::AccessibilityBridge>,
     accessibility_wake_task: Option<Task<()>>,
     accessibility_revision: Option<u64>,
-    /// 普通与磁盘文档共用的 Source backend owner；磁盘实体只是受其持有的 adapter。
-    source_surface: SourceSurface,
+    /// 非 Markdown 格式与 Paged Source 的唯一应用视图宿主；Resident Markdown 由本 Editor 控制。
+    document_host: Option<Entity<crate::document_host::DocumentHost>>,
     /// Markdown 源文本真值；块树只负责当前视图的可重建投影。
-    source_document: SourceDocument,
+    source_document: EditorDocumentSession,
     /// 非 UTF-8 文件只读打开；用户明确转换后才允许编辑或保存。
     source_encoding: crate::document_io::DocumentEncoding,
+    /// 无路径文档也必须保留显式类型；不能再用 `file_path == None` 偷换成 Markdown。
+    document_kind: DocumentKind,
     /// 每次整文档替换递增；后台保存完成时用它拒绝回写到另一份文档。
     document_epoch: u64,
     /// Live、Preview 与 Split 共用的最近一次纯语义投影，可落后于正在编辑的源码 revision。
@@ -115,6 +169,7 @@ pub struct Editor {
     split_divider_focus_handle: FocusHandle,
     /// 主画布工具栏按钮跨 render 保持焦点身份，避免文档投影刷新打断键盘导航。
     document_toolbar_focus_handles: [FocusHandle; 3],
+    file_open_failure_focus_handles: [FocusHandle; 2],
     table_cells: HashMap<EntityId, TableCellBinding>,
     /// Which view the editor is currently presenting.
     pub(crate) view_mode: ViewMode,
@@ -142,6 +197,8 @@ pub struct Editor {
     pending_window_title_refresh: bool,
     document_dirty: bool,
     file_path: Option<PathBuf>,
+    /// 打不开的文件仍占用真实 Tab；错误与后续动作必须留在内容区，不能污染工作区扫描状态。
+    file_open_failure: Option<FileOpenFailure>,
     saved_file_fingerprint: Option<crate::recovery::FileFingerprint>,
     /// 父目录 watcher 跨原子替换存活；事件仍按当前文档 path 过滤。
     file_watch_guard: Option<file_watch::FileWatchGuard>,
@@ -199,6 +256,11 @@ pub struct Editor {
     context_menu_submenu_close_task: Option<Task<()>>,
     table_axis_preview: Option<TableAxisSelection>,
     table_axis_selection: Option<TableAxisSelection>,
+    table_cell_rectangle: Option<table_selection::TableCellRectangle>,
+    table_cell_drag_anchor: Option<(EntityId, TableCellPosition)>,
+    table_fragment_merge: Option<TableFragmentMergeState>,
+    diagram_overlay: Option<DiagramOverlayState>,
+    workspace_link_completion: Option<WorkspaceLinkCompletionState>,
     cross_block_selection: Option<CrossBlockSelection>,
     cross_block_drag: Option<CrossBlockDrag>,
     rendered_select_all_cycle: Option<RenderedSelectAllCycle>,
@@ -299,6 +361,13 @@ struct ExternalConflictPreview {
     local_bytes: usize,
     disk_bytes: usize,
     disk_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileOpenFailure {
+    path: PathBuf,
+    reason: String,
+    action_error: Option<String>,
 }
 
 /// Split 模式右侧只读投影的独立运行时状态。
@@ -467,6 +536,80 @@ pub enum ViewMode {
     Preview,
     /// Editable source and read-only projection shown side by side.
     Split,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentKind {
+    Unspecified,
+    Markdown,
+    Json,
+    Csv,
+}
+
+impl DocumentKind {
+    fn from_path(path: &Path) -> Self {
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("md" | "markdown") => Self::Markdown,
+            Some("json" | "jsonl" | "ndjson") => Self::Json,
+            Some("csv") => Self::Csv,
+            _ => Self::Unspecified,
+        }
+    }
+
+    fn initial_source(self) -> &'static str {
+        match self {
+            Self::Json => "{\n}\n",
+            Self::Csv => "Column 1,Column 2\n",
+            Self::Unspecified | Self::Markdown => "",
+        }
+    }
+
+    fn initial_view_mode(self) -> ViewMode {
+        match self {
+            Self::Markdown => ViewMode::Rendered,
+            Self::Unspecified | Self::Json | Self::Csv => ViewMode::Source,
+        }
+    }
+
+    fn untitled_name(self) -> &'static str {
+        match self {
+            Self::Unspecified => "Untitled",
+            Self::Markdown => "Untitled.md",
+            Self::Json => "Untitled.json",
+            Self::Csv => "Untitled.csv",
+        }
+    }
+
+    fn default_extension(self) -> Option<&'static str> {
+        match self {
+            Self::Unspecified => None,
+            Self::Markdown => Some("md"),
+            Self::Json => Some("json"),
+            Self::Csv => Some("csv"),
+        }
+    }
+
+    fn apply_default_extension(self, path: &mut PathBuf) {
+        if path.extension().is_none()
+            && let Some(extension) = self.default_extension()
+        {
+            path.set_extension(extension);
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Unspecified => "icon/ui/file.svg",
+            Self::Markdown => "icon/workspace/markdown.svg",
+            Self::Json => "icon/ui/code.svg",
+            Self::Csv => "icon/ui/table.svg",
+        }
+    }
 }
 
 /// The informational dialogs that can be shown from the Help menu.

@@ -158,7 +158,7 @@ async fn source_content_edit_preserves_untouched_mixed_endings(cx: &mut TestAppC
     let saved = visual_cx.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.sync_source_document_from_projection("alpha\nBETA\ngamma\ndelta");
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             editor.save_to_existing_path(&path, window, cx)
         })
     });
@@ -181,7 +181,7 @@ async fn completed_old_save_snapshot_does_not_clear_newer_revision_dirty_state(
         let saved_revision = editor.source_document.revision();
         let saved_format = editor.source_document.source_format();
         editor.sync_source_document_from_projection("newer edit");
-        editor.document_dirty = true;
+        editor.set_document_dirty_for_test(true);
 
         assert!(!editor.apply_background_save_success(
             path.clone(),
@@ -396,7 +396,7 @@ async fn auto_save_after_idle_uses_normal_existing_file_save_path(cx: &mut TestA
 
     editor.update(visual_cx, |editor, cx| {
         editor.sync_source_document_from_projection("edited");
-        editor.document_dirty = true;
+        editor.set_document_dirty_for_test(true);
         editor.schedule_auto_save(cx);
         assert!(editor.auto_save_task.is_some());
     });
@@ -428,7 +428,7 @@ async fn auto_save_never_schedules_untitled_recovered_or_conflicted_documents(
     });
     let editor = cx.new(|cx| Editor::from_markdown(cx, "dirty".to_owned(), None));
     editor.update(cx, |editor, cx| {
-        editor.document_dirty = true;
+        editor.set_document_dirty_for_test(true);
         editor.schedule_auto_save(cx);
         assert!(editor.auto_save_task.is_none());
 
@@ -461,7 +461,7 @@ async fn later_edit_resets_auto_save_idle_deadline(cx: &mut TestAppContext) {
     let editor = cx.new(move |cx| Editor::from_markdown(cx, "base".to_owned(), Some(editor_path)));
 
     editor.update(cx, |editor, cx| {
-        editor.document_dirty = true;
+        editor.set_document_dirty_for_test(true);
         editor.schedule_auto_save(cx);
     });
     cx.executor().advance_clock(Duration::from_millis(500));
@@ -555,7 +555,7 @@ async fn save_blocks_external_file_overwrite_and_keeps_document_dirty(cx: &mut T
     let saved = visual_cx.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.sync_source_document_from_projection("local edit");
-            editor.document_dirty = true;
+            editor.set_document_dirty_for_test(true);
             editor.pending_window_edited = true;
             editor.save_to_existing_path(&path, window, cx)
         })

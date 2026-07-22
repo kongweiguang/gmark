@@ -321,6 +321,10 @@ fn is_editor_dispatch_action(action: &dyn Action) -> bool {
         || action.as_any().is::<ItalicSelection>()
         || action.as_any().is::<StrikethroughSelection>()
         || action.as_any().is::<UnderlineSelection>()
+        || action.as_any().is::<HighlightSelection>()
+        || action.as_any().is::<SuperscriptSelection>()
+        || action.as_any().is::<SubscriptSelection>()
+        || action.as_any().is::<InlineMathSelection>()
         || action.as_any().is::<CodeSelection>()
         || action.as_any().is::<LinkSelection>()
 }
@@ -328,6 +332,7 @@ fn is_editor_dispatch_action(action: &dyn Action) -> bool {
 pub(super) fn is_window_context_menu_action(action: &dyn Action) -> bool {
     action.as_any().is::<NewWindow>()
         || action.as_any().is::<OpenFile>()
+        || action.as_any().is::<OpenSafeSource>()
         || action.as_any().is::<OpenPreferences>()
         || action.as_any().is::<OpenRecentFile>()
         || action.as_any().is::<NoRecentFiles>()
@@ -424,6 +429,12 @@ fn menu_block_kind(action: &dyn Action) -> Option<BlockKind> {
         Some(BlockKind::Heading { level: 2 })
     } else if action.as_any().is::<SetHeading3>() {
         Some(BlockKind::Heading { level: 3 })
+    } else if action.as_any().is::<SetHeading4>() {
+        Some(BlockKind::Heading { level: 4 })
+    } else if action.as_any().is::<SetHeading5>() {
+        Some(BlockKind::Heading { level: 5 })
+    } else if action.as_any().is::<SetHeading6>() {
+        Some(BlockKind::Heading { level: 6 })
     } else if action.as_any().is::<SetParagraph>() {
         Some(BlockKind::Paragraph)
     } else if action.as_any().is::<SetBulletedList>() {
@@ -451,6 +462,8 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
         });
     } else if action.as_any().is::<OpenFile>() {
         prompt_and_open_files(cx);
+    } else if action.as_any().is::<OpenSafeSource>() {
+        prompt_and_open_safe_source(cx);
     } else if action.as_any().is::<OpenFolder>() {
         let _ = with_active_editor(cx, |editor, window, cx| {
             editor.on_open_folder_action(&OpenFolder, window, cx);
@@ -601,6 +614,8 @@ pub(crate) fn dispatch_menu_action_for_editor(
         });
     } else if action.as_any().is::<OpenFile>() {
         prompt_and_open_files_with_error_window(cx, current_window);
+    } else if action.as_any().is::<OpenSafeSource>() {
+        prompt_and_open_safe_source_with_error_window(cx, current_window);
     } else if action.as_any().is::<OpenFolder>() {
         let _ = target.update(cx, |editor, cx| {
             editor.on_open_folder_action(&OpenFolder, window, cx);

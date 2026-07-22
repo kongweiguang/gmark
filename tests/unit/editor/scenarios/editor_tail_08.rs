@@ -510,6 +510,42 @@ fn rendered_window_preserves_total_height() {
 }
 
 #[test]
+fn restored_deep_scroll_includes_unmeasured_rows_instead_of_only_the_last_row() {
+    let strides = uniform_strides(100, 20.0);
+    let estimated = Editor::rendered_window(&strides, 5_000.0, 400.0, 0.0, None);
+    assert_eq!(estimated.run_start, 99, "低估总高会触发末行兜底");
+
+    let window = Editor::include_render_measurement_frontier(estimated, &strides, 10);
+    assert_eq!(window.run_start, 10);
+    assert_eq!(window.run_end, 100);
+    assert_eq!(window.top_h, 200.0);
+    let rendered: f32 = strides[window.run_start..window.run_end].iter().sum();
+    assert_eq!(window.top_h + rendered + window.bottom_h, 2_000.0);
+}
+
+#[test]
+fn ordinary_deep_scroll_does_not_expand_to_the_measurement_frontier() {
+    let strides = uniform_strides(500, 20.0);
+    let window =
+        Editor::rendered_document_window(&strides, 7_500.0, 400.0, 200.0, 0, false, 128);
+
+    assert!(window.run_start > 0);
+    assert!(window.run_end - window.run_start < 128);
+}
+
+#[test]
+fn small_document_keeps_all_rows_mounted_at_a_deep_scroll_offset() {
+    let strides = uniform_strides(100, 20.0);
+    let window =
+        Editor::rendered_document_window(&strides, 5_000.0, 400.0, 0.0, 0, false, 512);
+
+    assert_eq!(window.run_start, 0);
+    assert_eq!(window.run_end, strides.len());
+    assert_eq!(window.top_h, 0.0);
+    assert_eq!(window.bottom_h, 0.0);
+}
+
+#[test]
 fn rendered_window_estimated_row_keeps_culling_active() {
     // Row 60 is an estimated (unmeasured) row; it must not disable culling.
     let mut strides = uniform_strides(100, 50.0);
@@ -537,7 +573,7 @@ fn rendered_window_all_estimated_windows_near_top() {
 }
 
 #[test]
-fn about_dialog_body_lines_include_repository_and_star_message() {
+fn about_dialog_body_lines_include_repository_without_star_message() {
     let strings = I18nStrings::zh_cn();
     let lines = Editor::about_dialog_body_lines(&strings);
 
@@ -547,10 +583,7 @@ fn about_dialog_body_lines_include_repository_and_star_message() {
         lines[2],
         format!("GitHub: {}", super::render::ABOUT_GITHUB_URL)
     );
-    assert_eq!(
-        lines[3],
-        "如果本项目对您有帮助，那不妨给本项目一颗 Star⭐，十分感谢！"
-    );
+    assert_eq!(lines.len(), 3);
 }
 
 #[gpui::test]
@@ -734,4 +767,3 @@ async fn source_to_preview_builds_read_only_rendered_projection(cx: &mut TestApp
         );
     });
 }
-

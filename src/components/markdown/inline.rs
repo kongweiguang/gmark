@@ -25,6 +25,7 @@ pub struct InlineStyle {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub highlight: bool,
     pub strikethrough: bool,
     pub code: bool,
     pub script: InlineScript,
@@ -54,6 +55,13 @@ impl InlineStyle {
     pub fn with_underline(self) -> Self {
         Self {
             underline: true,
+            ..self
+        }
+    }
+
+    pub fn with_highlight(self) -> Self {
+        Self {
+            highlight: true,
             ..self
         }
     }
@@ -92,6 +100,7 @@ impl InlineStyle {
             Delimiter::BoldMarkdown { .. } | Delimiter::BoldHtml => self.with_bold(),
             Delimiter::ItalicMarkdown { .. } | Delimiter::ItalicHtml => self.with_italic(),
             Delimiter::Underline => self.with_underline(),
+            Delimiter::HighlightMarkdown => self.with_highlight(),
             Delimiter::StrikethroughMarkdown => self.with_strikethrough(),
             Delimiter::CodeMarkdown { .. } => self.with_code(),
             Delimiter::SuperscriptMarkdown | Delimiter::SuperscriptHtml => self.with_superscript(),

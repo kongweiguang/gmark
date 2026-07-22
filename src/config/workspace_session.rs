@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
-use gmark_large_document::{SourceAffinity, SourceAnchor, SourceSelection};
+use gmark_document_core::{SourceAffinity, SourceAnchor, SourceSelection};
 use serde::{Deserialize, Serialize};
 
 use super::GmarkConfigDirs;

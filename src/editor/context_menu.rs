@@ -35,6 +35,7 @@ const ARROW_RIGHT_ICON: &str = "icon/ui/arrow-right.svg";
 const ARROW_UP_ICON: &str = "icon/ui/arrow-up.svg";
 const ARROW_DOWN_ICON: &str = "icon/ui/arrow-down.svg";
 const TRASH_ICON: &str = "icon/ui/trash.svg";
+const COPY_ICON: &str = "icon/ui/copy.svg";
 
 /// Target block position for inserting a native table.
 #[derive(Clone, Copy)]
@@ -81,11 +82,18 @@ enum ContextMenuCommand {
     AlignColumnRight,
     MoveColumnLeft,
     MoveColumnRight,
+    InsertColumnBefore,
+    InsertColumnAfter,
+    DuplicateColumn,
     DeleteColumn,
     ToggleTableHeaders,
     MoveRowUp,
     MoveRowDown,
+    InsertRowBefore,
+    InsertRowAfter,
+    DuplicateRow,
     DeleteRow,
+    DeleteTable,
     WorkspaceNewFile,
     WorkspaceNewFolder,
     WorkspaceRename,
@@ -158,6 +166,9 @@ impl Editor {
                 };
                 let main = match selection.kind {
                     TableAxisKind::Column => vec![
+                        entry(ContextMenuCommand::InsertColumnBefore, true),
+                        entry(ContextMenuCommand::InsertColumnAfter, true),
+                        entry(ContextMenuCommand::DuplicateColumn, true),
                         entry(ContextMenuCommand::AlignColumnLeft, true),
                         entry(ContextMenuCommand::AlignColumnCenter, true),
                         entry(ContextMenuCommand::AlignColumnRight, true),
@@ -166,24 +177,33 @@ impl Editor {
                             ContextMenuCommand::MoveColumnRight,
                             selection.index + 1 < table.column_count(),
                         ),
-                        entry(ContextMenuCommand::DeleteColumn, true),
+                        entry(ContextMenuCommand::DeleteColumn, table.column_count() > 1),
+                        entry(ContextMenuCommand::DeleteTable, true),
                     ],
                     TableAxisKind::Row if selection.index == 0 => vec![
+                        entry(ContextMenuCommand::InsertRowBefore, true),
+                        entry(ContextMenuCommand::InsertRowAfter, true),
+                        entry(ContextMenuCommand::DuplicateRow, true),
                         entry(ContextMenuCommand::ToggleTableHeaders, true),
                         entry(ContextMenuCommand::MoveRowUp, false),
                         entry(
                             ContextMenuCommand::MoveRowDown,
                             selection.index < table.rows.len(),
                         ),
-                        entry(ContextMenuCommand::DeleteRow, true),
+                        entry(ContextMenuCommand::DeleteRow, !table.rows.is_empty()),
+                        entry(ContextMenuCommand::DeleteTable, true),
                     ],
                     TableAxisKind::Row => vec![
+                        entry(ContextMenuCommand::InsertRowBefore, true),
+                        entry(ContextMenuCommand::InsertRowAfter, true),
+                        entry(ContextMenuCommand::DuplicateRow, true),
                         entry(ContextMenuCommand::MoveRowUp, selection.index > 0),
                         entry(
                             ContextMenuCommand::MoveRowDown,
                             selection.index < table.rows.len(),
                         ),
                         entry(ContextMenuCommand::DeleteRow, true),
+                        entry(ContextMenuCommand::DeleteTable, true),
                     ],
                 };
                 ContextMenuCommandModel {
@@ -306,13 +326,30 @@ impl Editor {
             ContextMenuCommand::MoveColumnRight => {
                 self.on_move_table_column_right(&click, window, cx)
             }
+            ContextMenuCommand::InsertColumnBefore => {
+                self.on_insert_table_column_before(&click, window, cx)
+            }
+            ContextMenuCommand::InsertColumnAfter => {
+                self.on_insert_table_column_after(&click, window, cx)
+            }
+            ContextMenuCommand::DuplicateColumn => {
+                self.on_duplicate_table_column(&click, window, cx)
+            }
             ContextMenuCommand::DeleteColumn => self.on_delete_table_column(&click, window, cx),
             ContextMenuCommand::ToggleTableHeaders => {
                 self.on_toggle_table_headers(&click, window, cx)
             }
             ContextMenuCommand::MoveRowUp => self.on_move_table_row_up(&click, window, cx),
             ContextMenuCommand::MoveRowDown => self.on_move_table_row_down(&click, window, cx),
+            ContextMenuCommand::InsertRowBefore => {
+                self.on_insert_table_row_before(&click, window, cx)
+            }
+            ContextMenuCommand::InsertRowAfter => {
+                self.on_insert_table_row_after(&click, window, cx)
+            }
+            ContextMenuCommand::DuplicateRow => self.on_duplicate_table_row(&click, window, cx),
             ContextMenuCommand::DeleteRow => self.on_delete_table_row(&click, window, cx),
+            ContextMenuCommand::DeleteTable => self.on_delete_selected_table(&click, window, cx),
             ContextMenuCommand::WorkspaceNewFile => {
                 self.open_workspace_operation_dialog(WorkspaceOperationKind::NewFile, window, cx)
             }
@@ -543,6 +580,9 @@ impl Editor {
         let had_keyboard = self.context_menu_keyboard_item.take().is_some()
             || self.context_menu_keyboard_submenu_item.take().is_some();
         let had_dialog = self.table_insert_dialog.take().is_some();
+        let had_table_fragment = self.table_fragment_merge.take().is_some();
+        let had_diagram_overlay = self.diagram_overlay.take().is_some();
+        let had_link_completion = self.workspace_link_completion.take().is_some();
         let had_workspace_dialog = self.dismiss_workspace_operation_dialog();
         let had_command_palette = self.dismiss_command_palette();
         let had_tab_context_menu = self.dismiss_tab_context_menu();
@@ -552,6 +592,9 @@ impl Editor {
         if had_contextual_editing
             || had_menu
             || had_dialog
+            || had_table_fragment
+            || had_diagram_overlay
+            || had_link_completion
             || had_workspace_dialog
             || had_command_palette
             || had_tab_context_menu

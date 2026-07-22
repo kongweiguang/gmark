@@ -54,8 +54,10 @@ impl Editor {
     /// spacers and the focused row stays mounted. `strides[i]` is row `i`'s
     /// footprint (height plus trailing gap); being scroll-invariant, their running
     /// sum places each row against a band from the current scroll offset.
-    /// Unmeasured rows use a lower-bound estimate, so the window never lands on a
-    /// spacer. Pure, so it is unit-tested headlessly.
+    /// Unmeasured rows use a lower-bound estimate. The caller must extend the run
+    /// to its measurement frontier before painting, so a restored deep offset
+    /// cannot land beyond the estimated document height. Pure, so it is unit-tested
+    /// headlessly.
     pub(super) fn rendered_window(
         strides: &[f32],
         scroll_y: f32,
@@ -127,6 +129,53 @@ impl Editor {
         }
     }
 
+    /// 未测量行的最小高度只适合裁剪已知前缀；恢复到较深滚动位置时，必须从首个
+    /// 未测量行连续挂载到目标窗口，避免低估总高后只渲染末行并留下整屏空白。
+    pub(super) fn include_render_measurement_frontier(
+        mut window: RenderWindow,
+        strides: &[f32],
+        measurement_frontier: usize,
+    ) -> RenderWindow {
+        let frontier = measurement_frontier.min(strides.len());
+        if frontier < window.run_start {
+            window.run_start = frontier;
+            window.top_h = strides[..frontier]
+                .iter()
+                .map(|stride| stride.max(0.0))
+                .sum();
+        }
+        window
+    }
+
+    /// 小文档完整挂载可避免滚动与行高学习之间的空白帧；超过阈值后才启用裁剪。
+    /// 只有恢复偏移已经落在估算总高之外时才扩展到测量前沿；普通深滚动必须保持
+    /// 有界窗口，否则一个未测量的首行会让数百行被同时挂载。
+    pub(super) fn rendered_document_window(
+        strides: &[f32],
+        scroll_y: f32,
+        viewport_height: f32,
+        overdraw: f32,
+        measurement_frontier: usize,
+        restoring_deep_offset: bool,
+        virtualization_threshold: usize,
+    ) -> RenderWindow {
+        if strides.len() < virtualization_threshold {
+            return RenderWindow {
+                run_start: 0,
+                run_end: strides.len(),
+                top_h: 0.0,
+                bottom_h: 0.0,
+            };
+        }
+        let window = Self::rendered_window(strides, scroll_y, viewport_height, overdraw, None);
+        let estimated_total = strides.iter().map(|stride| stride.max(0.0)).sum::<f32>();
+        if restoring_deep_offset && scroll_y > estimated_total {
+            Self::include_render_measurement_frontier(window, strides, measurement_frontier)
+        } else {
+            window
+        }
+    }
+
     /// Builds the OS window title, including the dirty marker when the
     /// document has unsaved changes.
     pub(super) fn window_title(
@@ -174,9 +223,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_undo(action, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_undo(action, window, cx);
             });
             return;
         }
@@ -189,9 +238,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_redo(action, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_redo(action, window, cx);
             });
             return;
         }
@@ -204,9 +253,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |large_file, cx| {
-                large_file.on_save_document(action, window, cx);
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |document_host, cx| {
+                document_host.on_save_document(action, window, cx);
             });
             return;
         }
@@ -313,22 +362,64 @@ impl Editor {
     }
 
     pub(crate) fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
+        let tabular_document = self
+            .document_host
+            .as_ref()
+            .is_some_and(|view| view.read(cx).supports_tabular_modes());
         let target = match self.view_mode {
             ViewMode::Rendered | ViewMode::Preview => ViewMode::Source,
+            ViewMode::Source if tabular_document => ViewMode::Preview,
             ViewMode::Source => ViewMode::Rendered,
+            ViewMode::Split if tabular_document => ViewMode::Source,
             ViewMode::Split => ViewMode::Rendered,
         };
         self.set_view_mode(target, cx);
     }
 
     pub(crate) fn set_view_mode(&mut self, target: ViewMode, cx: &mut Context<Self>) {
-        if let Some(large_file) = self.source_surface.disk_view_cloned() {
-            large_file.update(cx, |view, cx| match target {
-                ViewMode::Source => view.show_source_view(cx),
-                ViewMode::Rendered => view.show_mode_unavailable("Live", cx),
-                ViewMode::Split => view.show_mode_unavailable("Split", cx),
-                ViewMode::Preview => view.show_mode_unavailable("Preview", cx),
+        if let Some(document_host) = self.document_host.clone() {
+            let json_document = document_host.read(cx).is_json_document();
+            let delimited_document = document_host.read(cx).is_delimited_document();
+            let tabular_document = json_document || delimited_document;
+            if delimited_document
+                && target == ViewMode::Rendered
+                && !document_host.read(cx).source_is_utf8()
+            {
+                self.request_encoding_conversion(cx);
+                return;
+            }
+            let target = if json_document && target == ViewMode::Rendered {
+                ViewMode::Preview
+            } else {
+                target
+            };
+            let split_ratio = self.split_pane_ratio;
+            document_host.update(cx, |view, cx| {
+                if tabular_document {
+                    view.set_json_split_ratio(split_ratio, cx);
+                    match target {
+                        ViewMode::Source => view.show_source_view(cx),
+                        ViewMode::Split => view.show_split_view(cx),
+                        ViewMode::Preview => view.show_structure_view(cx),
+                        ViewMode::Rendered if delimited_document => view.show_live_view(cx),
+                        ViewMode::Rendered => view.show_structure_view(cx),
+                    }
+                } else {
+                    match target {
+                        ViewMode::Source => view.show_source_view(cx),
+                        ViewMode::Rendered => view.show_mode_unavailable("Live", cx),
+                        ViewMode::Split => view.show_mode_unavailable("Split", cx),
+                        ViewMode::Preview => view.show_mode_unavailable("Preview", cx),
+                    }
+                }
             });
+            if tabular_document {
+                self.view_mode = target;
+                self.status_bar.format_overflow_open = false;
+                self.schedule_workspace_session_save(cx);
+                cx.notify();
+                return;
+            }
             // 大文件增强尚未产生 resident Markdown projection 时，模式控件必须保持
             // Source 选中，不能让 Live/Preview 标签与实际源码画布相互矛盾。
             self.view_mode = ViewMode::Source;

@@ -76,7 +76,7 @@ impl Editor {
     ) -> bool {
         self.mark_explicit_window_close(false);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
-        self.persist_workspace_session_before_quit();
+        self.persist_workspace_session_before_quit(cx);
         self.evaluate_window_should_close(window, cx)
     }
 

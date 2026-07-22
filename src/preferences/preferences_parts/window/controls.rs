@@ -670,6 +670,72 @@ impl PreferencesWindow {
         } else {
             None
         };
+        let loading_preset_label = match self.document_loading.preset {
+            DocumentLoadingPreset::Balanced => {
+                strings.preferences_document_loading_balanced.clone()
+            }
+            DocumentLoadingPreset::LowMemory => {
+                strings.preferences_document_loading_low_memory.clone()
+            }
+            DocumentLoadingPreset::HighPerformance => strings
+                .preferences_document_loading_high_performance
+                .clone(),
+        };
+        let loading_dropdown = div()
+            .relative()
+            .w(px(280.0))
+            .h(px(32.0))
+            .flex_shrink_0()
+            .child(self.dropdown_button(
+                "preferences-document-loading-dropdown",
+                loading_preset_label,
+                PreferencesDropdown::DocumentLoadingPreset,
+                theme,
+                cx,
+            ));
+        let loading_list = if self.document_loading_dropdown_open {
+            let mut list = Self::dropdown_list(theme).top(px(238.0)).right_0();
+            for (index, preset) in [
+                DocumentLoadingPreset::Balanced,
+                DocumentLoadingPreset::LowMemory,
+                DocumentLoadingPreset::HighPerformance,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let label = match preset {
+                    DocumentLoadingPreset::Balanced => {
+                        strings.preferences_document_loading_balanced.clone()
+                    }
+                    DocumentLoadingPreset::LowMemory => {
+                        strings.preferences_document_loading_low_memory.clone()
+                    }
+                    DocumentLoadingPreset::HighPerformance => strings
+                        .preferences_document_loading_high_performance
+                        .clone(),
+                };
+                list = list.child(Self::dropdown_item(
+                    ("preferences-document-loading-option", index),
+                    label,
+                    self.document_loading.preset == preset,
+                    self.dropdown_selected_indices
+                        [PreferencesDropdown::DocumentLoadingPreset.index()]
+                        == index,
+                    theme,
+                    move |this, _, _, cx| {
+                        this.commit_dropdown_selection(
+                            PreferencesDropdown::DocumentLoadingPreset,
+                            index,
+                            cx,
+                        );
+                    },
+                    cx,
+                ));
+            }
+            Some(list)
+        } else {
+            None
+        };
         div()
             .relative()
             .w_full()
@@ -708,9 +774,82 @@ impl PreferencesWindow {
                         cx,
                     )),
             )
+            .child(
+                div()
+                    .w_full()
+                    .pt(px(8.0))
+                    .border_t(px(theme.dimensions.dialog_border_width))
+                    .border_color(theme.colors.dialog_border)
+                    .text_size(px(theme.typography.dialog_title_size))
+                    .font_weight(theme.typography.dialog_title_weight.to_font_weight())
+                    .text_color(theme.colors.dialog_title)
+                    .child(strings.preferences_document_loading.clone()),
+            )
+            .child(self.labeled_row(
+                &strings.preferences_document_loading_preset,
+                loading_dropdown,
+                theme,
+            ))
+            .child(self.labeled_row(
+                &strings.preferences_document_max_resident_mib,
+                self.numeric_stepper(
+                    "preferences-document-resident-mib",
+                    format!("{} MiB", self.document_loading.effective_max_resident_mib()),
+                    PreferencesStepperControl::ResidentMibDecrease,
+                    PreferencesStepperControl::ResidentMibIncrease,
+                    theme,
+                    cx,
+                ),
+                theme,
+            ))
+            .child(
+                self.labeled_row(
+                    &strings.preferences_document_max_resident_lines,
+                    self.numeric_stepper(
+                        "preferences-document-resident-lines",
+                        self.document_loading
+                            .effective_max_resident_lines()
+                            .to_string(),
+                        PreferencesStepperControl::ResidentLinesDecrease,
+                        PreferencesStepperControl::ResidentLinesIncrease,
+                        theme,
+                        cx,
+                    ),
+                    theme,
+                ),
+            )
+            .child(
+                self.labeled_row(
+                    &strings.preferences_document_max_structural_units,
+                    self.numeric_stepper(
+                        "preferences-document-structural-units",
+                        self.document_loading
+                            .effective_max_structural_units()
+                            .to_string(),
+                        PreferencesStepperControl::StructuralUnitsDecrease,
+                        PreferencesStepperControl::StructuralUnitsIncrease,
+                        theme,
+                        cx,
+                    ),
+                    theme,
+                ),
+            )
+            .children(self.document_loading.has_invalid_override().then(|| {
+                div()
+                    .text_size(px(theme.typography.dialog_body_size))
+                    .text_color(theme.colors.dialog_danger_button_bg)
+                    .child(strings.preferences_document_loading_invalid.clone())
+            }))
+            .child(
+                div()
+                    .text_size(px(theme.typography.dialog_body_size))
+                    .text_color(theme.colors.dialog_muted)
+                    .child(strings.preferences_document_loading_next_open.clone()),
+            )
             // 浮层最后绘制，确保不会被后续设置行覆盖。
             .children(startup_list)
             .children(auto_save_list)
+            .children(loading_list)
     }
 
     pub(super) fn render_theme_page(
@@ -719,15 +858,15 @@ impl PreferencesWindow {
         strings: &crate::i18n::I18nStrings,
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut dropdown = div()
+        let dropdown = div()
             .relative()
             .w(px(280.0))
             .h(px(32.0))
             .flex_shrink_0()
             .child(self.theme_dropdown_button(theme, cx));
-        if self.theme_dropdown_open {
+        let theme_list = if self.theme_dropdown_open {
             let mut list = Self::dropdown_list(theme)
-                .left_0()
+                .right_0()
                 .id("preferences-theme-dropdown-list")
                 .max_h(px(240.0))
                 .overflow_y_scroll();
@@ -745,9 +884,11 @@ impl PreferencesWindow {
                     cx,
                 ));
             }
-            dropdown = dropdown.child(list);
-        }
-        let mut language_dropdown = div()
+            Some(list)
+        } else {
+            None
+        };
+        let language_dropdown = div()
             .relative()
             .w(px(280.0))
             .h(px(32.0))
@@ -765,9 +906,10 @@ impl PreferencesWindow {
                     cx,
                 ),
             );
-        if self.language_dropdown_open {
+        let language_list = if self.language_dropdown_open {
             let mut list = Self::dropdown_list(theme)
-                .left_0()
+                .top(px(80.0))
+                .right_0()
                 .id("preferences-language-dropdown-list")
                 .max_h(px(240.0))
                 .overflow_y_scroll();
@@ -790,10 +932,13 @@ impl PreferencesWindow {
                     cx,
                 ));
             }
-            language_dropdown = language_dropdown.child(list);
-        }
+            Some(list)
+        } else {
+            None
+        };
 
         div()
+            .relative()
             .w_full()
             .max_w(px(PREFERENCES_FORM_WIDTH))
             .flex()
@@ -801,5 +946,8 @@ impl PreferencesWindow {
             .gap(px(12.0))
             .child(self.labeled_row(&strings.preferences_local_theme, dropdown, theme))
             .child(self.labeled_row(&strings.menu_language, language_dropdown, theme))
+            // 浮层最后绘制，避免后续设置行截获菜单区域的绘制与点击。
+            .children(theme_list)
+            .children(language_list)
     }
 }

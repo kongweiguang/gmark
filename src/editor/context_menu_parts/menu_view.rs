@@ -308,9 +308,9 @@ impl Editor {
                 selection,
             } => {
                 let (row_count, separator_count) = match selection.kind {
-                    TableAxisKind::Column => (6, 2),
-                    TableAxisKind::Row if selection.index == 0 => (4, 2),
-                    TableAxisKind::Row => (3, 1),
+                    TableAxisKind::Column => (10, 2),
+                    TableAxisKind::Row if selection.index == 0 => (8, 2),
+                    TableAxisKind::Row => (7, 1),
                 };
                 let panel_width = d.context_menu_axis_panel_width;
                 let panel_origin = clamped_floating_panel_origin(
@@ -327,11 +327,53 @@ impl Editor {
                     TableAxisKind::Column => vec![
                         Self::render_axis_menu_item(
                             theme,
+                            "table-axis-insert-column-before",
+                            s.slash_commands
+                                .get("insert_column_before")
+                                .cloned()
+                                .unwrap_or_else(|| "Insert Column Before".to_owned()),
+                            PLUS_ICON,
+                            true,
+                            self.context_menu_keyboard_item == Some(0),
+                            false,
+                            Self::on_insert_table_column_before,
+                            cx,
+                        ),
+                        Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-insert-column-after",
+                            s.slash_commands
+                                .get("insert_column_after")
+                                .cloned()
+                                .unwrap_or_else(|| "Insert Column After".to_owned()),
+                            PLUS_ICON,
+                            true,
+                            self.context_menu_keyboard_item == Some(1),
+                            false,
+                            Self::on_insert_table_column_after,
+                            cx,
+                        ),
+                        Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-duplicate-column",
+                            s.slash_commands
+                                .get("duplicate_column")
+                                .cloned()
+                                .unwrap_or_else(|| "Duplicate Column".to_owned()),
+                            COPY_ICON,
+                            true,
+                            self.context_menu_keyboard_item == Some(2),
+                            false,
+                            Self::on_duplicate_table_column,
+                            cx,
+                        ),
+                        Self::render_axis_menu_item(
+                            theme,
                             "table-axis-align-column-left",
                             s.table_axis_align_column_left.clone(),
                             ALIGN_LEFT_ICON,
                             true,
-                            self.context_menu_keyboard_item == Some(0),
+                            self.context_menu_keyboard_item == Some(3),
                             false,
                             Self::on_align_table_column_left,
                             cx,
@@ -342,7 +384,7 @@ impl Editor {
                             s.table_axis_align_column_center.clone(),
                             ALIGN_CENTER_ICON,
                             true,
-                            self.context_menu_keyboard_item == Some(1),
+                            self.context_menu_keyboard_item == Some(4),
                             false,
                             Self::on_align_table_column_center,
                             cx,
@@ -353,7 +395,7 @@ impl Editor {
                             s.table_axis_align_column_right.clone(),
                             ALIGN_RIGHT_ICON,
                             true,
-                            self.context_menu_keyboard_item == Some(2),
+                            self.context_menu_keyboard_item == Some(5),
                             false,
                             Self::on_align_table_column_right,
                             cx,
@@ -370,7 +412,7 @@ impl Editor {
                             s.table_axis_move_column_left.clone(),
                             ARROW_LEFT_ICON,
                             selection.index > 0,
-                            self.context_menu_keyboard_item == Some(3),
+                            self.context_menu_keyboard_item == Some(6),
                             false,
                             Self::on_move_table_column_left,
                             cx,
@@ -381,7 +423,7 @@ impl Editor {
                             s.table_axis_move_column_right.clone(),
                             ARROW_RIGHT_ICON,
                             selection.index + 1 < table.column_count(),
-                            self.context_menu_keyboard_item == Some(4),
+                            self.context_menu_keyboard_item == Some(7),
                             false,
                             Self::on_move_table_column_right,
                             cx,
@@ -397,17 +439,71 @@ impl Editor {
                             "table-axis-delete-column",
                             s.table_axis_delete_column.clone(),
                             TRASH_ICON,
-                            // Always enabled: deleting the last column removes the
-                            // whole table.
-                            true,
-                            self.context_menu_keyboard_item == Some(5),
-                            true,
+                            table.column_count() > 1,
+                            self.context_menu_keyboard_item == Some(8),
+                            selection.index != 0 || !table.rows.is_empty(),
                             Self::on_delete_table_column,
+                            cx,
+                        ),
+                        Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-delete-table",
+                            s.slash_commands
+                                .get("delete_table")
+                                .cloned()
+                                .unwrap_or_else(|| "Delete Table".to_owned()),
+                            TRASH_ICON,
+                            true,
+                            self.context_menu_keyboard_item == Some(9),
+                            true,
+                            Self::on_delete_selected_table,
                             cx,
                         ),
                     ],
                     TableAxisKind::Row => {
                         let mut items: Vec<AnyElement> = Vec::new();
+                        items.push(Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-insert-row-before",
+                            s.slash_commands
+                                .get("insert_row_before")
+                                .cloned()
+                                .unwrap_or_else(|| "Insert Row Before".to_owned()),
+                            PLUS_ICON,
+                            true,
+                            self.context_menu_keyboard_item == Some(0),
+                            false,
+                            Self::on_insert_table_row_before,
+                            cx,
+                        ));
+                        items.push(Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-insert-row-after",
+                            s.slash_commands
+                                .get("insert_row_after")
+                                .cloned()
+                                .unwrap_or_else(|| "Insert Row After".to_owned()),
+                            PLUS_ICON,
+                            true,
+                            self.context_menu_keyboard_item == Some(1),
+                            false,
+                            Self::on_insert_table_row_after,
+                            cx,
+                        ));
+                        items.push(Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-duplicate-row",
+                            s.slash_commands
+                                .get("duplicate_row")
+                                .cloned()
+                                .unwrap_or_else(|| "Duplicate Row".to_owned()),
+                            COPY_ICON,
+                            true,
+                            self.context_menu_keyboard_item == Some(2),
+                            false,
+                            Self::on_duplicate_table_row,
+                            cx,
+                        ));
                         // The header row (visual index 0) shares the normal row
                         // menu, with its Header Row styling toggle added on top.
                         if selection.index == 0 {
@@ -422,7 +518,7 @@ impl Editor {
                                     .items_center()
                                     .gap(px(6.0))
                                     .rounded(px(d.menu_item_radius))
-                                    .bg(if self.context_menu_keyboard_item == Some(0) {
+                                    .bg(if self.context_menu_keyboard_item == Some(3) {
                                         c.dialog_secondary_button_hover
                                     } else {
                                         c.dialog_surface
@@ -473,7 +569,7 @@ impl Editor {
                             ARROW_UP_ICON,
                             selection.index > 0,
                             self.context_menu_keyboard_item
-                                == Some(if selection.index == 0 { 1 } else { 0 }),
+                                == Some(if selection.index == 0 { 4 } else { 3 }),
                             false,
                             Self::on_move_table_row_up,
                             cx,
@@ -485,7 +581,7 @@ impl Editor {
                             ARROW_DOWN_ICON,
                             selection.index < table.rows.len(),
                             self.context_menu_keyboard_item
-                                == Some(if selection.index == 0 { 2 } else { 1 }),
+                                == Some(if selection.index == 0 { 5 } else { 4 }),
                             false,
                             Self::on_move_table_row_down,
                             cx,
@@ -508,9 +604,24 @@ impl Editor {
                             TRASH_ICON,
                             true,
                             self.context_menu_keyboard_item
-                                == Some(if selection.index == 0 { 3 } else { 2 }),
+                                == Some(if selection.index == 0 { 6 } else { 5 }),
                             true,
                             Self::on_delete_table_row,
+                            cx,
+                        ));
+                        items.push(Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-delete-table",
+                            s.slash_commands
+                                .get("delete_table")
+                                .cloned()
+                                .unwrap_or_else(|| "Delete Table".to_owned()),
+                            TRASH_ICON,
+                            true,
+                            self.context_menu_keyboard_item
+                                == Some(if selection.index == 0 { 7 } else { 6 }),
+                            true,
+                            Self::on_delete_selected_table,
                             cx,
                         ));
                         items
