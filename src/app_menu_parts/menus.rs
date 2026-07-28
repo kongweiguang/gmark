@@ -283,7 +283,7 @@ pub(crate) fn install_menus(cx: &mut App) {
     let recent_files = recent_files_for_menu();
     #[cfg(target_os = "macos")]
     let active_document_menu = cx.active_window().and_then(|window| {
-        let editor = window.downcast::<Editor>().ok()?;
+        let editor = window.downcast::<Editor>()?;
         editor
             .update(cx, |editor, _window, cx| {
                 Some((

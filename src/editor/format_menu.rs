@@ -367,7 +367,7 @@ impl Editor {
     pub(crate) fn schedule_platform_document_menu_refresh(&self, cx: &Context<Self>) {
         // App::set_menus is the macOS system-menu boundary. Defer the update
         // until the current entity notification has released its borrow.
-        cx.spawn(async move |_this, mut async_cx| {
+        cx.spawn(async move |_this, async_cx| {
             let _ = async_cx.update(|cx| crate::app_menu::install_menus(cx));
         })
         .detach();
