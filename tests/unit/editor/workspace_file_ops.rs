@@ -61,7 +61,8 @@ fn create_accepts_arbitrary_extensions_and_rejects_traversal_and_collisions() {
     assert!(plan_workspace_create(root, root, "../escape.md", WorkspaceCreateKind::File).is_err());
     assert!(plan_workspace_create(root, root, "existing.md", WorkspaceCreateKind::File).is_err());
     let source = plan_workspace_create(root, root, "main.rs", WorkspaceCreateKind::File).unwrap();
-    assert_eq!(source.path, root.join("main.rs"));
+    let canonical_root = dunce::canonicalize(root).unwrap();
+    assert_eq!(source.path, canonical_root.join("main.rs"));
 }
 
 #[test]
