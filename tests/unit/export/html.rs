@@ -1,12 +1,13 @@
 // @author kongweiguang
 
 use super::{
-    contains_tibetan_text, render_chromium_pdf_html_with_base_dir, render_html,
-    render_html_with_base_dir,
+    contains_tibetan_text, copy_export_asset_cancellable, prepare_html_resources,
+    render_chromium_pdf_html_with_base_dir, render_html, render_html_with_base_dir,
 };
 use crate::theme::Theme;
 use base64::{Engine as _, engine::general_purpose};
 use std::fs;
+use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
 #[test]
@@ -63,7 +64,7 @@ fn emits_pdf_compatible_theme_css() {
 
     assert!(!html.contains("hsla("));
     assert!(html.contains("color-scheme: dark;"));
-    assert!(html.contains("--vlt-bg: rgba(25,25,25,1.000);"));
+    assert!(html.contains("--vlt-bg: rgba(31,31,36,1.000);"));
     assert!(html.contains("html { background-color: var(--vlt-bg); color: var(--vlt-text); }"));
     assert!(html.contains("background-color: var(--vlt-code-bg);"));
     assert!(html.contains("border: 1px solid;\n  border-color: var(--vlt-border);"));
@@ -79,9 +80,9 @@ fn light_theme_exports_light_color_scheme() {
     let html = render_html("# Title\n\ntext", &Theme::light_theme(), "Doc");
 
     assert!(html.contains("color-scheme: light;"));
-    assert!(html.contains("--vlt-bg: rgba(247,248,243,1.000);"));
+    assert!(html.contains("--vlt-bg: rgba(250,250,253,1.000);"));
     assert!(html.contains("--vlt-text: rgba(29,29,31,1.000);"));
-    assert!(html.contains("--vlt-link: rgba(10,102,194,1.000);"));
+    assert!(html.contains("--vlt-link: rgba(0,122,255,1.000);"));
     assert!(html.contains("--vlt-code-bg: rgba(240,242,236,1.000);"));
     assert!(!html.contains("color-scheme: dark;"));
 }
@@ -327,6 +328,143 @@ fn export_keeps_missing_local_image_path() {
 
     assert!(html.contains("src=\"missing.png\""));
     assert!(!html.contains("data:image/png;base64,"));
+}
+
+#[test]
+fn exports_resource_card_and_copies_local_asset_without_downloading_urls() {
+    let root = std::env::temp_dir().join(format!("gmark-resource-export-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create temp resource export dir");
+    fs::write(root.join("demo.pdf"), b"pdf fixture").expect("write resource fixture");
+    let output = root.join("note.html");
+    let markdown = concat!(
+        "[需求](./demo.pdf \"gmark:resource\")\n\n",
+        "[在线](https://example.com/spec.pdf \"gmark:resource\")"
+    );
+    let cancelled = AtomicBool::new(false);
+    let prepared = prepare_html_resources(markdown, Some(&root), &output, &cancelled)
+        .expect("resource export preparation should succeed");
+
+    assert!(prepared.markdown.contains("gmark-resource-card"));
+    assert!(prepared.markdown.contains("note.assets/demo.pdf"));
+    assert!(prepared.markdown.contains("https://example.com/spec.pdf"));
+    assert!(root.join("note.assets/demo.pdf").is_file());
+
+    prepared.cleanup_created();
+    assert!(!root.join("note.assets/demo.pdf").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn resource_export_encodes_asset_href_without_changing_the_file_name() {
+    let root = std::env::temp_dir().join(format!("gmark-resource-href-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create resource href fixture");
+    let file_name = "需求 #1.pdf";
+    fs::write(root.join(file_name), b"pdf fixture").expect("write encoded-name fixture");
+    let output = root.join("note.html");
+    let markdown = format!("[需求](<./{file_name}> \"gmark:resource\")");
+    let cancelled = AtomicBool::new(false);
+
+    let prepared = prepare_html_resources(&markdown, Some(&root), &output, &cancelled)
+        .expect("resource href preparation should succeed");
+
+    assert!(prepared.markdown.contains("./note.assets/"));
+    assert!(prepared.markdown.contains("%20%231.pdf"));
+    assert!(!prepared.markdown.contains("note.assets/需求 #1.pdf"));
+    assert!(root.join("note.assets").join(file_name).is_file());
+
+    prepared.cleanup_created();
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn resource_export_reuses_equal_assets_and_numbers_collisions_without_overwrite() {
+    let root = std::env::temp_dir().join(format!("gmark-resource-reuse-{}", Uuid::new_v4()));
+    fs::create_dir_all(root.join("a")).expect("create first resource source");
+    fs::create_dir_all(root.join("b")).expect("create second resource source");
+    fs::create_dir_all(root.join("note.assets")).expect("create existing asset directory");
+    fs::write(root.join("a/demo.pdf"), b"existing").expect("write equal source");
+    fs::write(root.join("b/demo.pdf"), b"different").expect("write colliding source");
+    fs::write(root.join("note.assets/demo.pdf"), b"existing").expect("write existing asset");
+    let markdown = concat!(
+        "[A](./a/demo.pdf \"gmark:resource\")\n\n",
+        "[B](./b/demo.pdf \"gmark:resource\")"
+    );
+    let cancelled = AtomicBool::new(false);
+
+    let prepared =
+        prepare_html_resources(markdown, Some(&root), &root.join("note.html"), &cancelled)
+            .expect("resource collision preparation should succeed");
+
+    assert_eq!(
+        fs::read(root.join("note.assets/demo.pdf")).unwrap(),
+        b"existing"
+    );
+    assert_eq!(
+        fs::read(root.join("note.assets/demo1.pdf")).unwrap(),
+        b"different"
+    );
+    assert!(prepared.markdown.contains("note.assets/demo.pdf"));
+    assert!(prepared.markdown.contains("note.assets/demo1.pdf"));
+    assert_eq!(
+        prepared.created_files,
+        vec![root.join("note.assets/demo1.pdf")]
+    );
+
+    prepared.cleanup_created();
+    assert!(root.join("note.assets/demo.pdf").is_file());
+    assert!(!root.join("note.assets/demo1.pdf").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cancellable_asset_copy_cleans_partial_files_and_preserves_existing_targets() {
+    let root = std::env::temp_dir().join(format!("gmark-resource-cancel-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create cancellable copy fixture");
+    let source = root.join("source.pdf");
+    let target = root.join("target.pdf");
+    fs::write(&source, b"new content").expect("write cancellable copy source");
+
+    let cancelled = AtomicBool::new(true);
+    let error = copy_export_asset_cancellable(&source, &target, &cancelled)
+        .expect_err("pre-cancelled copy must fail");
+    assert_eq!(error.to_string(), "export cancelled");
+    assert!(!target.exists());
+
+    fs::write(&target, b"keep content").expect("write existing target");
+    let active = AtomicBool::new(false);
+    copy_export_asset_cancellable(&source, &target, &active)
+        .expect_err("existing target must not be overwritten");
+    assert_eq!(fs::read(&target).unwrap(), b"keep content");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn keeps_resource_syntax_literal_inside_fenced_code() {
+    let html = render_html(
+        "```md\n[doc](spec.pdf \"gmark:resource\")\n```",
+        &Theme::default_theme(),
+        "Doc",
+    );
+
+    assert!(html.contains("gmark:resource"));
+    // The stylesheet always declares the card class; the fenced source must
+    // not contain an actual generated card element.
+    assert!(!html.contains("<a class=\"gmark-resource-card\""));
+    assert!(!html.contains("<div class=\"gmark-resource-card\""));
+}
+
+#[test]
+fn export_keeps_resource_card_container_markers() {
+    let html = render_html(
+        "- [doc](https://example.com/spec.pdf \"gmark:resource\")\n\n> [!NOTE] [clip](https://example.com/clip.mp4 \"gmark:resource;type=video\")",
+        &Theme::default_theme(),
+        "Doc",
+    );
+
+    assert!(html.contains("<li><a class=\"gmark-resource-card\""));
+    assert!(html.contains("<blockquote>"));
+    assert!(html.contains("gmark-resource-kind\">VIDEO"));
 }
 
 #[test]

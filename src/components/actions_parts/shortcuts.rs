@@ -221,6 +221,13 @@ fn key_binding_for(
         ShortcutCommand::ExitCodeBlock => KeyBinding::new(key, ExitCodeBlock, context),
         ShortcutCommand::SaveDocument => KeyBinding::new(key, SaveDocument, context),
         ShortcutCommand::SaveDocumentAs => KeyBinding::new(key, SaveDocumentAs, context),
+        ShortcutCommand::CollapseFold => KeyBinding::new(key, CollapseFold, context),
+        ShortcutCommand::ExpandFold => KeyBinding::new(key, ExpandFold, context),
+        ShortcutCommand::CollapseAllFolds => KeyBinding::new(key, CollapseAllFolds, context),
+        ShortcutCommand::ExpandAllFolds => KeyBinding::new(key, ExpandAllFolds, context),
+        ShortcutCommand::FormatDocument => KeyBinding::new(key, FormatDocument, context),
+        ShortcutCommand::FormatSelection => KeyBinding::new(key, FormatSelection, context),
+        ShortcutCommand::CancelFormatting => KeyBinding::new(key, CancelFormatting, context),
         ShortcutCommand::NewTab => KeyBinding::new(key, NewTab, context),
         ShortcutCommand::NewWindow => KeyBinding::new(key, NewWindow, context),
         ShortcutCommand::OpenFile => KeyBinding::new(key, OpenFile, context),
@@ -235,6 +242,9 @@ fn key_binding_for(
         ShortcutCommand::DismissTransientUi => KeyBinding::new(key, DismissTransientUi, context),
         ShortcutCommand::ToggleViewMode => KeyBinding::new(key, ToggleViewMode, context),
         ShortcutCommand::ToggleWorkspace => KeyBinding::new(key, ToggleWorkspace, context),
+        ShortcutCommand::ToggleDocumentSidebar => {
+            KeyBinding::new(key, ToggleDocumentSidebar, context)
+        }
         ShortcutCommand::QuickOpen => KeyBinding::new(key, QuickOpen, context),
         ShortcutCommand::CommandPalette => KeyBinding::new(key, CommandPalette, context),
         ShortcutCommand::GoToLine => KeyBinding::new(key, GoToLine, context),

@@ -76,7 +76,12 @@ impl Block {
                             .size(px(d.task_checkbox_check_size))
                             .debug_selector(|| "task-checkbox-check".to_owned())
                     }))),
-                if showing_rendered_image {
+                if self.record.resource.is_some() && (!focused || self.resource_selected) {
+                    div()
+                        .min_w(px(0.0))
+                        .flex_grow()
+                        .child(self.render_resource_content(theme, cx))
+                } else if showing_rendered_image {
                     let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
                     let resize_basis_width =
                         effective_list_item_image_width(self, viewport_width, d);

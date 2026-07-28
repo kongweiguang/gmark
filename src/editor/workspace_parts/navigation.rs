@@ -46,7 +46,7 @@ impl Editor {
             return;
         }
         self.workspace.pending_navigation = Some((path.clone(), line));
-        self.open_path_in_tab(path, window, cx);
+        self.open_path_in_tab(path, cx);
     }
 
     pub(in crate::editor) fn apply_pending_workspace_navigation(&mut self, cx: &mut Context<Self>) {
@@ -160,7 +160,7 @@ impl Editor {
         if workspace_uses_overlay(f32::from(window.viewport_size().width)) {
             self.workspace.is_open = false;
         }
-        self.open_path_in_tab(path, window, cx);
+        self.open_path_in_tab(path, cx);
     }
 
     pub(super) fn open_workspace_context_menu(
@@ -238,7 +238,7 @@ impl Editor {
                 .unwrap_or(path.as_path())
                 .to_string_lossy()
                 .replace('\\', "/"),
-            WorkspaceOperationKind::NewFile => "untitled.md".to_owned(),
+            WorkspaceOperationKind::NewFile => "untitled.txt".to_owned(),
             WorkspaceOperationKind::NewFolder => "New Folder".to_owned(),
         };
         let input = cx.new(|cx| {
@@ -399,7 +399,7 @@ impl Editor {
                                     &root,
                                     &creation_parent,
                                     &value,
-                                    super::workspace_file_ops::WorkspaceCreateKind::MarkdownFile,
+                                    super::workspace_file_ops::WorkspaceCreateKind::File,
                                 )
                                 .map(WorkspacePendingPlan::Create)
                             }
@@ -555,6 +555,9 @@ impl Editor {
                             editor.workspace.operation_error = None;
                             if undo {
                                 if editor.file_path.as_ref() == Some(&plan.path) {
+                                    // 新建的源码文件使用 DocumentHost；撤销后必须同时解除后端，
+                                    // 避免已删除文件的分页会话继续占据当前空白标签。
+                                    editor.document_host = None;
                                     editor.replace_document_from_markdown(String::new(), None, cx);
                                 }
                                 editor.workspace.undo_file_operation = None;
@@ -562,22 +565,14 @@ impl Editor {
                             } else {
                                 editor.workspace.undo_file_operation =
                                     Some(WorkspaceUndoOperation::Create(plan.clone()));
-                                if plan.kind
-                                    == super::workspace_file_ops::WorkspaceCreateKind::MarkdownFile
+                                if plan.kind == super::workspace_file_ops::WorkspaceCreateKind::File
                                 {
-                                    if editor.is_document_dirty() {
-                                        editor.workspace.selected =
-                                            Some(WorkspaceSelection::File(plan.path.clone()));
-                                    } else {
-                                        editor.replace_document_from_markdown(
-                                            String::new(),
-                                            Some(plan.path.clone()),
-                                            cx,
-                                        );
-                                        crate::app_menu::record_recent_file_from_editor(
-                                            &plan.path, cx,
-                                        );
-                                    }
+                                    editor.workspace.selected =
+                                        Some(WorkspaceSelection::File(plan.path.clone()));
+                                    // 所有扩展名都走统一打开策略：Markdown 使用常驻编辑器，
+                                    // 代码/数据文件使用安全源码或结构化视图，行为与文件树双击一致。
+                                    editor.open_path_in_tab(plan.path.clone(), cx);
+                                    crate::app_menu::record_recent_file_from_editor(&plan.path, cx);
                                 } else {
                                     editor
                                         .workspace

@@ -116,11 +116,12 @@ impl Editor {
         let link_reference_definitions = self.link_reference_definitions.clone();
         let footnote_registry = self.footnote_registry.clone();
         block.update(cx, move |block, cx| {
-            block.set_runtime_context(
+            block.set_runtime_context_with_probe(
                 next_base_dir.clone(),
                 image_reference_definitions.clone(),
                 link_reference_definitions.clone(),
                 footnote_registry.clone(),
+                cx,
             );
             cx.notify();
         });
@@ -289,6 +290,19 @@ impl Editor {
             }
         }
         Self::install_toc_entries(&visible, toc_blocks, cx);
+    }
+
+    /// Window reactivation is an explicit freshness boundary for local
+    /// resource metadata. Only the runtime probe cache is invalidated; the
+    /// Markdown source, block revision and undo history remain untouched.
+    pub(super) fn refresh_resource_probes(&mut self, cx: &mut Context<Self>) {
+        let visible = self.document.visible_blocks().to_vec();
+        for visible_block in &visible {
+            visible_block
+                .entity
+                .update(cx, |block, _cx| block.invalidate_resource_probe());
+        }
+        self.sync_mounted_runtime_contexts(cx);
     }
 
     fn mounted_toc_blocks(visible: &[super::tree::VisibleBlock], cx: &App) -> Vec<Entity<Block>> {

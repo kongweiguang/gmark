@@ -79,154 +79,6 @@ impl PreferencesWindow {
             .shadow_lg()
     }
 
-    pub(super) fn theme_dropdown_button(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        let dropdown = PreferencesDropdown::Theme;
-        let focus_handle = self.dropdown_focus_handles[dropdown.index()].clone();
-        let pointer_focus_handle = focus_handle.clone();
-        div()
-            .id("preferences-theme-dropdown")
-            .debug_selector(|| "preferences-theme-dropdown".to_owned())
-            .w_full()
-            .h(px(32.0))
-            .tab_index(0)
-            .track_focus(&focus_handle)
-            .px(px(10.0))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .rounded(px(d.menu_item_radius))
-            .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
-            .bg(c.dialog_surface)
-            .hover(|this| this.bg(c.chrome_hover))
-            .focus(move |this| this.border_color(c.text_link))
-            .cursor_pointer()
-            .text_size(px(t.dialog_body_size))
-            .text_color(c.dialog_body)
-            .child(
-                div()
-                    .id("preferences-theme-selected-icon")
-                    .debug_selector(|| "preferences-theme-selected-icon".to_owned())
-                    .size(px(16.0))
-                    .flex_shrink_0()
-                    .text_color(c.dialog_muted)
-                    .child(
-                        svg()
-                            .path(theme_option_icon(&self.selected_theme_id))
-                            .size(px(16.0))
-                            .text_color(c.dialog_muted),
-                    ),
-            )
-            .child(
-                div()
-                    .id("preferences-theme-swatch")
-                    .debug_selector(|| "preferences-theme-swatch".to_owned())
-                    .w(px(42.0))
-                    .h(px(16.0))
-                    .flex_shrink_0()
-                    .flex()
-                    .overflow_hidden()
-                    .rounded(px(4.0))
-                    .border(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
-                    .child(div().flex_1().h_full().bg(c.editor_background))
-                    .child(div().flex_1().h_full().bg(c.sidebar_background))
-                    .child(div().flex_1().h_full().bg(c.selection))
-                    .child(div().flex_1().h_full().bg(c.text_link)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .truncate()
-                    .child(self.selected_theme_name()),
-            )
-            .child(
-                svg()
-                    .path(CHEVRON_DOWN_ICON)
-                    .size(px(14.0))
-                    .text_color(c.dialog_body),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                pointer_focus_handle.focus(window);
-                this.on_dropdown_click(dropdown, window, cx);
-            }))
-            .on_key_down(cx.listener(move |this, event, window, cx| {
-                this.on_dropdown_key_down(dropdown, event, window, cx);
-            }))
-    }
-
-    pub(super) fn theme_dropdown_item(
-        index: usize,
-        entry: ThemeCatalogEntry,
-        selected: bool,
-        highlighted: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        let icon = theme_option_icon(&entry.id);
-        let theme_id = entry.id.clone();
-        div()
-            .id(("preferences-theme-option", index))
-            .debug_selector(move || format!("preferences-theme-option-{index}"))
-            .w(px(280.0))
-            .min_h(px(30.0))
-            .px(px(12.0))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .rounded(px(d.menu_item_radius))
-            .cursor_pointer()
-            .bg(if highlighted {
-                c.text_link.opacity(0.14)
-            } else {
-                hsla(0.0, 0.0, 0.0, 0.0)
-            })
-            .hover(|this| this.bg(c.dialog_secondary_button_hover))
-            .text_size(px(t.dialog_body_size))
-            .text_color(c.dialog_body)
-            .child(
-                div()
-                    .id(("preferences-theme-option-icon", index))
-                    .debug_selector(move || format!("preferences-theme-option-icon-{index}"))
-                    .size(px(16.0))
-                    .flex_shrink_0()
-                    .text_color(c.dialog_muted)
-                    .child(svg().path(icon).size(px(16.0)).text_color(c.dialog_muted)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .truncate()
-                    .child(entry.name),
-            )
-            .child(
-                div()
-                    .size(px(16.0))
-                    .flex_shrink_0()
-                    .children(selected.then(|| {
-                        svg()
-                            .path(CHECK_ICON)
-                            .size(px(14.0))
-                            .text_color(c.dialog_body)
-                    })),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| this.preview_theme(theme_id.clone(), cx)))
-    }
-
     pub(super) fn dropdown_item(
         id: impl Into<ElementId>,
         label: String,
@@ -301,18 +153,153 @@ impl PreferencesWindow {
             .child(control)
     }
 
+    fn theme_appearance_option(
+        &self,
+        id: &'static str,
+        index: usize,
+        label: SharedString,
+        option: ThemeAppearance,
+        selected: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let t = &theme.typography;
+        let focus_handle = self.theme_appearance_focus_handles[index].clone();
+        let pointer_focus_handle = focus_handle.clone();
+        div()
+            .id(id)
+            .debug_selector(move || id.to_owned())
+            .flex_1()
+            .min_w(px(0.0))
+            .h(px(34.0))
+            .tab_index(0)
+            .track_focus(&focus_handle)
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(8.0))
+            .rounded(px(d.menu_item_radius))
+            .border(px(d.dialog_border_width))
+            .border_color(if selected {
+                c.text_link
+            } else {
+                c.dialog_border
+            })
+            .bg(if selected {
+                c.text_link.opacity(0.16)
+            } else {
+                c.dialog_surface
+            })
+            .hover(|this| this.bg(c.chrome_hover))
+            .focus(|this| this.border_color(c.text_link))
+            .cursor_pointer()
+            .text_size(px(t.dialog_body_size))
+            .text_color(if selected { c.text_link } else { c.dialog_body })
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .truncate()
+                    .child(label),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                pointer_focus_handle.focus(window);
+                this.preview_theme_appearance(option, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    focus_handle.focus(window);
+                    this.preview_theme_appearance(option, cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    fn theme_palette_option(
+        &self,
+        id: &'static str,
+        index: usize,
+        label: SharedString,
+        option: ThemePalette,
+        selected: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let t = &theme.typography;
+        let focus_handle = self.theme_palette_focus_handles[index].clone();
+        let pointer_focus_handle = focus_handle.clone();
+        div()
+            .id(id)
+            .debug_selector(move || id.to_owned())
+            .flex_1()
+            .min_w(px(0.0))
+            .h(px(34.0))
+            .tab_index(0)
+            .track_focus(&focus_handle)
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(8.0))
+            .rounded(px(d.menu_item_radius))
+            .border(px(d.dialog_border_width))
+            .border_color(if selected {
+                c.text_link
+            } else {
+                c.dialog_border
+            })
+            .bg(if selected {
+                c.text_link.opacity(0.16)
+            } else {
+                c.dialog_surface
+            })
+            .hover(|this| this.bg(c.chrome_hover))
+            .focus(|this| this.border_color(c.text_link))
+            .cursor_pointer()
+            .text_size(px(t.dialog_body_size))
+            .text_color(if selected { c.text_link } else { c.dialog_body })
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .truncate()
+                    .child(label),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                pointer_focus_handle.focus(window);
+                this.preview_theme_palette(option, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    focus_handle.focus(window);
+                    this.preview_theme_palette(option, cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
     pub(super) fn numeric_stepper(
         &self,
         id: &'static str,
-        value: String,
+        input: PreferencesNumericInput,
         decrease: PreferencesStepperControl,
         increase: PreferencesStepperControl,
+        unit: &'static str,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        let input_id = input.input_id();
+        let input_is_valid = self.numeric_input_is_valid(input, cx);
+        let input_focus_handle = self.numeric_inputs[input.index()]
+            .read(cx)
+            .focus_handle
+            .clone();
         let button =
             |control: PreferencesStepperControl, icon: &'static str, cx: &mut Context<Self>| {
                 let focus_handle = self.stepper_focus_handles[control.index()].clone();
@@ -364,18 +351,42 @@ impl PreferencesWindow {
             .child(button(decrease, MINUS_ICON, cx))
             .child(
                 div()
+                    .id(input_id)
+                    .debug_selector(move || input_id.to_owned())
                     .flex_1()
                     .h_full()
+                    .min_w(px(0.0))
+                    .relative()
                     .flex()
                     .items_center()
-                    .justify_center()
+                    .overflow_hidden()
                     .rounded(px(d.menu_item_radius))
                     .border(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
+                    .border_color(if input_is_valid {
+                        c.dialog_border
+                    } else {
+                        c.dialog_danger_button_bg
+                    })
                     .bg(c.dialog_surface)
+                    .px(px(7.0))
+                    .cursor(CursorStyle::IBeam)
                     .text_size(px(t.dialog_body_size))
                     .text_color(c.dialog_title)
-                    .child(value),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(self.numeric_inputs[input.index()].clone()),
+                    )
+                    .children((!unit.is_empty()).then(|| {
+                        div()
+                            .flex_shrink_0()
+                            .pl(px(3.0))
+                            .text_color(c.dialog_muted)
+                            .child(unit)
+                    }))
+                    .on_click(move |_, window, _| input_focus_handle.focus(window)),
             )
             .child(button(increase, PLUS_ICON, cx))
     }
@@ -390,6 +401,20 @@ impl PreferencesWindow {
             strings.preferences_editor_font_system_placeholder.clone()
         } else {
             self.editor_font_family.clone()
+        };
+        let chinese = cx
+            .global::<I18nManager>()
+            .current_language_id()
+            .starts_with("zh");
+        let code_folding_label = if chinese {
+            "代码折叠"
+        } else {
+            "Code Folding"
+        };
+        let format_on_save_label = if chinese {
+            "保存时格式化"
+        } else {
+            "Format on Save"
         };
         let font_dropdown = div()
             .relative()
@@ -449,7 +474,7 @@ impl PreferencesWindow {
             .max_w(px(PREFERENCES_FORM_WIDTH))
             .flex()
             .flex_col()
-            .gap(px(20.0))
+            .gap(px(14.0))
             .child(self.labeled_row(
                 &strings.preferences_editor_font_family,
                 font_dropdown,
@@ -459,9 +484,10 @@ impl PreferencesWindow {
                 &strings.preferences_editor_font_size,
                 self.numeric_stepper(
                     "preferences-editor-font-size",
-                    format!("{} px", self.editor_font_size),
+                    PreferencesNumericInput::FontSize,
                     PreferencesStepperControl::FontSizeDecrease,
                     PreferencesStepperControl::FontSizeIncrease,
+                    "px",
                     theme,
                     cx,
                 ),
@@ -471,9 +497,10 @@ impl PreferencesWindow {
                 &strings.preferences_editor_line_height,
                 self.numeric_stepper(
                     "preferences-editor-line-height",
-                    format!("{}%", self.editor_line_height_percent),
+                    PreferencesNumericInput::LineHeight,
                     PreferencesStepperControl::LineHeightDecrease,
                     PreferencesStepperControl::LineHeightIncrease,
+                    "%",
                     theme,
                     cx,
                 ),
@@ -483,9 +510,10 @@ impl PreferencesWindow {
                 &strings.preferences_editor_content_width,
                 self.numeric_stepper(
                     "preferences-editor-content-width",
-                    format!("{} px", self.editor_content_width),
+                    PreferencesNumericInput::ContentWidth,
                     PreferencesStepperControl::ContentWidthDecrease,
                     PreferencesStepperControl::ContentWidthIncrease,
+                    "px",
                     theme,
                     cx,
                 ),
@@ -540,11 +568,30 @@ impl PreferencesWindow {
                         div()
                             .text_size(px(theme.typography.dialog_body_size))
                             .text_color(theme.colors.dialog_body)
-                            .child(strings.preferences_workspace_sidebar_right.clone()),
+                            .child(code_folding_label),
                     )
                     .child(self.preference_switch(
-                        PreferencesSwitch::WorkspaceSidebarRight,
-                        self.workspace_sidebar_position == WorkspaceSidebarPosition::Right,
+                        PreferencesSwitch::CodeFolding,
+                        self.code_folding,
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(PREFERENCES_FORM_WIDTH))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(theme.typography.dialog_body_size))
+                            .text_color(theme.colors.dialog_body)
+                            .child(format_on_save_label),
+                    )
+                    .child(self.preference_switch(
+                        PreferencesSwitch::FormatOnSave,
+                        self.format_on_save,
                         cx,
                     )),
             )
@@ -577,6 +624,15 @@ impl PreferencesWindow {
         strings: &crate::i18n::I18nStrings,
         cx: &mut Context<Self>,
     ) -> Div {
+        let auto_check_label = if cx
+            .global::<I18nManager>()
+            .current_language_id()
+            .starts_with("zh")
+        {
+            "自动检查软件更新"
+        } else {
+            "Automatically check for updates"
+        };
         let selected = match self.startup_open {
             StartupOpenPreference::NewFile => strings.preferences_startup_new_file.clone(),
             StartupOpenPreference::LastOpenedFile => {
@@ -670,72 +726,6 @@ impl PreferencesWindow {
         } else {
             None
         };
-        let loading_preset_label = match self.document_loading.preset {
-            DocumentLoadingPreset::Balanced => {
-                strings.preferences_document_loading_balanced.clone()
-            }
-            DocumentLoadingPreset::LowMemory => {
-                strings.preferences_document_loading_low_memory.clone()
-            }
-            DocumentLoadingPreset::HighPerformance => strings
-                .preferences_document_loading_high_performance
-                .clone(),
-        };
-        let loading_dropdown = div()
-            .relative()
-            .w(px(280.0))
-            .h(px(32.0))
-            .flex_shrink_0()
-            .child(self.dropdown_button(
-                "preferences-document-loading-dropdown",
-                loading_preset_label,
-                PreferencesDropdown::DocumentLoadingPreset,
-                theme,
-                cx,
-            ));
-        let loading_list = if self.document_loading_dropdown_open {
-            let mut list = Self::dropdown_list(theme).top(px(238.0)).right_0();
-            for (index, preset) in [
-                DocumentLoadingPreset::Balanced,
-                DocumentLoadingPreset::LowMemory,
-                DocumentLoadingPreset::HighPerformance,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let label = match preset {
-                    DocumentLoadingPreset::Balanced => {
-                        strings.preferences_document_loading_balanced.clone()
-                    }
-                    DocumentLoadingPreset::LowMemory => {
-                        strings.preferences_document_loading_low_memory.clone()
-                    }
-                    DocumentLoadingPreset::HighPerformance => strings
-                        .preferences_document_loading_high_performance
-                        .clone(),
-                };
-                list = list.child(Self::dropdown_item(
-                    ("preferences-document-loading-option", index),
-                    label,
-                    self.document_loading.preset == preset,
-                    self.dropdown_selected_indices
-                        [PreferencesDropdown::DocumentLoadingPreset.index()]
-                        == index,
-                    theme,
-                    move |this, _, _, cx| {
-                        this.commit_dropdown_selection(
-                            PreferencesDropdown::DocumentLoadingPreset,
-                            index,
-                            cx,
-                        );
-                    },
-                    cx,
-                ));
-            }
-            Some(list)
-        } else {
-            None
-        };
         div()
             .relative()
             .w_full()
@@ -754,6 +744,25 @@ impl PreferencesWindow {
                     theme,
                 )
                 .debug_selector(|| "preferences-auto-save-row".to_owned()),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(PREFERENCES_FORM_WIDTH))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(theme.typography.dialog_body_size))
+                            .text_color(theme.colors.dialog_body)
+                            .child(auto_check_label),
+                    )
+                    .child(self.preference_switch(
+                        PreferencesSwitch::AutoCheckUpdates,
+                        self.auto_check_updates,
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -786,54 +795,18 @@ impl PreferencesWindow {
                     .child(strings.preferences_document_loading.clone()),
             )
             .child(self.labeled_row(
-                &strings.preferences_document_loading_preset,
-                loading_dropdown,
-                theme,
-            ))
-            .child(self.labeled_row(
                 &strings.preferences_document_max_resident_mib,
                 self.numeric_stepper(
                     "preferences-document-resident-mib",
-                    format!("{} MiB", self.document_loading.effective_max_resident_mib()),
+                    PreferencesNumericInput::ResidentMib,
                     PreferencesStepperControl::ResidentMibDecrease,
                     PreferencesStepperControl::ResidentMibIncrease,
+                    "MiB",
                     theme,
                     cx,
                 ),
                 theme,
             ))
-            .child(
-                self.labeled_row(
-                    &strings.preferences_document_max_resident_lines,
-                    self.numeric_stepper(
-                        "preferences-document-resident-lines",
-                        self.document_loading
-                            .effective_max_resident_lines()
-                            .to_string(),
-                        PreferencesStepperControl::ResidentLinesDecrease,
-                        PreferencesStepperControl::ResidentLinesIncrease,
-                        theme,
-                        cx,
-                    ),
-                    theme,
-                ),
-            )
-            .child(
-                self.labeled_row(
-                    &strings.preferences_document_max_structural_units,
-                    self.numeric_stepper(
-                        "preferences-document-structural-units",
-                        self.document_loading
-                            .effective_max_structural_units()
-                            .to_string(),
-                        PreferencesStepperControl::StructuralUnitsDecrease,
-                        PreferencesStepperControl::StructuralUnitsIncrease,
-                        theme,
-                        cx,
-                    ),
-                    theme,
-                ),
-            )
             .children(self.document_loading.has_invalid_override().then(|| {
                 div()
                     .text_size(px(theme.typography.dialog_body_size))
@@ -849,7 +822,6 @@ impl PreferencesWindow {
             // 浮层最后绘制，确保不会被后续设置行覆盖。
             .children(startup_list)
             .children(auto_save_list)
-            .children(loading_list)
     }
 
     pub(super) fn render_theme_page(
@@ -858,36 +830,74 @@ impl PreferencesWindow {
         strings: &crate::i18n::I18nStrings,
         cx: &mut Context<Self>,
     ) -> Div {
-        let dropdown = div()
-            .relative()
-            .w(px(280.0))
-            .h(px(32.0))
-            .flex_shrink_0()
-            .child(self.theme_dropdown_button(theme, cx));
-        let theme_list = if self.theme_dropdown_open {
-            let mut list = Self::dropdown_list(theme)
-                .right_0()
-                .id("preferences-theme-dropdown-list")
-                .max_h(px(240.0))
-                .overflow_y_scroll();
-
-            for (index, entry) in self.theme_options.clone().into_iter().enumerate() {
-                let selected = entry.id == self.selected_theme_id;
-                let highlighted =
-                    self.dropdown_selected_indices[PreferencesDropdown::Theme.index()] == index;
-                list = list.child(Self::theme_dropdown_item(
-                    index,
-                    entry,
-                    selected,
-                    highlighted,
-                    theme,
-                    cx,
-                ));
-            }
-            Some(list)
-        } else {
-            None
-        };
+        let appearance_label = strings.preferences_theme_appearance.clone();
+        let palette_label = strings.preferences_palette.clone();
+        let dark_label = strings.preferences_theme_dark.clone();
+        let light_label = strings.preferences_theme_light.clone();
+        let system_label = strings.preferences_follow_system_theme.clone();
+        let xcode_label = "Xcode";
+        let jetbrains_label = "JetBrains";
+        let obsidian_label = "Obsidian";
+        let appearance_control = div().w(px(280.0)).flex().gap(px(4.0));
+        let appearance_dark = self.theme_appearance_option(
+            "preferences-theme-appearance-dark",
+            0,
+            dark_label.into(),
+            ThemeAppearance::Dark,
+            self.theme_appearance == ThemeAppearance::Dark,
+            theme,
+            cx,
+        );
+        let appearance_light = self.theme_appearance_option(
+            "preferences-theme-appearance-light",
+            1,
+            light_label.into(),
+            ThemeAppearance::Light,
+            self.theme_appearance == ThemeAppearance::Light,
+            theme,
+            cx,
+        );
+        let appearance_system = self.theme_appearance_option(
+            "preferences-theme-appearance-system",
+            2,
+            system_label.into(),
+            ThemeAppearance::System,
+            self.theme_appearance == ThemeAppearance::System,
+            theme,
+            cx,
+        );
+        let appearance_control =
+            appearance_control.children([appearance_dark, appearance_light, appearance_system]);
+        let palette_control = div().w(px(280.0)).flex().gap(px(4.0));
+        let palette_xcode = self.theme_palette_option(
+            "preferences-theme-palette-xcode",
+            0,
+            xcode_label.into(),
+            ThemePalette::Xcode,
+            self.theme_palette == ThemePalette::Xcode,
+            theme,
+            cx,
+        );
+        let palette_jetbrains = self.theme_palette_option(
+            "preferences-theme-palette-jetbrains",
+            1,
+            jetbrains_label.into(),
+            ThemePalette::JetBrains,
+            self.theme_palette == ThemePalette::JetBrains,
+            theme,
+            cx,
+        );
+        let palette_obsidian = self.theme_palette_option(
+            "preferences-theme-palette-obsidian",
+            2,
+            obsidian_label.into(),
+            ThemePalette::Obsidian,
+            self.theme_palette == ThemePalette::Obsidian,
+            theme,
+            cx,
+        );
+        let palette_control =
+            palette_control.children([palette_xcode, palette_jetbrains, palette_obsidian]);
         let language_dropdown = div()
             .relative()
             .w(px(280.0))
@@ -944,10 +954,9 @@ impl PreferencesWindow {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(self.labeled_row(&strings.preferences_local_theme, dropdown, theme))
+            .child(self.labeled_row(&appearance_label, appearance_control, theme))
+            .child(self.labeled_row(&palette_label, palette_control, theme))
             .child(self.labeled_row(&strings.menu_language, language_dropdown, theme))
-            // 浮层最后绘制，避免后续设置行截获菜单区域的绘制与点击。
-            .children(theme_list)
             .children(language_list)
     }
 }

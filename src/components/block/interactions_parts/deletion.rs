@@ -4,6 +4,13 @@ use super::*;
 
 impl Block {
     pub(crate) fn on_delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.kind() == BlockKind::MermaidBlock
+            && self.mermaid_view_mode() == MermaidViewMode::Preview
+        {
+            cx.emit(BlockEvent::RequestDelete);
+            return;
+        }
+
         if self.is_table_cell() {
             if self.selected_range.is_empty() {
                 let next = self.next_boundary(self.cursor_offset());
@@ -458,7 +465,7 @@ impl Block {
 
         if let Some(item) = cx.read_from_clipboard() {
             if let Some(source) = Self::pasted_image_source_from_clipboard(&item) {
-                let (leading, trailing) = self.paste_image_split();
+                let (leading, trailing) = self.paste_resource_split();
                 cx.emit(BlockEvent::RequestPasteImage {
                     leading,
                     source,
@@ -471,7 +478,7 @@ impl Block {
                 return;
             };
             if let Some(source) = Self::pasted_image_source_from_text(&text) {
-                let (leading, trailing) = self.paste_image_split();
+                let (leading, trailing) = self.paste_resource_split();
                 cx.emit(BlockEvent::RequestPasteImage {
                     leading,
                     source,

@@ -18,7 +18,7 @@ use super::projection::{
 };
 use crate::components::{
     Block, BlockKind, BlockRecord, CalloutVariant, CodeFenceOpening, InlineTextTree,
-    parse_footnote_definition_head,
+    ResourceRecord, parse_footnote_definition_head,
 };
 use crate::components::{HtmlSafetyClass, parse_html_document};
 use crate::components::{

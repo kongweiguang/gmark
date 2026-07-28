@@ -91,16 +91,12 @@ pub struct I18nStrings {
     pub menu_language: String,
     /// Top-level View menu label.
     pub menu_view: String,
-    /// Top-level Theme menu label.
-    pub menu_theme: String,
     /// Top-level Workspace menu label.
     pub menu_workspace: String,
     /// Top-level Help menu label.
     pub menu_help: String,
     /// Language menu item for importing a custom language pack.
     pub menu_add_language_config: String,
-    /// Theme menu item for importing a custom theme pack.
-    pub menu_add_theme_config: String,
     /// File menu item for opening a new window.
     pub menu_new_window: String,
     /// File menu item for creating an untitled document tab.
@@ -120,6 +116,7 @@ pub struct I18nStrings {
     pub json_graph_stale: String,
     pub json_graph_source_changed: String,
     pub json_graph_truncated: String,
+    pub json_graph_show_more_template: String,
     pub json_graph_details_title: String,
     pub json_graph_content: String,
     pub json_graph_path: String,
@@ -198,8 +195,6 @@ pub struct I18nStrings {
     pub open_workspace_folder_prompt: String,
     /// Native file-dialog prompt for importing a language pack.
     pub add_language_config_prompt: String,
-    /// Native file-dialog prompt for importing a theme pack.
-    pub add_theme_config_prompt: String,
     /// Title of the open-file failure prompt.
     pub open_failed_title: String,
     /// Title shown when a recent file path no longer exists.
@@ -262,13 +257,7 @@ pub struct I18nStrings {
     pub preferences_auto_save_off: String,
     pub preferences_auto_save_after_delay: String,
     pub preferences_document_loading: String,
-    pub preferences_document_loading_preset: String,
-    pub preferences_document_loading_balanced: String,
-    pub preferences_document_loading_low_memory: String,
-    pub preferences_document_loading_high_performance: String,
     pub preferences_document_max_resident_mib: String,
-    pub preferences_document_max_resident_lines: String,
-    pub preferences_document_max_structural_units: String,
     pub preferences_document_loading_invalid: String,
     pub preferences_document_loading_next_open: String,
     pub preferences_spell_check: String,
@@ -279,10 +268,15 @@ pub struct I18nStrings {
     pub preferences_editor_content_width: String,
     pub preferences_editor_font_family: String,
     pub preferences_editor_font_system_placeholder: String,
-    pub preferences_workspace_sidebar_right: String,
     pub preferences_show_tab_bar_actions: String,
-    /// Theme preference field label.
-    pub preferences_local_theme: String,
+    /// Theme palette preference field label.
+    pub preferences_palette: String,
+    /// Theme appearance preference field label.
+    pub preferences_theme_appearance: String,
+    /// Fixed dark appearance option.
+    pub preferences_theme_dark: String,
+    /// Fixed light appearance option.
+    pub preferences_theme_light: String,
     /// Theme option that follows the operating-system appearance.
     pub preferences_follow_system_theme: String,
     /// Image paste behavior field label.
@@ -365,6 +359,7 @@ pub struct I18nStrings {
     pub preferences_shortcut_dismiss_transient_ui: String,
     pub preferences_shortcut_toggle_view_mode: String,
     pub preferences_shortcut_toggle_workspace: String,
+    pub menu_toggle_document_sidebar: String,
     pub preferences_shortcut_quick_open: String,
     pub preferences_shortcut_command_palette: String,
     pub preferences_shortcut_go_to_line: String,
@@ -380,6 +375,23 @@ pub struct I18nStrings {
     pub workspace_tab_outline: String,
     /// Workspace drawer Search tab and search states.
     pub workspace_tab_search: String,
+    /// Document navigator labels and compact fallback states.
+    pub document_sidebar_title: String,
+    pub document_sidebar_structure: String,
+    pub document_sidebar_columns: String,
+    pub document_sidebar_info: String,
+    pub document_sidebar_text: String,
+    pub document_sidebar_format: String,
+    pub document_sidebar_size: String,
+    pub document_sidebar_lines: String,
+    pub document_sidebar_encoding: String,
+    pub document_sidebar_line_endings: String,
+    pub document_sidebar_loading: String,
+    pub document_sidebar_empty: String,
+    pub document_sidebar_rows_template: String,
+    pub document_sidebar_items_limit: String,
+    pub document_sidebar_column_fallback: String,
+    pub status_bar_document_sidebar: String,
     pub workspace_search_prompt: String,
     pub workspace_search_running: String,
     pub workspace_search_no_results: String,
@@ -495,6 +507,12 @@ pub struct I18nStrings {
     pub code_language_menu: String,
     pub code_copy: String,
     pub code_copied: String,
+    pub mermaid_copy_source: String,
+    pub mermaid_copied: String,
+    pub mermaid_export_svg: String,
+    pub mermaid_expand: String,
+    pub mermaid_read_only: String,
+    pub mermaid_export_unavailable: String,
     pub selection_toolbar_bold: String,
     pub selection_toolbar_italic: String,
     pub selection_toolbar_strikethrough: String,

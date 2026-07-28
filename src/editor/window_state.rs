@@ -253,6 +253,10 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.document_host.is_some() && self.file_path.is_none() {
+            self.save_document_as(window, cx);
+            return;
+        }
         if let Some(document_host) = self.document_host.clone() {
             document_host.update(cx, |document_host, cx| {
                 document_host.on_save_document(action, window, cx);
@@ -377,6 +381,8 @@ impl Editor {
     }
 
     pub(crate) fn set_view_mode(&mut self, target: ViewMode, cx: &mut Context<Self>) {
+        // 模式改变会替换内容坐标空间；父编辑器的菜单也不能跨视图继续存在。
+        self.dismiss_contextual_overlays(cx);
         if let Some(document_host) = self.document_host.clone() {
             let json_document = document_host.read(cx).is_json_document();
             let delimited_document = document_host.read(cx).is_delimited_document();
@@ -460,7 +466,10 @@ impl Editor {
                     // 切换视图不能触发源码规范化；Source 视图直接读取 Rope 真值。
                     let markdown = self.source_document.text();
                     let block = Self::new_block(cx, BlockRecord::paragraph(markdown));
-                    block.update(cx, |block, _cx| block.set_source_document_mode());
+                    let language = self.document_kind.source_syntax_language();
+                    block.update(cx, move |block, _cx| {
+                        block.set_source_document_mode_with_language(language)
+                    });
                     self.document.replace_roots(vec![block], cx);
                     self.table_cells.clear();
                     self.virtual_surface = None;
@@ -524,7 +533,10 @@ impl Editor {
 
     fn source_view_document(&self, cx: &mut Context<Self>) -> DocumentTree {
         let block = Self::new_block(cx, BlockRecord::paragraph(self.source_document.text()));
-        block.update(cx, |block, _cx| block.set_source_document_mode());
+        let language = self.document_kind.source_syntax_language();
+        block.update(cx, move |block, _cx| {
+            block.set_source_document_mode_with_language(language)
+        });
         let mut document = DocumentTree::new(vec![block]);
         document.rebuild_metadata_and_snapshot(cx);
         document

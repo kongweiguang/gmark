@@ -254,7 +254,7 @@ impl<'de> Deserialize<'de> for ThemeDimensions {
 
 /// Top-level theme combining colors, dimensions, typography and placeholders.
 ///
-/// Can be deserialized from JSON, allowing users to ship custom theme files.
+/// Serializes the built-in theme tokens for fixtures and export tests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
     pub name: String,
@@ -265,27 +265,27 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Returns the built-in fallback theme used when no custom theme is loaded.
-    pub fn default_theme() -> Self {
+    /// Returns the Xcode-inspired dark theme.
+    pub fn xcode_dark() -> Self {
         Self {
-            name: "gmark".into(),
+            name: "Xcode Dark".into(),
             colors: ThemeColors {
-                editor_background: Hsla::from(rgba(0x191919ff)),
-                source_mode_block_bg: Hsla::from(rgba(0x313131ff)),
-                comment_bg: Hsla::from(rgba(0xfbbf2426)),
-                text_default: Hsla::from(rgba(0xf0efedff)),
-                text_link: Hsla::from(rgba(0x60a5faff)),
-                text_placeholder: hsla(0., 0., 0.6, 1.0),
-                text_h1: Hsla::from(rgba(0xf0efedff)),
-                text_h2: Hsla::from(rgba(0xf0efedff)),
-                text_h3: Hsla::from(rgba(0xf0efedff)),
-                text_h4: Hsla::from(rgba(0xf0efedff)),
-                text_h5: Hsla::from(rgba(0xf0efedff)),
-                text_h6: Hsla::from(rgba(0xf0efedff)),
-                border_h1: Hsla::from(rgba(0xe0e0e0ff)),
-                border_h2: Hsla::from(rgba(0xe0e0e0cc)),
-                text_quote: Hsla::from(rgba(0xd1d5dbff)),
-                border_quote: Hsla::from(rgba(0x6b7280ff)),
+                editor_background: Hsla::from(rgba(0x1f1f24ff)),
+                source_mode_block_bg: Hsla::from(rgba(0x292a30ff)),
+                comment_bg: Hsla::from(rgba(0x7f8c9830)),
+                text_default: Hsla::from(rgba(0xf5f5f7ff)),
+                text_link: Hsla::from(rgba(0x0a84ffff)),
+                text_placeholder: Hsla::from(rgba(0x8f8f98cc)),
+                text_h1: Hsla::from(rgba(0xf5f5f7ff)),
+                text_h2: Hsla::from(rgba(0xf5f5f7ff)),
+                text_h3: Hsla::from(rgba(0xf5f5f7ff)),
+                text_h4: Hsla::from(rgba(0xf5f5f7ff)),
+                text_h5: Hsla::from(rgba(0xf5f5f7ff)),
+                text_h6: Hsla::from(rgba(0xf5f5f7ff)),
+                border_h1: Hsla::from(rgba(0x5b5c66ff)),
+                border_h2: Hsla::from(rgba(0x5b5c66cc)),
+                text_quote: Hsla::from(rgba(0xc8c8d0ff)),
+                border_quote: Hsla::from(rgba(0x7d7e87ff)),
                 callout_note_bg: Hsla::from(rgba(0x94a3b81f)),
                 callout_note_border: Hsla::from(rgba(0x94a3b4ff)),
                 callout_tip_bg: Hsla::from(rgba(0x1d4ed81f)),
@@ -296,76 +296,76 @@ impl Theme {
                 callout_warning_border: Hsla::from(rgba(0xfb7185ff)),
                 callout_caution_bg: Hsla::from(rgba(0xdc26261f)),
                 callout_caution_border: Hsla::from(rgba(0xf87171ff)),
-                footnote_bg: Hsla::from(rgba(0x212124ff)),
-                footnote_border: Hsla::from(rgba(0x71717a52)),
-                footnote_badge_bg: Hsla::from(rgba(0xa1a1aa24)),
-                footnote_badge_text: Hsla::from(rgba(0xd4d4d8cc)),
-                footnote_backref: Hsla::from(rgba(0xa1a1aaff)),
-                task_checkbox_border: Hsla::from(rgba(0x71717aff)),
+                footnote_bg: Hsla::from(rgba(0x292a30ff)),
+                footnote_border: Hsla::from(rgba(0x7d7e8752)),
+                footnote_badge_bg: Hsla::from(rgba(0xc8c8d024)),
+                footnote_badge_text: Hsla::from(rgba(0xc8c8d0cc)),
+                footnote_backref: Hsla::from(rgba(0x8f8f98ff)),
+                task_checkbox_border: Hsla::from(rgba(0x7d7e87ff)),
                 task_checkbox_bg: Hsla::from(rgba(0x00000000)),
-                task_checkbox_checked_bg: Hsla::from(rgba(0xf0efedff)),
-                task_checkbox_check: Hsla::from(rgba(0x18181bff)),
-                separator_color: Hsla::from(rgba(0x71717aff)),
-                code_bg: Hsla::from(rgba(0x23272eff)),
-                code_text: Hsla::from(rgba(0xe5e7ebff)),
-                code_language_input_bg: Hsla::from(rgba(0x343941ff)),
-                code_language_input_border: Hsla::from(rgba(0x4b5563cc)),
-                code_language_input_text: Hsla::from(rgba(0xe5e7ebff)),
-                code_language_input_placeholder: Hsla::from(rgba(0x9ca3afcc)),
-                code_syntax_comment: Hsla::from(rgba(0x565f89ff)),
-                code_syntax_keyword: Hsla::from(rgba(0xbb9af7ff)),
-                code_syntax_string: Hsla::from(rgba(0x9ece6aff)),
-                code_syntax_number: Hsla::from(rgba(0xff9e64ff)),
-                code_syntax_type: Hsla::from(rgba(0x2ac3deff)),
-                code_syntax_function: Hsla::from(rgba(0x7aa2f7ff)),
-                code_syntax_constant: Hsla::from(rgba(0xffd166ff)),
-                code_syntax_variable: Hsla::from(rgba(0xe5e9f0ff)),
-                code_syntax_property: Hsla::from(rgba(0x7dcfffcc)),
-                code_syntax_operator: Hsla::from(rgba(0x89ddffff)),
-                code_syntax_punctuation: Hsla::from(rgba(0x9aa5ceff)),
-                table_border: Hsla::from(rgba(0x3f3f46ff)),
-                table_header_bg: Hsla::from(rgba(0x232326ff)),
-                table_cell_bg: Hsla::from(rgba(0x1d1d20ff)),
-                table_cell_active_outline: Hsla::from(rgba(0x60a5faff)),
-                table_axis_preview_bg: Hsla::from(rgba(0xf4f4f51a)),
-                table_axis_selected_bg: Hsla::from(rgba(0xf4f4f533)),
-                table_append_button_bg: Hsla::from(rgba(0x27272aff)),
-                table_append_button_hover: Hsla::from(rgba(0x3f3f46ff)),
-                table_append_button_text: Hsla::from(rgba(0xf4f4f5ff)),
-                image_placeholder_bg: Hsla::from(rgba(0x202024ff)),
-                image_placeholder_border: Hsla::from(rgba(0x52525bff)),
-                image_placeholder_text: Hsla::from(rgba(0xd4d4d8ff)),
-                image_caption_text: Hsla::from(rgba(0xa1a1aaff)),
-                scrollbar_thumb: Hsla::from(rgba(0xd1d5dbd8)),
-                cursor: Hsla::from(rgba(0xf0efedff)),
-                selection: Hsla::from(rgba(0x1c3651ff)),
-                dialog_backdrop: Hsla::from(rgba(0x09090bcc)),
-                dialog_surface: Hsla::from(rgba(0x18181bff)),
-                dialog_border: Hsla::from(rgba(0x27272aff)),
-                dialog_title: Hsla::from(rgba(0xf4f4f5ff)),
-                dialog_body: Hsla::from(rgba(0xd4d4d8ff)),
-                dialog_muted: Hsla::from(rgba(0xa1a1aaff)),
+                task_checkbox_checked_bg: Hsla::from(rgba(0x0a84ffff)),
+                task_checkbox_check: Hsla::from(rgba(0xffffffff)),
+                separator_color: Hsla::from(rgba(0x7d7e87ff)),
+                code_bg: Hsla::from(rgba(0x202127ff)),
+                code_text: Hsla::from(rgba(0xf5f5f7ff)),
+                code_language_input_bg: Hsla::from(rgba(0x292a30ff)),
+                code_language_input_border: Hsla::from(rgba(0x5b5c66cc)),
+                code_language_input_text: Hsla::from(rgba(0xf5f5f7ff)),
+                code_language_input_placeholder: Hsla::from(rgba(0x8f8f98cc)),
+                code_syntax_comment: Hsla::from(rgba(0x7f8c98ff)),
+                code_syntax_keyword: Hsla::from(rgba(0xff7ab2ff)),
+                code_syntax_string: Hsla::from(rgba(0xfc6a5dff)),
+                code_syntax_number: Hsla::from(rgba(0xd0bf69ff)),
+                code_syntax_type: Hsla::from(rgba(0x5dd8ffff)),
+                code_syntax_function: Hsla::from(rgba(0x67b7a4ff)),
+                code_syntax_constant: Hsla::from(rgba(0xa8a8ffff)),
+                code_syntax_variable: Hsla::from(rgba(0xf5f5f7ff)),
+                code_syntax_property: Hsla::from(rgba(0x9cdcfeff)),
+                code_syntax_operator: Hsla::from(rgba(0xff7ab2ff)),
+                code_syntax_punctuation: Hsla::from(rgba(0xc8c8d0ff)),
+                table_border: Hsla::from(rgba(0x484950ff)),
+                table_header_bg: Hsla::from(rgba(0x292a30ff)),
+                table_cell_bg: Hsla::from(rgba(0x23242aff)),
+                table_cell_active_outline: Hsla::from(rgba(0x0a84ffff)),
+                table_axis_preview_bg: Hsla::from(rgba(0x0a84ff2e)),
+                table_axis_selected_bg: Hsla::from(rgba(0x0a84ff55)),
+                table_append_button_bg: Hsla::from(rgba(0x303139ff)),
+                table_append_button_hover: Hsla::from(rgba(0x3b3c46ff)),
+                table_append_button_text: Hsla::from(rgba(0xf5f5f7ff)),
+                image_placeholder_bg: Hsla::from(rgba(0x25262cff)),
+                image_placeholder_border: Hsla::from(rgba(0x5b5c66ff)),
+                image_placeholder_text: Hsla::from(rgba(0xc8c8d0ff)),
+                image_caption_text: Hsla::from(rgba(0x8f8f98ff)),
+                scrollbar_thumb: Hsla::from(rgba(0xc8c8d0b8)),
+                cursor: Hsla::from(rgba(0xf5f5f7ff)),
+                selection: Hsla::from(rgba(0x0a84ff4d)),
+                dialog_backdrop: Hsla::from(rgba(0x000000b8)),
+                dialog_surface: Hsla::from(rgba(0x292a30ff)),
+                dialog_border: Hsla::from(rgba(0x484950ff)),
+                dialog_title: Hsla::from(rgba(0xf5f5f7ff)),
+                dialog_body: Hsla::from(rgba(0xd1d1d6ff)),
+                dialog_muted: Hsla::from(rgba(0x8f8f98ff)),
                 dialog_primary_button_bg: Hsla::from(rgba(0x0a84ffff)),
                 dialog_primary_button_hover: Hsla::from(rgba(0x0077e6ff)),
                 dialog_primary_button_text: Hsla::from(rgba(0xffffffff)),
-                dialog_secondary_button_bg: Hsla::from(rgba(0x27272aff)),
-                dialog_secondary_button_hover: Hsla::from(rgba(0x3f3f46ff)),
-                dialog_secondary_button_text: Hsla::from(rgba(0xf4f4f5ff)),
+                dialog_secondary_button_bg: Hsla::from(rgba(0x3a3b43ff)),
+                dialog_secondary_button_hover: Hsla::from(rgba(0x484950ff)),
+                dialog_secondary_button_text: Hsla::from(rgba(0xf5f5f7ff)),
                 // Doubles as the destructive menu-item text color (e.g. Delete
                 // Row/Column), so it must stay legible on the dark menu surface
                 // rather than the muted red used previously.
                 dialog_danger_button_bg: Hsla::from(rgba(0xef4444ff)),
                 dialog_danger_button_hover: Hsla::from(rgba(0xdc2626ff)),
                 dialog_danger_button_text: Hsla::from(rgba(0xfef2f2ff)),
-                status_bar_background: Hsla::from(rgba(0x1c1c1fff)),
-                status_bar_text: Hsla::from(rgba(0xd4d4d8cc)),
-                status_bar_text_dim: Hsla::from(rgba(0x71717aff)),
-                status_bar_button_hover: Hsla::from(rgba(0x3f3f46ff)),
-                chrome_background: Hsla::from(rgba(0x1f1f21ff)),
-                chrome_hover: Hsla::from(rgba(0x303034ff)),
-                sidebar_background: Hsla::from(rgba(0x202022ff)),
-                tab_strip_background: Hsla::from(rgba(0x202022ff)),
-                tab_active_background: Hsla::from(rgba(0x191919ff)),
+                status_bar_background: Hsla::from(rgba(0x292a30ff)),
+                status_bar_text: Hsla::from(rgba(0xd1d1d6cc)),
+                status_bar_text_dim: Hsla::from(rgba(0x8f8f98ff)),
+                status_bar_button_hover: Hsla::from(rgba(0x3b3c46ff)),
+                chrome_background: Hsla::from(rgba(0x24252aff)),
+                chrome_hover: Hsla::from(rgba(0x35363fff)),
+                sidebar_background: Hsla::from(rgba(0x25262cff)),
+                tab_strip_background: Hsla::from(rgba(0x25262cff)),
+                tab_active_background: Hsla::from(rgba(0x1f1f24ff)),
             },
             dimensions: ThemeDimensions {
                 editor_padding: 24.0,
@@ -513,21 +513,21 @@ impl Theme {
         }
     }
 
-    /// Returns the built-in light theme.
+    /// Returns the Xcode-inspired light theme.
     ///
     /// The light theme intentionally reuses the default layout and typography
     /// tokens so it can focus on palette differences.
-    pub fn light_theme() -> Self {
-        let base = Self::default_theme();
+    pub fn xcode_light() -> Self {
+        let base = Self::xcode_dark();
         Self {
-            name: BUILTIN_THEME_GMARK_LIGHT_NAME.into(),
+            name: "Xcode Light".into(),
             colors: ThemeColors {
                 // 浅色主题使用带轻微玉石底色的分层中性色，避免大面积纯白造成眩光。
-                editor_background: Hsla::from(rgba(0xf7f8f3ff)),
-                source_mode_block_bg: Hsla::from(rgba(0xf0f2ecff)),
+                editor_background: Hsla::from(rgba(0xfafafdff)),
+                source_mode_block_bg: Hsla::from(rgba(0xf2f2f7ff)),
                 comment_bg: Hsla::from(rgba(0xfff4cc66)),
                 text_default: Hsla::from(rgba(0x1d1d1fff)),
-                text_link: Hsla::from(rgba(0x0a66c2ff)),
+                text_link: Hsla::from(rgba(0x007affff)),
                 text_placeholder: Hsla::from(rgba(0x6e6e73cc)),
                 text_h1: Hsla::from(rgba(0x1d1d1fff)),
                 text_h2: Hsla::from(rgba(0x1d1d1fff)),
@@ -565,23 +565,23 @@ impl Theme {
                 code_language_input_border: Hsla::from(rgba(0xd4d7cfff)),
                 code_language_input_text: Hsla::from(rgba(0x1d1d1fff)),
                 code_language_input_placeholder: Hsla::from(rgba(0x6e6e73cc)),
-                code_syntax_comment: Hsla::from(rgba(0x6b7280ff)),
-                code_syntax_keyword: Hsla::from(rgba(0x7c3aedff)),
-                code_syntax_string: Hsla::from(rgba(0x15803dff)),
-                code_syntax_number: Hsla::from(rgba(0xc2410cff)),
-                code_syntax_type: Hsla::from(rgba(0x0f766eff)),
-                code_syntax_function: Hsla::from(rgba(0x0a66c2ff)),
-                code_syntax_constant: Hsla::from(rgba(0xb45309ff)),
+                code_syntax_comment: Hsla::from(rgba(0x5d6c79ff)),
+                code_syntax_keyword: Hsla::from(rgba(0xad3da4ff)),
+                code_syntax_string: Hsla::from(rgba(0xd12f1bff)),
+                code_syntax_number: Hsla::from(rgba(0x272ad8ff)),
+                code_syntax_type: Hsla::from(rgba(0x0b4f79ff)),
+                code_syntax_function: Hsla::from(rgba(0x326d74ff)),
+                code_syntax_constant: Hsla::from(rgba(0x703daaff)),
                 code_syntax_variable: Hsla::from(rgba(0x1d1d1fff)),
-                code_syntax_property: Hsla::from(rgba(0x0891b2ff)),
-                code_syntax_operator: Hsla::from(rgba(0x9333eaff)),
-                code_syntax_punctuation: Hsla::from(rgba(0x6e6e73ff)),
+                code_syntax_property: Hsla::from(rgba(0x0b4f79ff)),
+                code_syntax_operator: Hsla::from(rgba(0xad3da4ff)),
+                code_syntax_punctuation: Hsla::from(rgba(0x4a4a4fff)),
                 table_border: Hsla::from(rgba(0xd4d7cfff)),
                 table_header_bg: Hsla::from(rgba(0xf0f2ecff)),
                 table_cell_bg: Hsla::from(rgba(0xf7f8f3ff)),
-                table_cell_active_outline: Hsla::from(rgba(0x0a66c2ff)),
-                table_axis_preview_bg: Hsla::from(rgba(0x0a66c214)),
-                table_axis_selected_bg: Hsla::from(rgba(0x0a66c229)),
+                table_cell_active_outline: Hsla::from(rgba(0x007affff)),
+                table_axis_preview_bg: Hsla::from(rgba(0x007aff1f)),
+                table_axis_selected_bg: Hsla::from(rgba(0x007aff3d)),
                 table_append_button_bg: Hsla::from(rgba(0xecefe8ff)),
                 table_append_button_hover: Hsla::from(rgba(0xe3e7deff)),
                 table_append_button_text: Hsla::from(rgba(0x49494fff)),
@@ -623,15 +623,392 @@ impl Theme {
         }
     }
 
-    /// Parses a theme from JSON text.
-    #[cfg(test)]
-    pub fn from_json(json: &str) -> anyhow::Result<Self> {
-        Ok(serde_json::from_str(json)?)
+    /// Returns the Darcula-inspired JetBrains dark theme.
+    pub fn jetbrains_dark() -> Self {
+        let mut theme = Self::xcode_dark();
+        theme.name = "JetBrains Dark".into();
+        let colors = &mut theme.colors;
+        colors.editor_background = Hsla::from(rgba(0x2b2b2bff));
+        colors.source_mode_block_bg = Hsla::from(rgba(0x313335ff));
+        colors.comment_bg = Hsla::from(rgba(0x80808030));
+        colors.text_default = Hsla::from(rgba(0xa9b7c6ff));
+        colors.text_link = Hsla::from(rgba(0x589df6ff));
+        colors.text_placeholder = Hsla::from(rgba(0x808080cc));
+        colors.text_h1 = Hsla::from(rgba(0xa9b7c6ff));
+        colors.text_h2 = Hsla::from(rgba(0xa9b7c6ff));
+        colors.text_h3 = Hsla::from(rgba(0xa9b7c6ff));
+        colors.text_h4 = Hsla::from(rgba(0xa9b7c6ff));
+        colors.text_h5 = Hsla::from(rgba(0xa9b7c6ff));
+        colors.text_h6 = Hsla::from(rgba(0xa9b7c6ff));
+        colors.border_h1 = Hsla::from(rgba(0x55585aff));
+        colors.border_h2 = Hsla::from(rgba(0x55585acc));
+        colors.text_quote = Hsla::from(rgba(0x9da5b4ff));
+        colors.border_quote = Hsla::from(rgba(0x6b6b6bff));
+        colors.callout_note_bg = Hsla::from(rgba(0x557aa830));
+        colors.callout_note_border = Hsla::from(rgba(0x9876aaff));
+        colors.callout_tip_bg = Hsla::from(rgba(0x62975530));
+        colors.callout_tip_border = Hsla::from(rgba(0x6a8759ff));
+        colors.callout_important_bg = Hsla::from(rgba(0x9876aa30));
+        colors.callout_important_border = Hsla::from(rgba(0x9876aaff));
+        colors.callout_warning_bg = Hsla::from(rgba(0xcc783230));
+        colors.callout_warning_border = Hsla::from(rgba(0xcc7832ff));
+        colors.callout_caution_bg = Hsla::from(rgba(0xbc3f3cff));
+        colors.callout_caution_border = Hsla::from(rgba(0xbc3f3cff));
+        colors.footnote_bg = Hsla::from(rgba(0x323232ff));
+        colors.footnote_border = Hsla::from(rgba(0x55585aff));
+        colors.footnote_badge_bg = Hsla::from(rgba(0x55585a66));
+        colors.footnote_badge_text = Hsla::from(rgba(0xa9b7c6ff));
+        colors.footnote_backref = Hsla::from(rgba(0x589df6ff));
+        colors.task_checkbox_border = Hsla::from(rgba(0x808080ff));
+        colors.task_checkbox_checked_bg = Hsla::from(rgba(0x3574f0ff));
+        colors.task_checkbox_check = Hsla::from(rgba(0xffffffff));
+        colors.separator_color = Hsla::from(rgba(0x55585aff));
+        colors.code_bg = Hsla::from(rgba(0x313335ff));
+        colors.code_text = Hsla::from(rgba(0xa9b7c6ff));
+        colors.code_language_input_bg = Hsla::from(rgba(0x3c3f41ff));
+        colors.code_language_input_border = Hsla::from(rgba(0x55585aff));
+        colors.code_language_input_text = Hsla::from(rgba(0xa9b7c6ff));
+        colors.code_language_input_placeholder = Hsla::from(rgba(0x808080cc));
+        colors.code_syntax_comment = Hsla::from(rgba(0x808080ff));
+        colors.code_syntax_keyword = Hsla::from(rgba(0xcc7832ff));
+        colors.code_syntax_string = Hsla::from(rgba(0x6a8759ff));
+        colors.code_syntax_number = Hsla::from(rgba(0x6897bbff));
+        colors.code_syntax_type = Hsla::from(rgba(0xffc66dff));
+        colors.code_syntax_function = Hsla::from(rgba(0xffc66dff));
+        colors.code_syntax_constant = Hsla::from(rgba(0x9876aaff));
+        colors.code_syntax_variable = Hsla::from(rgba(0xa9b7c6ff));
+        colors.code_syntax_property = Hsla::from(rgba(0xa9b7c6ff));
+        colors.code_syntax_operator = Hsla::from(rgba(0xa9b7c6ff));
+        colors.code_syntax_punctuation = Hsla::from(rgba(0xa9b7c6ff));
+        colors.table_border = Hsla::from(rgba(0x55585aff));
+        colors.table_header_bg = Hsla::from(rgba(0x3c3f41ff));
+        colors.table_cell_bg = Hsla::from(rgba(0x323232ff));
+        colors.table_cell_active_outline = Hsla::from(rgba(0x3574f0ff));
+        colors.table_axis_preview_bg = Hsla::from(rgba(0x3574f033));
+        colors.table_axis_selected_bg = Hsla::from(rgba(0x3574f055));
+        colors.table_append_button_bg = Hsla::from(rgba(0x45494bff));
+        colors.table_append_button_hover = Hsla::from(rgba(0x55585aff));
+        colors.table_append_button_text = Hsla::from(rgba(0xa9b7c6ff));
+        colors.image_placeholder_bg = Hsla::from(rgba(0x323232ff));
+        colors.image_placeholder_border = Hsla::from(rgba(0x55585aff));
+        colors.image_placeholder_text = Hsla::from(rgba(0xa9b7c6ff));
+        colors.image_caption_text = Hsla::from(rgba(0x808080ff));
+        colors.scrollbar_thumb = Hsla::from(rgba(0x808080b8));
+        colors.cursor = Hsla::from(rgba(0xa9b7c6ff));
+        colors.selection = Hsla::from(rgba(0x214283ff));
+        colors.dialog_backdrop = Hsla::from(rgba(0x000000b8));
+        colors.dialog_surface = Hsla::from(rgba(0x3c3f41ff));
+        colors.dialog_border = Hsla::from(rgba(0x55585aff));
+        colors.dialog_title = Hsla::from(rgba(0xa9b7c6ff));
+        colors.dialog_body = Hsla::from(rgba(0xa9b7c6ff));
+        colors.dialog_muted = Hsla::from(rgba(0x808080ff));
+        colors.dialog_primary_button_bg = Hsla::from(rgba(0x3574f0ff));
+        colors.dialog_primary_button_hover = Hsla::from(rgba(0x2f68d8ff));
+        colors.dialog_primary_button_text = Hsla::from(rgba(0xffffffff));
+        colors.dialog_secondary_button_bg = Hsla::from(rgba(0x45494bff));
+        colors.dialog_secondary_button_hover = Hsla::from(rgba(0x55585aff));
+        colors.dialog_secondary_button_text = Hsla::from(rgba(0xa9b7c6ff));
+        colors.status_bar_background = Hsla::from(rgba(0x3c3f41ff));
+        colors.status_bar_text = Hsla::from(rgba(0xa9b7c6cc));
+        colors.status_bar_text_dim = Hsla::from(rgba(0x808080ff));
+        colors.status_bar_button_hover = Hsla::from(rgba(0x55585aff));
+        colors.chrome_background = Hsla::from(rgba(0x3c3f41ff));
+        colors.chrome_hover = Hsla::from(rgba(0x4b4f51ff));
+        colors.sidebar_background = Hsla::from(rgba(0x313335ff));
+        colors.tab_strip_background = Hsla::from(rgba(0x313335ff));
+        colors.tab_active_background = Hsla::from(rgba(0x2b2b2bff));
+        theme
     }
 
-    /// Serializes the theme into pretty-printed JSON.
+    /// Returns the IntelliJ-inspired light theme.
+    pub fn jetbrains_light() -> Self {
+        let mut theme = Self::xcode_light();
+        theme.name = "JetBrains Light".into();
+        let colors = &mut theme.colors;
+        colors.editor_background = Hsla::from(rgba(0xfffffeff));
+        colors.source_mode_block_bg = Hsla::from(rgba(0xf2f2f2ff));
+        colors.comment_bg = Hsla::from(rgba(0x8c8c8c24));
+        colors.text_default = Hsla::from(rgba(0x2b2b2bff));
+        colors.text_link = Hsla::from(rgba(0x3574f0ff));
+        colors.text_placeholder = Hsla::from(rgba(0x8c8c8ccc));
+        colors.text_h1 = Hsla::from(rgba(0x2b2b2bff));
+        colors.text_h2 = Hsla::from(rgba(0x2b2b2bff));
+        colors.text_h3 = Hsla::from(rgba(0x2b2b2bff));
+        colors.text_h4 = Hsla::from(rgba(0x2b2b2bff));
+        colors.text_h5 = Hsla::from(rgba(0x2b2b2bff));
+        colors.text_h6 = Hsla::from(rgba(0x2b2b2bff));
+        colors.border_h1 = Hsla::from(rgba(0xd7d7d7ff));
+        colors.border_h2 = Hsla::from(rgba(0xe5e5e5ff));
+        colors.text_quote = Hsla::from(rgba(0x5f6368ff));
+        colors.border_quote = Hsla::from(rgba(0xb7b7b7ff));
+        colors.callout_note_bg = Hsla::from(rgba(0x3574f01a));
+        colors.callout_note_border = Hsla::from(rgba(0x3574f0ff));
+        colors.callout_tip_bg = Hsla::from(rgba(0x067d171a));
+        colors.callout_tip_border = Hsla::from(rgba(0x067d17ff));
+        colors.callout_important_bg = Hsla::from(rgba(0x7a3e9d1a));
+        colors.callout_important_border = Hsla::from(rgba(0x7a3e9dff));
+        colors.callout_warning_bg = Hsla::from(rgba(0x9d6c001a));
+        colors.callout_warning_border = Hsla::from(rgba(0x9d6c00ff));
+        colors.callout_caution_bg = Hsla::from(rgba(0xcc3f3f1a));
+        colors.callout_caution_border = Hsla::from(rgba(0xcc3f3fff));
+        colors.footnote_bg = Hsla::from(rgba(0xf2f2f2ff));
+        colors.footnote_border = Hsla::from(rgba(0xd7d7d7ff));
+        colors.footnote_badge_bg = Hsla::from(rgba(0xe8e8e8ff));
+        colors.footnote_badge_text = Hsla::from(rgba(0x5f6368ff));
+        colors.footnote_backref = Hsla::from(rgba(0x3574f0ff));
+        colors.task_checkbox_border = Hsla::from(rgba(0x8c8c8cff));
+        colors.task_checkbox_checked_bg = Hsla::from(rgba(0x3574f0ff));
+        colors.task_checkbox_check = Hsla::from(rgba(0xffffffff));
+        colors.separator_color = Hsla::from(rgba(0xd7d7d7ff));
+        colors.code_bg = Hsla::from(rgba(0xf2f2f2ff));
+        colors.code_text = Hsla::from(rgba(0x2b2b2bff));
+        colors.code_language_input_bg = Hsla::from(rgba(0xfffffeff));
+        colors.code_language_input_border = Hsla::from(rgba(0xd7d7d7ff));
+        colors.code_language_input_text = Hsla::from(rgba(0x2b2b2bff));
+        colors.code_language_input_placeholder = Hsla::from(rgba(0x8c8c8ccc));
+        colors.code_syntax_comment = Hsla::from(rgba(0x8c8c8cff));
+        colors.code_syntax_keyword = Hsla::from(rgba(0x0033b3ff));
+        colors.code_syntax_string = Hsla::from(rgba(0x067d17ff));
+        colors.code_syntax_number = Hsla::from(rgba(0x1750ebff));
+        colors.code_syntax_type = Hsla::from(rgba(0x000000ff));
+        colors.code_syntax_function = Hsla::from(rgba(0x00627aff));
+        colors.code_syntax_constant = Hsla::from(rgba(0x871094ff));
+        colors.code_syntax_variable = Hsla::from(rgba(0x2b2b2bff));
+        colors.code_syntax_property = Hsla::from(rgba(0x00627aff));
+        colors.code_syntax_operator = Hsla::from(rgba(0x0033b3ff));
+        colors.code_syntax_punctuation = Hsla::from(rgba(0x5f6368ff));
+        colors.table_border = Hsla::from(rgba(0xd7d7d7ff));
+        colors.table_header_bg = Hsla::from(rgba(0xf2f2f2ff));
+        colors.table_cell_bg = Hsla::from(rgba(0xfffffeff));
+        colors.table_cell_active_outline = Hsla::from(rgba(0x3574f0ff));
+        colors.table_axis_preview_bg = Hsla::from(rgba(0x3574f01f));
+        colors.table_axis_selected_bg = Hsla::from(rgba(0x3574f03d));
+        colors.table_append_button_bg = Hsla::from(rgba(0xe8e8e8ff));
+        colors.table_append_button_hover = Hsla::from(rgba(0xd7d7d7ff));
+        colors.table_append_button_text = Hsla::from(rgba(0x2b2b2bff));
+        colors.image_placeholder_bg = Hsla::from(rgba(0xf2f2f2ff));
+        colors.image_placeholder_border = Hsla::from(rgba(0xd7d7d7ff));
+        colors.image_placeholder_text = Hsla::from(rgba(0x5f6368ff));
+        colors.image_caption_text = Hsla::from(rgba(0x8c8c8cff));
+        colors.scrollbar_thumb = Hsla::from(rgba(0x8c8c8cb8));
+        colors.cursor = Hsla::from(rgba(0x2b2b2bff));
+        colors.selection = Hsla::from(rgba(0x3574f03d));
+        colors.dialog_backdrop = Hsla::from(rgba(0x2b2b2b66));
+        colors.dialog_surface = Hsla::from(rgba(0xfffffeff));
+        colors.dialog_border = Hsla::from(rgba(0xd7d7d7ff));
+        colors.dialog_title = Hsla::from(rgba(0x2b2b2bff));
+        colors.dialog_body = Hsla::from(rgba(0x3c4043ff));
+        colors.dialog_muted = Hsla::from(rgba(0x8c8c8cff));
+        colors.dialog_primary_button_bg = Hsla::from(rgba(0x3574f0ff));
+        colors.dialog_primary_button_hover = Hsla::from(rgba(0x2f68d8ff));
+        colors.dialog_primary_button_text = Hsla::from(rgba(0xffffffff));
+        colors.dialog_secondary_button_bg = Hsla::from(rgba(0xe8e8e8ff));
+        colors.dialog_secondary_button_hover = Hsla::from(rgba(0xd7d7d7ff));
+        colors.dialog_secondary_button_text = Hsla::from(rgba(0x2b2b2bff));
+        colors.status_bar_background = Hsla::from(rgba(0xf2f2f2ff));
+        colors.status_bar_text = Hsla::from(rgba(0x5f6368cc));
+        colors.status_bar_text_dim = Hsla::from(rgba(0x8c8c8cff));
+        colors.status_bar_button_hover = Hsla::from(rgba(0xe5e5e5ff));
+        colors.chrome_background = Hsla::from(rgba(0xf2f2f2ff));
+        colors.chrome_hover = Hsla::from(rgba(0xe5e5e5ff));
+        colors.sidebar_background = Hsla::from(rgba(0xf2f2f2ff));
+        colors.tab_strip_background = Hsla::from(rgba(0xf2f2f2ff));
+        colors.tab_active_background = Hsla::from(rgba(0xfffffeff));
+        theme
+    }
+
+    /// Returns the Obsidian-inspired dark theme.
+    pub fn obsidian_dark() -> Self {
+        let mut theme = Self::xcode_dark();
+        theme.name = "Obsidian Dark".into();
+        let colors = &mut theme.colors;
+        // Obsidian 的紫色只承担链接、选中和焦点角色，正文工作区保持稳定实色。
+        colors.editor_background = Hsla::from(rgba(0x202020ff));
+        colors.source_mode_block_bg = Hsla::from(rgba(0x262626ff));
+        colors.comment_bg = Hsla::from(rgba(0x7f6df226));
+        colors.text_default = Hsla::from(rgba(0xdcdddeff));
+        colors.text_link = Hsla::from(rgba(0x8b7cf6ff));
+        colors.text_placeholder = Hsla::from(rgba(0x888888cc));
+        colors.text_h1 = Hsla::from(rgba(0xffffffff));
+        colors.text_h2 = Hsla::from(rgba(0xf2f2f2ff));
+        colors.text_h3 = Hsla::from(rgba(0xe8e8e8ff));
+        colors.text_h4 = Hsla::from(rgba(0xdcdddeff));
+        colors.text_h5 = Hsla::from(rgba(0xc9c9c9ff));
+        colors.text_h6 = Hsla::from(rgba(0xb3b3b3ff));
+        colors.border_h1 = Hsla::from(rgba(0x484848ff));
+        colors.border_h2 = Hsla::from(rgba(0x363636ff));
+        colors.text_quote = Hsla::from(rgba(0xb3b3b3ff));
+        colors.border_quote = Hsla::from(rgba(0x7f6df2ff));
+        colors.callout_note_bg = Hsla::from(rgba(0x7f6df224));
+        colors.callout_note_border = Hsla::from(rgba(0x8b7cf6ff));
+        colors.callout_tip_bg = Hsla::from(rgba(0x53dfb51f));
+        colors.callout_tip_border = Hsla::from(rgba(0x53dfb5ff));
+        colors.callout_important_bg = Hsla::from(rgba(0xc678dd1f));
+        colors.callout_important_border = Hsla::from(rgba(0xc678ddff));
+        colors.callout_warning_bg = Hsla::from(rgba(0xe5b5671f));
+        colors.callout_warning_border = Hsla::from(rgba(0xe5b567ff));
+        colors.callout_caution_bg = Hsla::from(rgba(0xe06c751f));
+        colors.callout_caution_border = Hsla::from(rgba(0xe06c75ff));
+        colors.footnote_bg = Hsla::from(rgba(0x262626ff));
+        colors.footnote_border = Hsla::from(rgba(0x484848ff));
+        colors.footnote_badge_bg = Hsla::from(rgba(0x3a3a3aff));
+        colors.footnote_badge_text = Hsla::from(rgba(0xdcdddeff));
+        colors.footnote_backref = Hsla::from(rgba(0x8b7cf6ff));
+        colors.task_checkbox_border = Hsla::from(rgba(0x666666ff));
+        colors.task_checkbox_checked_bg = Hsla::from(rgba(0x7f6df2ff));
+        colors.separator_color = Hsla::from(rgba(0x484848ff));
+        colors.code_bg = Hsla::from(rgba(0x171717ff));
+        colors.code_text = Hsla::from(rgba(0xdcdddeff));
+        colors.code_language_input_bg = Hsla::from(rgba(0x262626ff));
+        colors.code_language_input_border = Hsla::from(rgba(0x484848ff));
+        colors.code_language_input_text = Hsla::from(rgba(0xdcdddeff));
+        colors.code_language_input_placeholder = Hsla::from(rgba(0x888888cc));
+        colors.code_syntax_comment = Hsla::from(rgba(0x7f848eff));
+        colors.code_syntax_keyword = Hsla::from(rgba(0xc678ddff));
+        colors.code_syntax_string = Hsla::from(rgba(0x98c379ff));
+        colors.code_syntax_number = Hsla::from(rgba(0xd19a66ff));
+        colors.code_syntax_type = Hsla::from(rgba(0x56b6c2ff));
+        colors.code_syntax_function = Hsla::from(rgba(0x61afefff));
+        colors.code_syntax_constant = Hsla::from(rgba(0xe5c07bff));
+        colors.code_syntax_variable = Hsla::from(rgba(0xe06c75ff));
+        colors.code_syntax_property = Hsla::from(rgba(0xabb2bfff));
+        colors.code_syntax_operator = Hsla::from(rgba(0x56b6c2ff));
+        colors.code_syntax_punctuation = Hsla::from(rgba(0xabb2bfff));
+        colors.table_border = Hsla::from(rgba(0x484848ff));
+        colors.table_header_bg = Hsla::from(rgba(0x2b2b2bff));
+        colors.table_cell_bg = Hsla::from(rgba(0x202020ff));
+        colors.table_cell_active_outline = Hsla::from(rgba(0x8b7cf6ff));
+        colors.table_axis_preview_bg = Hsla::from(rgba(0x7f6df233));
+        colors.table_axis_selected_bg = Hsla::from(rgba(0x7f6df255));
+        colors.table_append_button_bg = Hsla::from(rgba(0x303030ff));
+        colors.table_append_button_hover = Hsla::from(rgba(0x3a3a3aff));
+        colors.table_append_button_text = Hsla::from(rgba(0xdcdddeff));
+        colors.image_placeholder_bg = Hsla::from(rgba(0x262626ff));
+        colors.image_placeholder_border = Hsla::from(rgba(0x484848ff));
+        colors.image_placeholder_text = Hsla::from(rgba(0xb3b3b3ff));
+        colors.image_caption_text = Hsla::from(rgba(0x888888ff));
+        colors.scrollbar_thumb = Hsla::from(rgba(0x666666b8));
+        colors.cursor = Hsla::from(rgba(0xdcdddeff));
+        colors.selection = Hsla::from(rgba(0x7f6df24d));
+        colors.dialog_surface = Hsla::from(rgba(0x262626ff));
+        colors.dialog_border = Hsla::from(rgba(0x484848ff));
+        colors.dialog_title = Hsla::from(rgba(0xffffffff));
+        colors.dialog_body = Hsla::from(rgba(0xdcdddeff));
+        colors.dialog_muted = Hsla::from(rgba(0x888888ff));
+        colors.dialog_primary_button_bg = Hsla::from(rgba(0x7f6df2ff));
+        colors.dialog_primary_button_hover = Hsla::from(rgba(0x8b7cf6ff));
+        colors.dialog_secondary_button_bg = Hsla::from(rgba(0x363636ff));
+        colors.dialog_secondary_button_hover = Hsla::from(rgba(0x484848ff));
+        colors.dialog_secondary_button_text = Hsla::from(rgba(0xdcdddeff));
+        colors.status_bar_background = Hsla::from(rgba(0x191919ff));
+        colors.status_bar_text = Hsla::from(rgba(0xb3b3b3ff));
+        colors.status_bar_text_dim = Hsla::from(rgba(0x888888ff));
+        colors.status_bar_button_hover = Hsla::from(rgba(0x363636ff));
+        colors.chrome_background = Hsla::from(rgba(0x191919ff));
+        colors.chrome_hover = Hsla::from(rgba(0x303030ff));
+        colors.sidebar_background = Hsla::from(rgba(0x191919ff));
+        colors.tab_strip_background = Hsla::from(rgba(0x161616ff));
+        colors.tab_active_background = Hsla::from(rgba(0x202020ff));
+        theme
+    }
+
+    /// Returns the Obsidian-inspired light theme.
+    pub fn obsidian_light() -> Self {
+        let mut theme = Self::xcode_light();
+        theme.name = "Obsidian Light".into();
+        let colors = &mut theme.colors;
+        colors.editor_background = Hsla::from(rgba(0xffffffff));
+        colors.source_mode_block_bg = Hsla::from(rgba(0xf6f6f6ff));
+        colors.comment_bg = Hsla::from(rgba(0x7c3aed1f));
+        colors.text_default = Hsla::from(rgba(0x2e3338ff));
+        colors.text_link = Hsla::from(rgba(0x6c31e3ff));
+        colors.text_placeholder = Hsla::from(rgba(0x7a7f87cc));
+        colors.text_h1 = Hsla::from(rgba(0x1f2328ff));
+        colors.text_h2 = Hsla::from(rgba(0x252a2fff));
+        colors.text_h3 = Hsla::from(rgba(0x2e3338ff));
+        colors.text_h4 = Hsla::from(rgba(0x3a4047ff));
+        colors.text_h5 = Hsla::from(rgba(0x4b5159ff));
+        colors.text_h6 = Hsla::from(rgba(0x5c6370ff));
+        colors.border_h1 = Hsla::from(rgba(0xd8d8d8ff));
+        colors.border_h2 = Hsla::from(rgba(0xe5e5e5ff));
+        colors.text_quote = Hsla::from(rgba(0x5c6370ff));
+        colors.border_quote = Hsla::from(rgba(0x7c3aedff));
+        colors.callout_note_bg = Hsla::from(rgba(0x7c3aed14));
+        colors.callout_note_border = Hsla::from(rgba(0x6c31e3ff));
+        colors.callout_important_bg = Hsla::from(rgba(0x9333ea14));
+        colors.callout_important_border = Hsla::from(rgba(0x9333eaff));
+        colors.footnote_bg = Hsla::from(rgba(0xf6f6f6ff));
+        colors.footnote_border = Hsla::from(rgba(0xd8d8d8ff));
+        colors.footnote_badge_bg = Hsla::from(rgba(0xe9e5f5ff));
+        colors.footnote_badge_text = Hsla::from(rgba(0x4b3f72ff));
+        colors.footnote_backref = Hsla::from(rgba(0x6c31e3ff));
+        colors.task_checkbox_border = Hsla::from(rgba(0x9a9a9aff));
+        colors.task_checkbox_checked_bg = Hsla::from(rgba(0x7c3aedff));
+        colors.separator_color = Hsla::from(rgba(0xd8d8d8ff));
+        colors.code_bg = Hsla::from(rgba(0xf4f4f4ff));
+        colors.code_text = Hsla::from(rgba(0x2e3338ff));
+        colors.code_language_input_bg = Hsla::from(rgba(0xffffffff));
+        colors.code_language_input_border = Hsla::from(rgba(0xd8d8d8ff));
+        colors.code_language_input_text = Hsla::from(rgba(0x2e3338ff));
+        colors.code_language_input_placeholder = Hsla::from(rgba(0x7a7f87cc));
+        colors.code_syntax_comment = Hsla::from(rgba(0x7a7f87ff));
+        colors.code_syntax_keyword = Hsla::from(rgba(0x7c3aedff));
+        colors.code_syntax_string = Hsla::from(rgba(0x22863aff));
+        colors.code_syntax_number = Hsla::from(rgba(0xb35c00ff));
+        colors.code_syntax_type = Hsla::from(rgba(0x087e8bff));
+        colors.code_syntax_function = Hsla::from(rgba(0x005cc5ff));
+        colors.code_syntax_constant = Hsla::from(rgba(0x9a6700ff));
+        colors.code_syntax_variable = Hsla::from(rgba(0xb31d28ff));
+        colors.code_syntax_property = Hsla::from(rgba(0x2e3338ff));
+        colors.code_syntax_operator = Hsla::from(rgba(0x087e8bff));
+        colors.code_syntax_punctuation = Hsla::from(rgba(0x5c6370ff));
+        colors.table_border = Hsla::from(rgba(0xd8d8d8ff));
+        colors.table_header_bg = Hsla::from(rgba(0xf1f1f1ff));
+        colors.table_cell_bg = Hsla::from(rgba(0xffffffff));
+        colors.table_cell_active_outline = Hsla::from(rgba(0x7c3aedff));
+        colors.table_axis_preview_bg = Hsla::from(rgba(0x7c3aed1f));
+        colors.table_axis_selected_bg = Hsla::from(rgba(0x7c3aed3d));
+        colors.table_append_button_bg = Hsla::from(rgba(0xeeeeeeff));
+        colors.table_append_button_hover = Hsla::from(rgba(0xe2e2e2ff));
+        colors.table_append_button_text = Hsla::from(rgba(0x2e3338ff));
+        colors.image_placeholder_bg = Hsla::from(rgba(0xf6f6f6ff));
+        colors.image_placeholder_border = Hsla::from(rgba(0xd8d8d8ff));
+        colors.image_placeholder_text = Hsla::from(rgba(0x5c6370ff));
+        colors.image_caption_text = Hsla::from(rgba(0x7a7f87ff));
+        colors.scrollbar_thumb = Hsla::from(rgba(0x9a9a9ab8));
+        colors.cursor = Hsla::from(rgba(0x2e3338ff));
+        colors.selection = Hsla::from(rgba(0x7c3aed2e));
+        colors.dialog_surface = Hsla::from(rgba(0xffffffff));
+        colors.dialog_border = Hsla::from(rgba(0xd8d8d8ff));
+        colors.dialog_title = Hsla::from(rgba(0x1f2328ff));
+        colors.dialog_body = Hsla::from(rgba(0x2e3338ff));
+        colors.dialog_muted = Hsla::from(rgba(0x7a7f87ff));
+        colors.dialog_primary_button_bg = Hsla::from(rgba(0x7c3aedff));
+        colors.dialog_primary_button_hover = Hsla::from(rgba(0x6c31e3ff));
+        colors.dialog_secondary_button_bg = Hsla::from(rgba(0xeeeeeeff));
+        colors.dialog_secondary_button_hover = Hsla::from(rgba(0xe2e2e2ff));
+        colors.dialog_secondary_button_text = Hsla::from(rgba(0x2e3338ff));
+        colors.status_bar_background = Hsla::from(rgba(0xf1f1f1ff));
+        colors.status_bar_text = Hsla::from(rgba(0x5c6370ff));
+        colors.status_bar_text_dim = Hsla::from(rgba(0x7a7f87ff));
+        colors.status_bar_button_hover = Hsla::from(rgba(0xe2e2e2ff));
+        colors.chrome_background = Hsla::from(rgba(0xf1f1f1ff));
+        colors.chrome_hover = Hsla::from(rgba(0xe5e5e5ff));
+        colors.sidebar_background = Hsla::from(rgba(0xf6f6f6ff));
+        colors.tab_strip_background = Hsla::from(rgba(0xeeeeeeff));
+        colors.tab_active_background = Hsla::from(rgba(0xffffffff));
+        theme
+    }
+
+    /// Test-only compatibility aliases for the historical export fixtures.
+    /// They resolve to Xcode and are not part of the persisted theme model.
     #[cfg(test)]
-    pub fn to_json(&self) -> anyhow::Result<String> {
-        Ok(serde_json::to_string_pretty(self)?)
+    pub fn default_theme() -> Self {
+        Self::xcode_dark()
+    }
+
+    #[cfg(test)]
+    pub fn light_theme() -> Self {
+        Self::xcode_light()
     }
 }

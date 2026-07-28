@@ -249,6 +249,8 @@ impl Block {
         &mut self,
         theme: &Theme,
         window: &Window,
+        available_width: f32,
+        content_height: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
@@ -262,7 +264,7 @@ impl Block {
             .to_string();
 
         let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
-        let available_width = effective_image_width(self, viewport_width, d);
+        let available_width = available_width.max(1.0);
         let theme_mode = MermaidThemeMode::from_theme(theme);
         let key = preview_key(
             &raw,
@@ -274,6 +276,8 @@ impl Block {
         );
         if self.mermaid_preview_key != Some(key) {
             self.mermaid_preview_key = Some(key);
+            self.mermaid_successful_preview_key = None;
+            self.mermaid_render_error = None;
             let source = raw.clone();
             self.mermaid_preview_task = Some(cx.spawn(
                 async move |this: WeakEntity<Block>, cx: &mut AsyncApp| {
@@ -303,20 +307,26 @@ impl Block {
                         match result {
                             Ok(rendered) => {
                                 block.last_successful_mermaid_render = Some(rendered);
+                                block.mermaid_successful_preview_key = Some(key);
                                 block.mermaid_render_error = None;
                             }
-                            Err(error) => block.mermaid_render_error = Some(error),
+                            Err(error) => {
+                                block.mermaid_successful_preview_key = None;
+                                block.mermaid_render_error = Some(error);
+                            }
                         }
                         cx.notify();
                     });
                 },
             ));
         }
-        let content = match (
+        match (
             self.last_successful_mermaid_render.as_ref(),
             self.mermaid_render_error.as_ref(),
         ) {
-            (Some(rendered), None) => render_mermaid_svg_content(rendered, d.block_padding_y),
+            (Some(rendered), None) => {
+                render_mermaid_svg_content(rendered, d.block_padding_y, content_height)
+            }
             (Some(rendered), Some(error)) => div()
                 .id("mermaid-render-fallback")
                 .debug_selector(|| "mermaid-render-fallback".to_owned())
@@ -327,7 +337,13 @@ impl Block {
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(render_mermaid_svg_content(rendered, d.block_padding_y))
+                .child(render_mermaid_svg_content(
+                    rendered,
+                    d.block_padding_y,
+                    // 渲染失败时必须为告警条预留空间，避免固定高度工作台把恢复入口
+                    // 推到可视区域之外；成功 SVG 仍保持并继续作为可滚动预览显示。
+                    (content_height - 26.0).max(1.0),
+                ))
                 .child(render_complex_warning(
                     format!("Mermaid render error: {error}"),
                     theme,
@@ -357,53 +373,11 @@ impl Block {
                 .id("mermaid-render-pending")
                 .debug_selector(|| "mermaid-render-pending".to_owned())
                 .w_full()
-                .min_h(px(96.0))
+                .h(px(content_height.max(1.0)))
                 .rounded_sm()
                 .bg(c.source_mode_block_bg)
                 .into_any_element(),
-        };
-        let Some(rendered) = self.last_successful_mermaid_render.clone() else {
-            return content;
-        };
-        let preview_key = key;
-        div()
-            .relative()
-            .w_full()
-            .min_w(px(0.0))
-            .max_w(Length::Definite(relative(1.0)))
-            .overflow_hidden()
-            .child(content)
-            .child(
-                div()
-                    .id("mermaid-open-overlay")
-                    .debug_selector(|| "mermaid-open-overlay".to_owned())
-                    .absolute()
-                    .top(px(6.0))
-                    .right(px(6.0))
-                    .size(px(30.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.0))
-                    .bg(c.dialog_surface)
-                    .border(px(1.0))
-                    .border_color(c.dialog_border)
-                    .text_color(c.text_link)
-                    .cursor_pointer()
-                    .hover(|this| this.bg(c.chrome_hover))
-                    .child("↗")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_block, _event, _window, cx| {
-                            cx.emit(BlockEvent::RequestOpenMermaidOverlay {
-                                preview_key,
-                                rendered: rendered.clone(),
-                            });
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
-            .into_any_element()
+        }
     }
 
     pub(super) fn render_text_or_mixed_inline_visuals(

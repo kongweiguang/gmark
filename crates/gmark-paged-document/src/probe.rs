@@ -3,13 +3,14 @@
 use std::path::Path;
 
 use gmark_document_core::{
-    DocumentBackendKind, DocumentProfile, LoadingPolicy, LoadingPreset, OpenPolicyResolver,
+    DocumentBackendKind, DocumentProfile, LoadingPolicy, OpenPolicyResolver,
 };
 pub use gmark_document_core::{DocumentFormat, TextEncoding};
 
 use crate::{FileSource, PagedDocumentError};
 
-pub const DEFAULT_MAX_RESIDENT_BYTES: u64 = gmark_document_core::BALANCED_LIMITS.max_resident_bytes;
+pub const DEFAULT_MAX_RESIDENT_BYTES: u64 =
+    gmark_document_core::DEFAULT_LOADING_LIMITS.max_resident_bytes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenStrategy {
@@ -20,8 +21,6 @@ pub enum OpenStrategy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProbeOptions {
     pub max_resident_bytes: u64,
-    pub max_resident_lines: u64,
-    pub max_structural_units: u64,
     pub sample_bytes: usize,
 }
 
@@ -29,8 +28,6 @@ impl Default for ProbeOptions {
     fn default() -> Self {
         Self {
             max_resident_bytes: DEFAULT_MAX_RESIDENT_BYTES,
-            max_resident_lines: gmark_document_core::BALANCED_LIMITS.max_resident_lines,
-            max_structural_units: gmark_document_core::BALANCED_LIMITS.max_structural_units,
             sample_bytes: 64 * 1024,
         }
     }
@@ -102,10 +99,7 @@ pub fn probe_file(
     };
     let plan = OpenPolicyResolver.resolve(
         LoadingPolicy {
-            preset: LoadingPreset::Balanced,
             max_resident_bytes: Some(options.max_resident_bytes),
-            max_resident_lines: Some(options.max_resident_lines),
-            max_structural_units: Some(options.max_structural_units),
             force_safe_source: false,
         },
         &profile,

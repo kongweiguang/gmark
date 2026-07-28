@@ -30,9 +30,17 @@ const SEARCH_INPUT_ID: NodeId = NodeId(10);
 const NAVIGATION_INPUT_ID: NodeId = NodeId(11);
 const FIRST_LINE_ID: u64 = 1_000;
 const FIRST_TEXT_RUN_ID: u64 = 100_000;
+const FIRST_FOLD_ID: u64 = 1_000_000;
 const MAX_EXPOSED_LINES: usize = 512;
 const MAX_EXPOSED_LINE_BYTES: usize = 8 * 1024;
 const MAX_EXPOSED_TEXT_BYTES: usize = 512 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AccessibilityFold {
+    pub(crate) start_line: u64,
+    pub(crate) end_line: u64,
+    pub(crate) collapsed: bool,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EditorAccessibilitySnapshot {
@@ -45,6 +53,7 @@ pub(crate) struct EditorAccessibilitySnapshot {
     pub navigation_visible: bool,
     pub caret: Option<(u64, usize)>,
     pub lines: Vec<(u64, String)>,
+    pub folds: Vec<AccessibilityFold>,
 }
 
 impl EditorAccessibilitySnapshot {
@@ -68,8 +77,16 @@ impl EditorAccessibilitySnapshot {
             retained.push((line, text));
         }
         self.lines = retained;
+        self.folds
+            .retain(|fold| self.lines.iter().any(|(line, _)| *line == fold.start_line));
         self
     }
+}
+
+pub(crate) fn source_line_for_fold_node(node: NodeId) -> Option<usize> {
+    node.0
+        .checked_sub(FIRST_FOLD_ID)
+        .and_then(|line| usize::try_from(line).ok())
 }
 
 #[derive(Clone)]
@@ -248,7 +265,7 @@ impl AccessibilityBridge {
 }
 
 fn build_tree(snapshot: EditorAccessibilitySnapshot) -> TreeUpdate {
-    let mut nodes = Vec::with_capacity(snapshot.lines.len() + 12);
+    let mut nodes = Vec::with_capacity(snapshot.lines.len() * 2 + snapshot.folds.len() + 12);
     let mut root = Node::new(Role::Window);
     root.set_label("gmark");
     root.set_children(vec![TAB_LIST_ID, DOCUMENT_ID, MODE_ID, STATUS_ID]);
@@ -318,7 +335,14 @@ fn build_tree(snapshot: EditorAccessibilitySnapshot) -> TreeUpdate {
         let text_id = NodeId(FIRST_TEXT_RUN_ID + index as u64);
         let mut paragraph = Node::new(Role::Paragraph);
         paragraph.set_label(format!("Line {}", line + 1));
-        paragraph.set_children(vec![text_id]);
+        let fold = snapshot.folds.iter().find(|fold| fold.start_line == *line);
+        let fold_id = fold.map(|fold| NodeId(FIRST_FOLD_ID + fold.start_line));
+        paragraph.set_children(
+            fold_id
+                .into_iter()
+                .chain([text_id])
+                .collect::<Vec<NodeId>>(),
+        );
         let mut text_run = Node::new(Role::TextRun);
         let mut value = text.clone();
         value.push('\n');
@@ -327,6 +351,17 @@ fn build_tree(snapshot: EditorAccessibilitySnapshot) -> TreeUpdate {
         text_run.set_value(value);
         text_run.set_character_lengths(lengths);
         nodes.push((id, paragraph));
+        if let (Some(fold), Some(fold_id)) = (fold, fold_id) {
+            let mut node = Node::new(Role::Button);
+            node.set_label(format!(
+                "{} lines {} through {}",
+                if fold.collapsed { "Expand" } else { "Collapse" },
+                fold.start_line + 1,
+                fold.end_line + 1
+            ));
+            node.add_action(Action::Click);
+            nodes.push((fold_id, node));
+        }
         nodes.push((text_id, text_run));
     }
 

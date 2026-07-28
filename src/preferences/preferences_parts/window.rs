@@ -24,8 +24,6 @@ impl PreferencesNav {
 pub(super) enum PreferencesDropdown {
     Startup,
     AutoSave,
-    DocumentLoadingPreset,
-    Theme,
     Language,
     Image,
     Font,
@@ -33,10 +31,12 @@ pub(super) enum PreferencesDropdown {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PreferencesSwitch {
+    AutoCheckUpdates,
     SpellCheck,
     AutoPairBrackets,
     AutoPairMarkdown,
-    WorkspaceSidebarRight,
+    CodeFolding,
+    FormatOnSave,
     ShowTabBarActions,
     StatusBarEnabled,
     StatusBarWordCount,
@@ -46,29 +46,33 @@ pub(super) enum PreferencesSwitch {
 }
 
 impl PreferencesSwitch {
-    const COUNT: usize = 10;
+    const COUNT: usize = 12;
 
     fn index(self) -> usize {
         match self {
             Self::SpellCheck => 0,
             Self::AutoPairBrackets => 1,
             Self::AutoPairMarkdown => 2,
-            Self::WorkspaceSidebarRight => 3,
-            Self::ShowTabBarActions => 4,
-            Self::StatusBarEnabled => 5,
-            Self::StatusBarWordCount => 6,
-            Self::StatusBarCursorPosition => 7,
-            Self::StatusBarSidebarToggle => 8,
-            Self::StatusBarModeSwitch => 9,
+            Self::ShowTabBarActions => 3,
+            Self::StatusBarEnabled => 4,
+            Self::StatusBarWordCount => 5,
+            Self::StatusBarCursorPosition => 6,
+            Self::StatusBarSidebarToggle => 7,
+            Self::StatusBarModeSwitch => 8,
+            Self::AutoCheckUpdates => 9,
+            Self::CodeFolding => 10,
+            Self::FormatOnSave => 11,
         }
     }
 
     fn id(self) -> &'static str {
         match self {
+            Self::AutoCheckUpdates => "preferences-auto-check-updates",
             Self::SpellCheck => "preferences-spell-check",
             Self::AutoPairBrackets => "preferences-auto-pair-brackets",
             Self::AutoPairMarkdown => "preferences-auto-pair-markdown",
-            Self::WorkspaceSidebarRight => "preferences-workspace-sidebar-right",
+            Self::CodeFolding => "preferences-code-folding",
+            Self::FormatOnSave => "preferences-format-on-save",
             Self::ShowTabBarActions => "preferences-show-tab-bar-actions",
             Self::StatusBarEnabled => "preferences-status-bar-enabled",
             Self::StatusBarWordCount => "preferences-status-bar-word-count",
@@ -89,14 +93,69 @@ enum PreferencesStepperControl {
     ContentWidthIncrease,
     ResidentMibDecrease,
     ResidentMibIncrease,
-    ResidentLinesDecrease,
-    ResidentLinesIncrease,
-    StructuralUnitsDecrease,
-    StructuralUnitsIncrease,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreferencesNumericInput {
+    FontSize,
+    LineHeight,
+    ContentWidth,
+    ResidentMib,
+}
+
+impl PreferencesNumericInput {
+    const COUNT: usize = 4;
+
+    const ORDER: [Self; Self::COUNT] = [
+        Self::FontSize,
+        Self::LineHeight,
+        Self::ContentWidth,
+        Self::ResidentMib,
+    ];
+
+    fn index(self) -> usize {
+        Self::ORDER
+            .iter()
+            .position(|candidate| *candidate == self)
+            .expect("numeric preference is part of the fixed order")
+    }
+
+    fn bounds(self) -> (u64, u64) {
+        match self {
+            Self::FontSize => (
+                u64::from(MIN_EDITOR_FONT_SIZE),
+                u64::from(MAX_EDITOR_FONT_SIZE),
+            ),
+            Self::LineHeight => (
+                u64::from(MIN_EDITOR_LINE_HEIGHT_PERCENT),
+                u64::from(MAX_EDITOR_LINE_HEIGHT_PERCENT),
+            ),
+            Self::ContentWidth => (
+                u64::from(MIN_EDITOR_CONTENT_WIDTH),
+                u64::from(MAX_EDITOR_CONTENT_WIDTH),
+            ),
+            Self::ResidentMib => (1, 1_024),
+        }
+    }
+
+    fn input_id(self) -> &'static str {
+        match self {
+            Self::FontSize => "preferences-editor-font-size-input",
+            Self::LineHeight => "preferences-editor-line-height-input",
+            Self::ContentWidth => "preferences-editor-content-width-input",
+            Self::ResidentMib => "preferences-document-resident-mib-input",
+        }
+    }
+}
+
+fn parse_numeric_input(field: PreferencesNumericInput, text: &str) -> Option<u64> {
+    let value = text.trim().parse::<u64>().ok()?;
+    let (minimum, maximum) = field.bounds();
+    (minimum..=maximum).contains(&value).then_some(value)
 }
 
 impl PreferencesStepperControl {
-    const COUNT: usize = 12;
+    const COUNT: usize = 8;
 
     fn index(self) -> usize {
         match self {
@@ -108,10 +167,6 @@ impl PreferencesStepperControl {
             Self::ContentWidthIncrease => 5,
             Self::ResidentMibDecrease => 6,
             Self::ResidentMibIncrease => 7,
-            Self::ResidentLinesDecrease => 8,
-            Self::ResidentLinesIncrease => 9,
-            Self::StructuralUnitsDecrease => 10,
-            Self::StructuralUnitsIncrease => 11,
         }
     }
 
@@ -125,26 +180,20 @@ impl PreferencesStepperControl {
             Self::ContentWidthIncrease => "preferences-editor-content-width-increase",
             Self::ResidentMibDecrease => "preferences-document-resident-mib-decrease",
             Self::ResidentMibIncrease => "preferences-document-resident-mib-increase",
-            Self::ResidentLinesDecrease => "preferences-document-resident-lines-decrease",
-            Self::ResidentLinesIncrease => "preferences-document-resident-lines-increase",
-            Self::StructuralUnitsDecrease => "preferences-document-structural-units-decrease",
-            Self::StructuralUnitsIncrease => "preferences-document-structural-units-increase",
         }
     }
 }
 
 impl PreferencesDropdown {
-    const COUNT: usize = 7;
+    const COUNT: usize = 5;
 
     fn index(self) -> usize {
         match self {
             Self::Startup => 0,
             Self::AutoSave => 1,
-            Self::DocumentLoadingPreset => 2,
-            Self::Theme => 3,
-            Self::Language => 4,
-            Self::Image => 5,
-            Self::Font => 6,
+            Self::Language => 2,
+            Self::Image => 3,
+            Self::Font => 4,
         }
     }
 }
@@ -160,52 +209,58 @@ struct PreferenceSearchItem {
 pub(crate) struct PreferencesWindow {
     nav: PreferencesNav,
     startup_open: StartupOpenPreference,
+    auto_check_updates: bool,
     auto_save: AutoSavePreference,
     spell_check: bool,
     auto_pair_brackets: bool,
     auto_pair_markdown: bool,
+    code_folding: bool,
+    format_on_save: bool,
     editor_font_size: u8,
     editor_line_height_percent: u16,
     editor_content_width: u16,
     editor_font_family: String,
-    workspace_sidebar_position: WorkspaceSidebarPosition,
     show_tab_bar_actions: bool,
-    selected_theme_id: String,
+    theme_appearance: ThemeAppearance,
+    theme_palette: ThemePalette,
     selected_language_id: String,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
     document_loading: DocumentLoadingPreferences,
     saved_startup_open: StartupOpenPreference,
+    saved_auto_check_updates: bool,
     saved_auto_save: AutoSavePreference,
     saved_spell_check: bool,
     saved_auto_pair_brackets: bool,
     saved_auto_pair_markdown: bool,
+    saved_code_folding: bool,
+    saved_format_on_save: bool,
     saved_editor_font_size: u8,
     saved_editor_line_height_percent: u16,
     saved_editor_content_width: u16,
     saved_editor_font_family: String,
-    saved_workspace_sidebar_position: WorkspaceSidebarPosition,
     saved_show_tab_bar_actions: bool,
-    saved_theme_id: String,
+    saved_theme_appearance: ThemeAppearance,
+    saved_theme_palette: ThemePalette,
     saved_language_id: String,
     saved_image_paste_behavior: ImagePasteBehavior,
     saved_keybindings: BTreeMap<String, Vec<String>>,
     saved_document_loading: DocumentLoadingPreferences,
-    theme_options: Vec<ThemeCatalogEntry>,
     language_options: Vec<LanguageCatalogEntry>,
     font_options: Vec<String>,
     focus_handle: FocusHandle,
     nav_focus_handles: [FocusHandle; 6],
     dropdown_focus_handles: [FocusHandle; PreferencesDropdown::COUNT],
+    theme_appearance_focus_handles: [FocusHandle; 3],
+    theme_palette_focus_handles: [FocusHandle; 3],
     dropdown_selected_indices: [usize; PreferencesDropdown::COUNT],
     switch_focus_handles: [FocusHandle; PreferencesSwitch::COUNT],
     stepper_focus_handles: [FocusHandle; PreferencesStepperControl::COUNT],
+    numeric_inputs: [Entity<Block>; PreferencesNumericInput::COUNT],
     search_input: Entity<Block>,
     search_selected: usize,
     startup_dropdown_open: bool,
     auto_save_dropdown_open: bool,
-    document_loading_dropdown_open: bool,
-    theme_dropdown_open: bool,
     language_dropdown_open: bool,
     image_dropdown_open: bool,
     font_dropdown_open: bool,
@@ -242,7 +297,7 @@ impl Render for PreferencesWindow {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
-        let can_save = self.has_unsaved_changes();
+        let can_save = self.has_unsaved_changes() && !self.has_invalid_numeric_input(cx);
         let search_query = self.search_query(cx);
         let clear_search_tooltip: SharedString = strings.ui_clear_search.clone().into();
         let search_results = self.preference_search_results(&strings, cx);
@@ -674,7 +729,6 @@ impl Render for PreferencesWindow {
 pub(super) fn open_preferences_window_with_state(
     cx: &mut App,
     preferences: AppPreferences,
-    theme_options: Vec<ThemeCatalogEntry>,
     title: String,
 ) -> WindowHandle<PreferencesWindow> {
     let bounds = Bounds::centered(None, size(px(860.0), px(620.0)), cx);
@@ -682,9 +736,7 @@ pub(super) fn open_preferences_window_with_state(
     let handle = cx
         .open_window(
             gmark_window_options(window_title, bounds),
-            move |_window, cx| {
-                cx.new(move |cx| PreferencesWindow::new(preferences, theme_options, cx))
-            },
+            move |_window, cx| cx.new(move |cx| PreferencesWindow::new(preferences, cx)),
         )
         .expect("preferences window should open");
 
@@ -711,24 +763,12 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
             AppPreferences::default()
         }
     };
-    let mut theme_options = cx.global::<ThemeManager>().available_themes().to_vec();
-    theme_options.insert(
-        0,
-        ThemeCatalogEntry {
-            id: SYSTEM_THEME_ID.into(),
-            name: cx
-                .global::<I18nManager>()
-                .strings()
-                .preferences_follow_system_theme
-                .clone(),
-        },
-    );
     let title = cx
         .global::<I18nManager>()
         .strings()
         .preferences_window_title
         .clone();
-    open_preferences_window_with_state(cx, preferences, theme_options, title)
+    open_preferences_window_with_state(cx, preferences, title)
 }
 
 pub(crate) fn localized_shortcut_command_label(

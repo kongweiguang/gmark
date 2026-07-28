@@ -13,10 +13,10 @@ use self::metadata::localized_action_description;
 use super::{Block, BlockRecord, Editor, render::menu_icon_slot};
 use crate::app_menu::menu_action_icon;
 use crate::components::{
-    AddLanguageConfig, AddThemeConfig, BlockEvent, BoldSelection, CheckForUpdates, CodeSelection,
+    AddLanguageConfig, BlockEvent, BoldSelection, CheckForUpdates, CodeSelection,
     EditingCommandCategory, EditingCommandId, EditingSelectionContext, EditingViewMode, ExportHtml,
-    ExportImage, ExportPdf, HighlightSelection, InlineMathSelection, InstallCliTool,
-    ItalicSelection, LinkSelection, NoRecentFiles, NormalizeLineEndingsCr,
+    ExportImage, ExportPdf, HighlightSelection, InlineMathSelection, InsertResource,
+    InstallCliTool, ItalicSelection, LinkSelection, NoRecentFiles, NormalizeLineEndingsCr,
     NormalizeLineEndingsCrLf, NormalizeLineEndingsLf, OpenCrashReports, OpenPrivacyPolicy,
     OpenSafeSource, SetBulletedList, SetCodeBlock, SetHeading1, SetHeading2, SetHeading3,
     SetHeading4, SetHeading5, SetHeading6, SetNumberedList, SetParagraph, SetQuote, SetTaskList,
@@ -77,6 +77,8 @@ fn editing_command_for_action(action: &dyn Action) -> Option<EditingCommandId> {
         Some(EditingCommandId::Quote)
     } else if action.as_any().is::<SetCodeBlock>() {
         Some(EditingCommandId::CodeBlock)
+    } else if action.as_any().is::<InsertResource>() {
+        Some(EditingCommandId::Resource)
     } else {
         None
     }
@@ -567,7 +569,6 @@ fn localized_action_label(action: &dyn Action, strings: &I18nStrings, language_i
             "exportimage" => "导出为 PNG 图片",
             "exportpdf" => "导出为 PDF",
             "exportselection" => "导出所选内容",
-            "selecttheme" => "切换主题",
             "selectlanguage" => "切换界面语言",
             "openrecentfile" => "打开最近文件",
             _ => "",
@@ -583,8 +584,6 @@ fn localized_action_label(action: &dyn Action, strings: &I18nStrings, language_i
 
     if action.as_any().is::<AddLanguageConfig>() {
         strings.menu_add_language_config.clone()
-    } else if action.as_any().is::<AddThemeConfig>() {
-        strings.menu_add_theme_config.clone()
     } else if action.as_any().is::<CheckForUpdates>() {
         strings.menu_check_updates.clone()
     } else if action.as_any().is::<OpenSafeSource>() {
@@ -661,7 +660,6 @@ fn command_icon(action: &dyn Action) -> &'static str {
         }
         "exportselection" => "icon/ui/file-output.svg",
         "gotoline" | "home" | "end" | "selecthome" | "selectend" => "icon/ui/type.svg",
-        "selecttheme" => "icon/ui/palette.svg",
         "selectlanguage" => "icon/ui/keyboard.svg",
         "openrecentfile" => "icon/ui/files.svg",
         "delete" | "deleteback" | "worddeleteback" | "worddeleteforward" => "icon/ui/trash.svg",

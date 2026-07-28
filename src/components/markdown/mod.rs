@@ -9,5 +9,6 @@ pub(crate) mod image;
 pub mod inline;
 pub(crate) mod link;
 pub(crate) mod paste;
+pub mod resource;
 pub mod table;
 pub(crate) mod toc;

@@ -36,6 +36,14 @@ fn rejects_malformed_utf16_and_binary_controls() {
 }
 
 #[test]
+fn known_non_text_extensions_are_rejected_before_file_io() {
+    let missing = std::env::temp_dir().join("gmark-unsupported-file.exe");
+    let error = open_document(&missing).unwrap_err().to_string();
+
+    assert_eq!(error, "unsupported file type '.exe'");
+}
+
+#[test]
 fn regular_non_markdown_formats_keep_resident_strategy_and_format_capabilities() {
     let dir = tempfile::tempdir().unwrap();
     for (name, text) in [
@@ -102,8 +110,6 @@ fn resident_markdown_freezes_limits_and_rejects_a_replaced_probe_source() {
     std::fs::write(&path, "# title\n").unwrap();
     let policy = gmark_document_core::LoadingPolicy {
         max_resident_bytes: Some(8),
-        max_resident_lines: Some(1_234),
-        max_structural_units: Some(56_789),
         ..gmark_document_core::LoadingPolicy::default()
     };
     let OpenedDocument::Resident(opened) = open_document_with_policy(&path, policy).unwrap() else {
@@ -113,8 +119,6 @@ fn resident_markdown_freezes_limits_and_rejects_a_replaced_probe_source() {
 
     let options = gmark_paged_document::ProbeOptions {
         max_resident_bytes: 8,
-        max_resident_lines: 1_234,
-        max_structural_units: 56_789,
         ..gmark_paged_document::ProbeOptions::default()
     };
     let stale_probe = gmark_paged_document::probe_file(&path, options).unwrap();

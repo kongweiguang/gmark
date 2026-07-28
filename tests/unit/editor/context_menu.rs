@@ -1,5 +1,6 @@
 // @author kongweiguang
 
+use super::super::ResourceTitleDialogState;
 use super::{ContextMenuState, Editor, TableInsertTarget};
 use gpui::{AppContext, ClickEvent, KeyDownEvent, Keystroke, Point, TestAppContext, px, size};
 
@@ -59,6 +60,32 @@ async fn context_menu_keyboard_enters_submenu_and_preserves_caret_focus(cx: &mut
                 .focus_handle
                 .is_focused(window)
         );
+    });
+}
+
+#[gpui::test]
+async fn shift_f10_opens_the_selected_resource_context_menu(cx: &mut TestAppContext) {
+    init_context_menu_test_app(cx);
+    let (editor, visual) = cx.add_window_view(|window, cx| {
+        let editor =
+            Editor::from_markdown(cx, "[Spec](./spec.pdf \"gmark:resource\")".to_owned(), None);
+        let resource = editor.document.first_root().expect("resource");
+        resource.update(cx, |block, _cx| block.resource_selected = true);
+        resource.read(cx).focus_handle.focus(window);
+        editor
+    });
+
+    editor.update_in(visual, |editor, window, cx| {
+        assert!(editor.open_resource_context_menu_from_keyboard(
+            &key_event("shift-f10"),
+            window,
+            cx,
+        ));
+        assert!(matches!(
+            editor.context_menu,
+            Some(ContextMenuState::Resource { .. })
+        ));
+        assert_eq!(editor.context_menu_keyboard_item, Some(0));
     });
 }
 
@@ -245,7 +272,7 @@ async fn context_insert_keyboard_model_matches_shared_command_order(cx: &mut Tes
         assert!(editor.handle_context_menu_key(&key_event("down"), window, cx));
         assert!(editor.handle_context_menu_key(&key_event("right"), window, cx));
         assert!(editor.handle_context_menu_key(&key_event("end"), window, cx));
-        assert_eq!(editor.context_menu_keyboard_submenu_item, Some(5));
+        assert_eq!(editor.context_menu_keyboard_submenu_item, Some(6));
         assert!(editor.handle_context_menu_key(&key_event("enter"), window, cx));
         assert!(
             editor.document.visible_blocks().iter().any(
@@ -432,5 +459,56 @@ async fn spelling_suggestion_replaces_text_as_undoable_block_edit(cx: &mut TestA
             "bad sentence"
         );
         assert!(editor.context_menu.is_none());
+    });
+}
+
+#[gpui::test]
+async fn resource_title_dialog_canonicalizes_and_participates_in_undo_redo(
+    cx: &mut TestAppContext,
+) {
+    init_context_menu_test_app(cx);
+    let editor = cx.new(|cx| {
+        Editor::from_markdown(cx, "[Old](./old.pdf \"gmark:resource\")".to_owned(), None)
+    });
+
+    editor.update(cx, |editor, cx| {
+        let entity_id = editor.document.first_root().expect("resource").entity_id();
+        let previous = crate::components::ResourceRecord::from_parts(
+            "Old".to_owned(),
+            r"dir\spec.pdf".to_owned(),
+            None,
+            None,
+        );
+        let input = cx.new(|cx| {
+            let mut input = crate::components::Block::with_record(
+                cx,
+                crate::components::BlockRecord::paragraph(String::new()),
+            );
+            input.set_source_raw_mode();
+            input
+        });
+        editor.resource_title_dialog = Some(ResourceTitleDialogState {
+            entity_id,
+            previous,
+            input,
+        });
+
+        editor.confirm_resource_title_dialog(cx);
+        assert_eq!(
+            editor.source_document.text(),
+            "[spec.pdf](dir/spec.pdf \"gmark:resource\")"
+        );
+        assert_eq!(editor.undo_history.len(), 1);
+
+        editor.undo_document(cx);
+        assert_eq!(
+            editor.source_document.text(),
+            "[Old](./old.pdf \"gmark:resource\")"
+        );
+        editor.redo_document(cx);
+        assert_eq!(
+            editor.source_document.text(),
+            "[spec.pdf](dir/spec.pdf \"gmark:resource\")"
+        );
     });
 }

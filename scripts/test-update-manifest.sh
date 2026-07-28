@@ -20,6 +20,7 @@ fi
 for suffix in \
     windows-x86_64-setup.exe \
     macos-x86_64.dmg macos-aarch64.dmg \
+    macos-x86_64.app.tar.gz macos-aarch64.app.tar.gz \
     linux-x86_64.AppImage linux-x86_64.deb; do
     printf 'artifact:%s\n' "$suffix" > "$TEMPORARY/dist/gmark-v0.1.0-$suffix"
 done
@@ -36,10 +37,21 @@ PUBLIC_KEY_BASE64="$(tail -c 32 "$TEMPORARY/public.der" | base64 | tr -d '\r\n')
     --private-key "$TEMPORARY/private.pem" \
     --public-key-base64 "$PUBLIC_KEY_BASE64" \
     --output "$TEMPORARY/update-manifest.json" \
+    --v2-output "$TEMPORARY/update-manifest-v2.json" \
+    --notes "Updater smoke" \
     --rollout-percent 25
 
 "$PYTHON" "$ROOT/scripts/verify-update-manifest.py" \
     --manifest "$TEMPORARY/update-manifest.json" \
+    --public-key-base64 "$PUBLIC_KEY_BASE64" \
+    --dist "$TEMPORARY/dist" \
+    --version 0.1.0 \
+    --release-tag v0.1.0 \
+    --expected-rollout-percent 25 \
+    --expect-paused false
+
+"$PYTHON" "$ROOT/scripts/verify-update-manifest-v2.py" \
+    --manifest "$TEMPORARY/update-manifest-v2.json" \
     --public-key-base64 "$PUBLIC_KEY_BASE64" \
     --dist "$TEMPORARY/dist" \
     --version 0.1.0 \

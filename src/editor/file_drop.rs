@@ -8,6 +8,7 @@ use anyhow::Result;
 use gpui::*;
 
 use super::{DocumentKind, Editor, ViewMode};
+use crate::components::{BlockEvent, PastedImageSource};
 use crate::i18n::I18nManager;
 
 impl Editor {
@@ -29,6 +30,10 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let Some(path) = Self::first_dropped_markdown_path(paths.paths()) else {
+            if let Some(resource_path) = paths.paths().iter().find(|path| path.is_file()).cloned() {
+                self.insert_dropped_resource(resource_path, window, cx);
+                return;
+            }
             let strings = cx.global::<I18nManager>().strings().clone();
             self.show_drop_open_failed_prompt(strings.drop_no_markdown_file_message, window, cx);
             return;
@@ -52,6 +57,34 @@ impl Editor {
         }
 
         self.request_dropped_markdown_replace(path, window, cx);
+    }
+
+    /// Routes non-Markdown file drops through the same block event used by
+    /// clipboard insertion. This keeps selection, structural insertion and
+    /// undo behavior identical across drag-and-drop and paste.
+    fn insert_dropped_resource(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self
+            .focused_edit_target(window, cx)
+            .or_else(|| self.current_edit_target_from_state(cx))
+        else {
+            let strings = cx.global::<I18nManager>().strings().clone();
+            self.show_drop_open_failed_prompt(strings.drop_no_markdown_file_message, window, cx);
+            return;
+        };
+
+        block.update(cx, move |block, cx| {
+            let (leading, trailing) = block.paste_resource_split();
+            cx.emit(BlockEvent::RequestPasteImage {
+                leading,
+                source: PastedImageSource::LocalResource(path),
+                trailing,
+            });
+        });
     }
 
     pub(crate) fn request_dropped_markdown_replace(
@@ -145,6 +178,7 @@ impl Editor {
         self.pending_window_title_refresh = true;
         self.pending_save = false;
         self.pending_save_as = false;
+        self.pending_resource_insertion = None;
         self.save_task = None;
         self.save_queued = false;
         self.auto_save_task = None;

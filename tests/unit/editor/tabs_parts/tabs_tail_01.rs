@@ -89,6 +89,33 @@
     }
 
     #[gpui::test]
+    async fn window_close_discard_clears_every_dirty_tab_in_one_action(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test_app(cx);
+        let (editor, visual) = cx.add_window_view(|_window, cx| {
+            super::Editor::from_markdown(cx, "first dirty".to_owned(), None)
+        });
+        editor.update(visual, |editor, cx| {
+            editor.set_document_dirty_for_test(true);
+            add_inactive_tab(editor, "second dirty", "second.md");
+            add_inactive_tab(editor, "third dirty", "third.md");
+            for record in &mut editor.tabs.records[1..] {
+                record.snapshot.as_mut().unwrap().document_dirty = true;
+            }
+
+            assert!(editor.discard_all_document_changes_for_window_close(cx));
+            assert!(!editor.is_document_dirty());
+            assert!(editor.tabs.records.iter().all(|record| {
+                record
+                    .snapshot
+                    .as_ref()
+                    .is_none_or(|snapshot| !snapshot.document_dirty)
+            }));
+        });
+    }
+
+    #[gpui::test]
     async fn pinning_and_reordering_preserve_active_snapshot_and_partitions(
         cx: &mut gpui::TestAppContext,
     ) {

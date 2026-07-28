@@ -2,6 +2,7 @@
 
 use super::layout::*;
 use super::*;
+use crate::editor::workspace::document_sidebar_panel_width_for_viewport;
 
 pub(super) fn submenu_panel_top(
     items: &[OwnedMenuItem],
@@ -90,7 +91,8 @@ pub(super) fn footnote_group_shell(
                 .px(px(dimensions.footnote_padding_x))
                 .py(px(dimensions.footnote_padding_y))
                 .rounded(px(dimensions.footnote_radius))
-                .border(px(1.0))
+                // 脚注是正文的补充层，不使用完整卡片描边；细左轨即可表达归属。
+                .border_l(px(2.0))
                 .border_color(theme.colors.footnote_border)
                 .bg(theme.colors.footnote_bg)
                 .children(children),
@@ -173,7 +175,14 @@ impl Editor {
                         document_host.update(cx, |view, cx| view.activate_accessibility_error(cx));
                     }
                 }
-                _ => {}
+                target => {
+                    if let Some(line) = crate::accessibility::source_line_for_fold_node(target)
+                        && let Some(document_host) = self.document_host.clone()
+                    {
+                        document_host
+                            .update(cx, |view, cx| view.toggle_fold_at_source_line(line, cx));
+                    }
+                }
             }
         }
         if let Some(bridge) = self.accessibility_bridge.as_mut() {
@@ -295,6 +304,12 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_export_html))
             .on_action(cx.listener(Self::on_export_image))
             .on_action(cx.listener(Self::on_export_pdf))
+            .on_action(cx.listener(Self::on_show_document_info))
+            .on_action(cx.listener(Self::on_show_document_outline))
+            .on_action(cx.listener(Self::on_show_structure_view))
+            .on_action(cx.listener(Self::on_show_structured_inspector))
+            .on_action(cx.listener(Self::on_focus_structured_filter))
+            .on_action(cx.listener(Self::on_focus_structured_columns))
             .on_action(cx.listener(Self::on_normalize_line_endings_lf))
             .on_action(cx.listener(Self::on_normalize_line_endings_crlf))
             .on_action(cx.listener(Self::on_normalize_line_endings_cr))
@@ -307,6 +322,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_next_tab_action))
             .on_action(cx.listener(Self::on_toggle_view_mode_action))
             .on_action(cx.listener(Self::on_toggle_workspace_action))
+            .on_action(cx.listener(Self::on_toggle_document_sidebar_action))
             .on_action(cx.listener(Self::on_quick_open_action))
             .on_action(cx.listener(Self::on_command_palette_action))
             .on_action(cx.listener(Self::on_go_to_line_action))
@@ -324,6 +340,14 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_dismiss_transient_ui))
             .on_action(cx.listener(Self::on_install_cli_tool))
             .on_action(cx.listener(Self::on_uninstall_cli_tool));
+        let base = base
+            .on_action(cx.listener(Self::on_collapse_fold_action))
+            .on_action(cx.listener(Self::on_expand_fold_action))
+            .on_action(cx.listener(Self::on_collapse_all_folds_action))
+            .on_action(cx.listener(Self::on_expand_all_folds_action))
+            .on_action(cx.listener(Self::on_format_document_action))
+            .on_action(cx.listener(Self::on_format_selection_action))
+            .on_action(cx.listener(Self::on_cancel_formatting_action));
         // Fetch menus + collect labels once for both renderers; previously each
         // of render_in_window_menu_bar / render_in_window_menu_panel called
         // cx.get_menus() and walked menus.iter().map(|m| m.name.to_string())
@@ -344,6 +368,7 @@ impl Render for Editor {
                     platform_menus
                 }
             })
+            .map(|menus| self.contextual_menus(menus, cx))
             .filter(|menus| !menus.is_empty());
         let menu_labels: Vec<SharedString> = menus
             .as_ref()
@@ -381,33 +406,63 @@ impl Render for Editor {
         let tab_strip_height = self.tab_strip_height();
         let viewport_width = f32::from(window.viewport_size().width);
         let compact_workspace = workspace_uses_overlay(viewport_width);
-        let workspace_position = EditorSettings::workspace_sidebar_position(cx);
+        self.sync_document_sidebar_visibility_for_viewport(viewport_width);
+        let compact_both_sidebars =
+            compact_workspace && self.workspace.is_open && self.workspace.document_sidebar_open;
+        let compact_side_width = (viewport_width * 0.5).max(1.0);
         let workspace_width =
-            workspace_panel_width_for_viewport(viewport_width, self.workspace_panel_width());
-        let workspace_panel = self.render_workspace_panel(
-            &theme,
-            &strings,
-            workspace_width,
-            !compact_workspace,
-            workspace_position,
-            cx,
-        );
+            workspace_panel_width_for_viewport(viewport_width, self.workspace_panel_width()).min(
+                if compact_both_sidebars {
+                    compact_side_width
+                } else {
+                    viewport_width.max(1.0)
+                },
+            );
+        let workspace_panel =
+            self.render_workspace_panel(&theme, &strings, workspace_width, !compact_workspace, cx);
         let effective_workspace_width = if workspace_panel.is_some() && !compact_workspace {
             workspace_width
         } else {
             0.0
         };
+        let document_sidebar_width = document_sidebar_panel_width_for_viewport(
+            viewport_width,
+            self.document_sidebar_panel_width(),
+        )
+        .min(if compact_both_sidebars {
+            compact_side_width
+        } else {
+            viewport_width.max(1.0)
+        });
+        let document_sidebar_can_dock = !compact_workspace
+            && viewport_width - effective_workspace_width - document_sidebar_width
+                >= SPLIT_PANE_MIN_WIDTH * 2.0 + SPLIT_DIVIDER_HIT_WIDTH;
+        let document_sidebar_panel = self.render_document_sidebar(
+            &theme,
+            &strings,
+            document_sidebar_width,
+            document_sidebar_can_dock,
+            cx,
+        );
+        let effective_document_sidebar_width =
+            if document_sidebar_panel.is_some() && document_sidebar_can_dock {
+                document_sidebar_width
+            } else {
+                0.0
+            };
         let (docked_workspace_panel, overlay_workspace_panel) = if compact_workspace {
             (None, workspace_panel)
         } else {
             (workspace_panel, None)
         };
-        let (left_workspace_panel, right_workspace_panel) = match workspace_position {
-            WorkspaceSidebarPosition::Left => (docked_workspace_panel, None),
-            WorkspaceSidebarPosition::Right => (None, docked_workspace_panel),
+        let (docked_document_sidebar, overlay_document_sidebar) = if document_sidebar_can_dock {
+            (document_sidebar_panel, None)
+        } else {
+            (None, document_sidebar_panel)
         };
-        let (tab_strip_left, tab_strip_right) =
-            editor_tab_strip_insets(workspace_position, effective_workspace_width);
+        let left_workspace_panel = docked_workspace_panel;
+        let (tab_strip_left, _) = editor_tab_strip_insets(effective_workspace_width);
+        let tab_strip_right = effective_document_sidebar_width;
         let base = if let Some(tab_strip) = self.render_tab_strip(
             &theme,
             titlebar_height + menu_bar_height,
@@ -445,6 +500,7 @@ impl Render for Editor {
         let resident_content = if self.view_mode == super::ViewMode::Split {
             let available_width = (f32::from(window.viewport_size().width)
                 - effective_workspace_width
+                - effective_document_sidebar_width
                 - SPLIT_DIVIDER_HIT_WIDTH)
                 .max(1.0);
             let ratio = clamped_split_pane_ratio(self.split_pane_ratio, available_width);
@@ -577,8 +633,8 @@ impl Render for Editor {
             .flex_col()
             .child(editor_content);
         let main_content = main_content.child(editor_pane);
-        let main_content = if let Some(workspace_panel) = right_workspace_panel {
-            main_content.child(workspace_panel)
+        let main_content = if let Some(document_sidebar) = docked_document_sidebar {
+            main_content.child(document_sidebar)
         } else {
             main_content
         };
@@ -603,10 +659,22 @@ impl Render for Editor {
                 .w(px(workspace_width))
                 .shadow_lg()
                 .child(workspace_panel);
-            let overlay = match workspace_position {
-                WorkspaceSidebarPosition::Left => overlay.left(px(0.0)),
-                WorkspaceSidebarPosition::Right => overlay.right(px(0.0)),
-            };
+            let overlay = overlay.left(px(0.0));
+            base.child(overlay)
+        } else {
+            base
+        };
+        let base = if let Some(document_sidebar) = overlay_document_sidebar {
+            let overlay = div()
+                .id("compact-document-sidebar-overlay")
+                .debug_selector(|| "compact-document-sidebar-overlay".to_owned())
+                .absolute()
+                .top(px(titlebar_height + menu_bar_height))
+                .bottom(px(status_bar_height))
+                .right(px(0.0))
+                .w(px(document_sidebar_width))
+                .shadow_lg()
+                .child(document_sidebar);
             base.child(overlay)
         } else {
             base
@@ -693,12 +761,19 @@ impl Render for Editor {
         } else {
             base
         };
+        let base =
+            if let Some(update_panel) = self.render_update_panel(&theme, status_bar_height, cx) {
+                base.child(update_panel)
+            } else {
+                base
+            };
         let base = if let Some(overlay) = self.render_diagram_overlay(&theme, &strings, window, cx)
         {
             base.child(overlay)
         } else {
             base
         };
+        let base = base.children(self.render_resource_title_dialog_overlay(&theme, cx));
         let base = if let Some(tab_close_dialog) =
             self.render_tab_close_dialog_overlay(&theme, &strings, cx)
         {

@@ -31,6 +31,46 @@ async fn external_conflict_reload_replaces_local_document_with_disk_version(
 }
 
 #[gpui::test]
+async fn plain_text_keeps_all_status_modes_visible_and_opens_in_source(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    cx.update(|cx| crate::updater::UpdateCoordinator::init(false, cx));
+    let temp = tempfile::tempdir().expect("plain-text mode switch tempdir");
+    let path = temp.path().join("sample.txt");
+    fs::write(&path, "alpha\nbeta\n").expect("plain-text fixture");
+    let probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
+            .expect("plain-text probe");
+    let source = gmark_paged_document::FileSource::open(&path).expect("plain-text source");
+    let (editor, visual) = cx.add_window_view(move |_window, cx| {
+        Editor::from_source_backed_file(cx, path, probe, source)
+    });
+
+    visual.run_until_parked();
+    redraw(visual);
+
+    assert_eq!(
+        editor.read_with(visual, |editor, _cx| editor.view_mode),
+        ViewMode::Source
+    );
+    assert!(visual.debug_bounds("status-bar-mode-menu").is_none());
+    let mode_button = visual.debug_bounds("status-bar-mode-switch").unwrap();
+    visual.simulate_click(mode_button.center(), Modifiers::default());
+    redraw(visual);
+    assert!(visual.debug_bounds("status-bar-mode-menu").is_some());
+    for selector in [
+        "status-bar-mode-Rendered",
+        "status-bar-mode-Source",
+        "status-bar-mode-Split",
+        "status-bar-mode-Preview",
+    ] {
+        assert!(
+            visual.debug_bounds(selector).is_some(),
+            "{selector} must remain visible for plain-text files"
+        );
+    }
+}
+
+#[gpui::test]
 async fn external_conflict_save_as_and_cancel_preserve_disk_and_close_intent(
     cx: &mut TestAppContext,
 ) {
@@ -366,9 +406,11 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         let source = visual_cx.debug_bounds("editor-source-pane").unwrap();
         let preview = visual_cx.debug_bounds("split-preview-pane").unwrap();
         let mode_switch = visual_cx.debug_bounds("status-bar-mode-switch").unwrap();
-        let split_mode = visual_cx.debug_bounds("status-bar-mode-Split").unwrap();
-        let split_indicator = visual_cx
-            .debug_bounds("status-bar-mode-Split-indicator")
+        let line_ending_picker = visual_cx
+            .debug_bounds("status-bar-line-ending-button")
+            .unwrap();
+        let document_sidebar_toggle = visual_cx
+            .debug_bounds("status-bar-document-sidebar-toggle")
             .unwrap();
         let sidebar_toggle = visual_cx.debug_bounds("status-bar-sidebar-toggle").unwrap();
         let sidebar_open = editor.read_with(visual_cx, |editor, _cx| editor.workspace.is_open);
@@ -398,19 +440,24 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         }
         assert_eq!(f32::from(status_bar.size.height), 24.0);
         assert_eq!(sidebar_toggle.left(), status_bar.left());
-        assert_eq!(mode_switch.right(), status_bar.right());
-        assert_eq!(f32::from(mode_switch.size.height), 24.0);
-        assert_eq!(f32::from(split_indicator.size.height), 2.0);
-        assert!(split_indicator.left() >= split_mode.left());
-        assert!(split_indicator.right() <= split_mode.right());
-        assert_eq!(split_indicator.bottom(), split_mode.bottom());
+        assert_eq!(document_sidebar_toggle.right(), status_bar.right());
+        assert!(mode_switch.right() <= document_sidebar_toggle.left());
+        assert_eq!(mode_switch.size, size(px(24.0), px(24.0)));
+        assert!(line_ending_picker.right() <= mode_switch.left());
+        assert!(f32::from(mode_switch.left() - line_ending_picker.right()) <= 2.0);
+        assert!(visual_cx.debug_bounds("status-bar-mode-menu").is_none());
+        assert!(visual_cx.debug_bounds("status-bar-mode-Split").is_none());
         if sidebar_open {
             let sidebar_indicator = visual_cx
                 .debug_bounds("status-bar-sidebar-indicator")
                 .unwrap();
             assert!(sidebar_indicator.left() >= sidebar_toggle.left());
             assert!(sidebar_indicator.right() <= sidebar_toggle.right());
-            assert_eq!(sidebar_indicator.bottom(), sidebar_toggle.bottom());
+            assert!(sidebar_indicator.bottom() <= sidebar_toggle.bottom());
+            assert!(
+                f32::from(sidebar_toggle.bottom() - sidebar_indicator.bottom()) <= 1.0,
+                "sidebar indicator must stay visible inside the status-bar border"
+            );
         }
         if f32::from(viewport.width) >= 760.0 {
             for selector in [
@@ -452,7 +499,6 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         // 图标按钮使用固定逻辑尺寸，避免长标签、缩放和 hover 状态推动相邻内容。
         for selector in [
             "workspace-tab-files",
-            "workspace-tab-outline",
             "workspace-tab-search",
         ] {
             let control = visual_cx.debug_bounds(selector).unwrap();
@@ -463,10 +509,8 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         }
         for selector in [
             "status-bar-sidebar-toggle",
-            "status-bar-mode-Rendered",
-            "status-bar-mode-Source",
-            "status-bar-mode-Split",
-            "status-bar-mode-Preview",
+            "status-bar-mode-switch",
+            "status-bar-document-sidebar-toggle",
         ] {
             let control = visual_cx.debug_bounds(selector).unwrap();
             assert_eq!(f32::from(control.size.width), 24.0, "{selector}");
@@ -523,24 +567,22 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
     });
 
     editor.update(visual_cx, |editor, cx| {
-        editor.set_status_mode_tooltip_hover(ViewMode::Preview, true, cx);
+        editor.set_status_mode_tooltip_hover(ViewMode::Split, true, cx);
     });
     visual_cx
         .executor()
         .advance_clock(Duration::from_millis(500));
     visual_cx.run_until_parked();
     redraw(visual_cx);
-    let preview_mode = visual_cx.debug_bounds("status-bar-mode-Preview").unwrap();
-    let preview_tooltip = visual_cx
-        .debug_bounds("status-bar-mode-tooltip-Preview")
-        .unwrap();
+    let mode_switch = visual_cx.debug_bounds("status-bar-mode-switch").unwrap();
+    let mode_tooltip = visual_cx.debug_bounds("status-bar-mode-tooltip").unwrap();
     let status_bar = visual_cx.debug_bounds("status-bar").unwrap();
-    assert!(preview_tooltip.left() <= preview_mode.center().x);
-    assert!(preview_tooltip.right() >= preview_mode.center().x);
-    assert!(preview_tooltip.right() <= status_bar.right());
-    assert!(preview_tooltip.bottom() <= preview_mode.top());
+    assert!(mode_tooltip.left() <= mode_switch.center().x);
+    assert!(mode_tooltip.right() >= mode_switch.center().x);
+    assert!(mode_tooltip.right() <= status_bar.right());
+    assert!(mode_tooltip.bottom() <= mode_switch.top());
     editor.update(visual_cx, |editor, cx| {
-        editor.set_status_mode_tooltip_hover(ViewMode::Preview, false, cx);
+        editor.set_status_mode_tooltip_hover(ViewMode::Split, false, cx);
     });
 
     let content = visual_cx.debug_bounds("editor-content").unwrap();
@@ -580,7 +622,8 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
     assert!(
         visual_cx
             .debug_bounds("status-bar-overflow-line-ending")
-            .is_some()
+            .is_none(),
+        "line-ending picker stays beside the mode button instead of moving into overflow"
     );
     for selector in [
         "status-bar-word-count",
@@ -598,22 +641,36 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         .unwrap();
     assert!(custom.left() >= popup.left());
     assert!(custom.right() <= popup.right());
+    editor.update(visual_cx, |editor, cx| {
+        editor.status_bar.format_overflow_open = false;
+        cx.notify();
+    });
+    redraw(visual_cx);
 
     let revision = editor.read_with(visual_cx, |editor, _cx| editor.source_document.revision());
+    let mode_button = visual_cx.debug_bounds("status-bar-mode-switch").unwrap();
+    assert_eq!(mode_button.size, size(px(24.0), px(24.0)));
+    visual_cx.simulate_click(mode_button.center(), Modifiers::default());
+    redraw(visual_cx);
+    let mode_menu = visual_cx.debug_bounds("status-bar-mode-menu").unwrap();
+    assert_eq!(mode_menu.size.width, px(120.0));
     let source_mode = visual_cx.debug_bounds("status-bar-mode-Source").unwrap();
+    assert!(source_mode.left() >= mode_menu.left());
+    assert!(source_mode.right() <= mode_menu.right());
     visual_cx.simulate_click(source_mode.center(), Modifiers::default());
     visual_cx.run_until_parked();
     redraw(visual_cx);
     editor.update(visual_cx, |editor, _cx| {
         assert_eq!(editor.view_mode, ViewMode::Source);
         assert_eq!(editor.source_document.revision(), revision);
+        assert!(!editor.status_bar.mode_menu_open);
     });
+    visual_cx.simulate_click(mode_button.center(), Modifiers::default());
+    redraw(visual_cx);
     let source_indicator = visual_cx
         .debug_bounds("status-bar-mode-Source-indicator")
         .unwrap();
-    assert!(source_indicator.left() >= source_mode.left());
-    assert!(source_indicator.right() <= source_mode.right());
-    assert_eq!(source_indicator.bottom(), source_mode.bottom());
+    assert_eq!(source_indicator.size, size(px(14.0), px(14.0)));
 
     let source = editor.read_with(visual_cx, |editor, _cx| editor.source_document.text());
     let dirty = editor.read_with(visual_cx, |editor, _cx| editor.document_dirty);
@@ -628,7 +685,7 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
     });
     redraw(visual_cx);
     let focused_preview = visual_cx.debug_bounds("status-bar-mode-Preview").unwrap();
-    assert_eq!(focused_preview.size, size(px(24.0), px(24.0)));
+    assert_eq!(f32::from(focused_preview.size.height), 30.0);
     visual_cx.simulate_keystrokes("space");
     visual_cx.run_until_parked();
     editor.update(visual_cx, |editor, _cx| {
@@ -638,6 +695,8 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         assert_eq!(editor.document_dirty, dirty);
     });
 
+    visual_cx.simulate_click(mode_button.center(), Modifiers::default());
+    redraw(visual_cx);
     editor.update_in(visual_cx, |editor, window, _cx| {
         editor
             .status_bar
@@ -718,4 +777,43 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         assert_eq!(editor.source_document.revision(), revision);
         assert_eq!(editor.document_dirty, dirty);
     });
+}
+#[gpui::test]
+async fn status_bar_line_ending_picker_normalizes_the_document(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, visual) = cx.add_window_view(|_window, cx| {
+        let mut editor = Editor::from_markdown(cx, "alpha\nbeta\n".to_owned(), None);
+        editor.set_view_mode(ViewMode::Source, cx);
+        editor
+    });
+    visual.simulate_resize(size(px(960.0), px(640.0)));
+    redraw(visual);
+
+    let picker = visual
+        .debug_bounds("status-bar-line-ending-button")
+        .expect("line-ending picker");
+    visual.simulate_click(picker.center(), Modifiers::default());
+    redraw(visual);
+    let menu = visual
+        .debug_bounds("status-bar-line-ending-menu")
+        .expect("line-ending menu");
+    assert_eq!(f32::from(menu.size.width), 92.0);
+    assert_eq!(menu.right(), picker.right());
+
+    let crlf = visual
+        .debug_bounds("status-bar-line-ending-crlf")
+        .expect("CRLF menu item");
+    visual.simulate_click(crlf.center(), Modifiers::default());
+    visual.run_until_parked();
+    redraw(visual);
+
+    assert_eq!(
+        editor.read_with(visual, |editor, _cx| editor
+            .source_document
+            .serialized_bytes()),
+        b"alpha\r\nbeta\r\n"
+    );
+    assert!(editor.read_with(visual, |editor, _cx| !editor
+        .status_bar
+        .line_ending_menu_open));
 }

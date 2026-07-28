@@ -96,7 +96,8 @@ impl Editor {
             reason,
             action_error: None,
         });
-        snapshot.saved_file_fingerprint = crate::recovery::fingerprint_file(&path).ok();
+        // 失败页没有可编辑正文，不需要变更检测；禁止在 UI 线程为大文件做全量指纹读取。
+        snapshot.saved_file_fingerprint = None;
         snapshot.recovery_journal = None;
         snapshot.view_mode = ViewMode::Source;
         snapshot
@@ -263,7 +264,22 @@ impl Editor {
         document_kind: DocumentKind,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.new_tab_from_snapshot(Self::snapshot_for_untitled_document(document_kind), cx)
+        let mut snapshot = Self::snapshot_for_untitled_document(document_kind);
+        if let Some(format) = document_kind.document_host_format() {
+            let logical_path = PathBuf::from(document_kind.untitled_name());
+            let initial_source = document_kind.initial_source();
+            let document_host = cx.new(move |cx| {
+                crate::document_host::DocumentHost::new_untitled(
+                    logical_path,
+                    format,
+                    initial_source,
+                    cx,
+                )
+            });
+            Self::subscribe_document_host(&document_host, cx);
+            snapshot.document_host = Some(document_host);
+        }
+        self.new_tab_from_snapshot(snapshot, cx)
     }
 
     fn new_tab_from_snapshot(
@@ -402,6 +418,7 @@ impl Editor {
         if index >= self.tabs.records.len() {
             return;
         }
+        self.close_menu_bar(cx);
         let dirty = if index == self.tabs.active {
             self.is_document_dirty()
         } else {
@@ -570,8 +587,7 @@ impl Editor {
     ) {
         self.tabs.show_close_dialog = false;
         self.tabs.close_after_save = false;
-        self.checkpoint_recovery_journal();
-        self.document_dirty = false;
+        self.discard_current_document_changes(cx);
         if self.close_tab_index_without_prompt(self.tabs.active, false, cx) {
             self.advance_close_other_tabs(cx);
         }
@@ -744,6 +760,10 @@ impl Editor {
         }
         self.dirty_tab_index_except_active()
             .is_some_and(|index| self.switch_to_tab_index(index, cx))
+    }
+
+    pub(in crate::editor) fn window_tab_count(&self) -> usize {
+        self.tabs.records.len()
     }
 
     /// 返回 true 表示当前保存完成后可以直接关闭窗口；false 表示仍需逐个处理后台 dirty 标签。

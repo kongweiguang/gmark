@@ -4,13 +4,14 @@
 
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-    echo "Usage: $0 <version> <arch: x86_64|aarch64> <output.dmg>" >&2
+if [[ $# -ne 4 ]]; then
+    echo "Usage: $0 <version> <arch: x86_64|aarch64> <output.dmg> <updater.app.tar.gz>" >&2
     exit 2
 fi
 VERSION="$1"
 ARCH="$2"
 OUTPUT="$3"
+UPDATER_OUTPUT="$4"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
     echo "version must be exact SemVer" >&2
     exit 1
@@ -31,12 +32,14 @@ VOLUME="$STAGE/volume"
 APPLE_VERSION="${VERSION%%-*}"
 
 rm -rf "$STAGE"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$VOLUME"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources" "$VOLUME"
 cp "$ROOT/target/release/gmark" "$APP/Contents/MacOS/gmark"
+cp "$ROOT/target/release/gmark-update-helper" "$APP/Contents/Helpers/gmark-update-helper"
 cp "$ROOT/resources/macos/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/resources/macos/gmark.icns" "$APP/Contents/Resources/gmark.icns"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$APP/Contents/Resources/"
 chmod +x "$APP/Contents/MacOS/gmark"
+chmod +x "$APP/Contents/Helpers/gmark-update-helper"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APPLE_VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APPLE_VERSION" "$APP/Contents/Info.plist"
 
@@ -44,6 +47,11 @@ chmod +x "$APP/Contents/MacOS/gmark"
 # Users must approve this build manually because the project has no Developer ID.
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
+
+mkdir -p "$(dirname "$UPDATER_OUTPUT")"
+rm -f "$UPDATER_OUTPUT"
+tar -czf "$UPDATER_OUTPUT" -C "$STAGE" gmark.app
+[[ -f "$UPDATER_OUTPUT" ]] || { echo "macOS updater archive was not created" >&2; exit 1; }
 
 cp -R "$APP" "$VOLUME/gmark.app"
 ln -s /Applications "$VOLUME/Applications"

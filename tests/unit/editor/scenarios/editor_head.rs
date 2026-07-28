@@ -106,6 +106,69 @@ async fn paragraph_menu_block_kind_change_preserves_source_and_undo(cx: &mut Tes
 }
 
 #[gpui::test]
+async fn clicking_block_gutter_opens_the_block_action_menu(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "menu text".to_owned(), None));
+    visual.simulate_resize(size(px(720.0), px(520.0)));
+    let block = editor.update_in(visual, |editor, window, _cx| {
+        let block = editor.document.first_root().expect("paragraph").clone();
+        editor.focus_block(block.entity_id());
+        block.read(_cx).focus_handle.focus(window);
+        block
+    });
+    redraw(visual);
+
+    let handle = visual
+        .debug_bounds("focused-block-context-actions")
+        .expect("focused block actions");
+    visual.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(handle.center(), MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    redraw(visual);
+
+    assert!(block.read_with(visual, |block, _cx| block.slash_menu.is_some()));
+    assert!(visual.debug_bounds("slash-command-menu").is_some());
+}
+
+#[gpui::test]
+async fn clicking_unfocused_code_block_gutter_opens_its_action_menu(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, visual) = cx.add_window_view(|_window, cx| {
+        Editor::from_markdown(cx, "```rust\nfn main() {}\n```".to_owned(), None)
+    });
+    visual.simulate_resize(size(px(900.0), px(640.0)));
+    let (code, _external_focus) = editor.update_in(visual, |editor, window, cx| {
+        let code = editor.document.first_root().expect("code block").clone();
+        let external_focus = cx.focus_handle();
+        external_focus.focus(window);
+        (code, external_focus)
+    });
+    redraw(visual);
+
+    let surface = visual
+        .debug_bounds("code-block-surface")
+        .expect("code block surface");
+    visual.simulate_mouse_move(surface.center(), None, Modifiers::default());
+    redraw(visual);
+    let handle = visual
+        .debug_bounds("block-context-actions")
+        .expect("unfocused code block actions");
+    visual.simulate_mouse_move(handle.center(), None, Modifiers::default());
+    redraw(visual);
+    let handle = visual
+        .debug_bounds("block-context-actions")
+        .expect("hovered code block actions");
+    visual.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(handle.center(), MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    redraw(visual);
+
+    assert!(code.read_with(visual, |block, _cx| block.slash_menu.is_some()));
+    assert!(visual.debug_bounds("slash-command-menu").is_some());
+}
+
+#[gpui::test]
 async fn block_handle_drag_tracks_pointer_half_and_drops_after_document_tail(
     cx: &mut TestAppContext,
 ) {
@@ -183,6 +246,39 @@ async fn clicking_canvas_below_trailing_code_block_adds_focused_paragraph(cx: &m
     editor.read_with(visual, |editor, cx| {
         let roots = editor.document.root_blocks();
         assert_eq!(roots.len(), 2);
+        assert_eq!(roots[1].read(cx).kind(), BlockKind::Paragraph);
+        assert_eq!(editor.active_entity_id, Some(roots[1].entity_id()));
+        assert_eq!(editor.undo_history.len(), 1);
+    });
+}
+
+#[gpui::test]
+async fn clicking_canvas_below_trailing_separator_adds_focused_paragraph(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "---".to_owned(), None));
+    visual.simulate_resize(size(px(720.0), px(520.0)));
+    redraw(visual);
+
+    let separator = visual
+        .debug_bounds("separator-surface")
+        .expect("separator surface");
+    let tail = visual
+        .debug_bounds("editor-document-tail-blank")
+        .expect("document tail blank area");
+    assert!(tail.top() >= separator.bottom());
+    let blank = point(tail.center().x, tail.top() + px(24.0));
+    visual.simulate_mouse_down(blank, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(blank, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    redraw(visual);
+
+    editor.read_with(visual, |editor, cx| {
+        let roots = editor.document.root_blocks();
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].read(cx).kind(), BlockKind::Separator);
         assert_eq!(roots[1].read(cx).kind(), BlockKind::Paragraph);
         assert_eq!(editor.active_entity_id, Some(roots[1].entity_id()));
         assert_eq!(editor.undo_history.len(), 1);
@@ -338,7 +434,8 @@ async fn specialized_rendered_surfaces_share_the_paragraph_content_edges(cx: &mu
         "document-toc",
         "rendered-html-surface",
         "math-rendered-content",
-        "mermaid-rendered-content",
+        // Mermaid 的 SVG 内容位于 1px 工作台边框内；对齐契约属于外框而非内层画布。
+        "mermaid-workbench-frame",
         "rendered-image-content",
     ] {
         let surface = visual
@@ -537,7 +634,7 @@ async fn document_find_replace_is_unicode_safe_undoable_and_bounded(cx: &mut Tes
 }
 use crate::export::ExportFormat;
 use crate::i18n::{I18nManager, I18nStrings};
-use crate::theme::{Theme, ThemeManager};
+use crate::theme::{Theme, ThemeAppearance, ThemeManager, ThemePalette};
 fn init_editor_test_app(cx: &mut TestAppContext) {
     cx.update(|cx| {
         I18nManager::init(cx);

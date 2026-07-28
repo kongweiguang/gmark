@@ -96,6 +96,8 @@ pub(super) fn render_source_format_overflow_button(
         }))
         .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
             pointer_focus_handle.focus(window);
+            editor.status_bar.line_ending_menu_open = false;
+            editor.status_bar.mode_menu_open = false;
             editor.status_bar.format_overflow_open = !editor.status_bar.format_overflow_open;
             cx.notify();
         }))
@@ -147,7 +149,6 @@ pub(super) fn render_recovery_status(
     } else {
         "status-bar-recovery-restored-icon"
     };
-    let glyph_offset_y = if has_conflict { 0.0 } else { -1.0 };
     let status = div()
         .id("status-bar-recovery")
         .debug_selector(|| "status-bar-recovery".to_owned())
@@ -168,14 +169,7 @@ pub(super) fn render_recovery_status(
                 .items_center()
                 .justify_center()
                 .debug_selector(move || icon_selector.to_owned())
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(14.0))
-                        .relative()
-                        .top(px(glyph_offset_y))
-                        .text_color(color),
-                ),
+                .child(svg().path(icon).size(px(14.0)).text_color(color)),
         )
         .child(
             div()
@@ -263,19 +257,19 @@ pub(super) fn render_sidebar_toggle(
         })
         .cursor_pointer()
         .focus(|this| this.border_color(c.text_link))
-        .text_color(c.status_bar_text)
+        .text_color(c.text_default)
         .child(
             svg()
                 .path(SIDEBAR_ICON)
                 .size(px(15.0))
-                .text_color(c.status_bar_text),
+                .text_color(c.text_default),
         )
         .children(is_open.then(|| {
             div()
                 .absolute()
                 .left(px(4.0))
                 .right(px(4.0))
-                .bottom(px(-1.0))
+                .bottom(px(0.0))
                 .h(px(2.0))
                 .rounded(px(1.0))
                 .bg(c.text_link)
@@ -323,6 +317,317 @@ pub(super) fn render_sidebar_toggle(
         .into_any_element()
 }
 
+pub(super) fn render_document_sidebar_toggle(
+    state: &mut StatusBarState,
+    is_open: bool,
+    theme: &Theme,
+    strings: &I18nStrings,
+    cx: &mut Context<Editor>,
+) -> AnyElement {
+    let c = &theme.colors;
+    let d = &theme.dimensions;
+    let focus_handle = state
+        .document_sidebar_focus_handle
+        .get_or_insert_with(|| cx.focus_handle())
+        .clone();
+    let pointer_focus_handle = focus_handle.clone();
+    let label = strings.status_bar_document_sidebar.clone();
+    div()
+        .id("status-bar-document-sidebar-toggle")
+        .debug_selector(|| "status-bar-document-sidebar-toggle".to_owned())
+        .relative()
+        .size(px(d.status_bar_height))
+        .tab_index(0)
+        .track_focus(&focus_handle)
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .border(px(1.0))
+        .border_color(hsla(0.0, 0.0, 0.0, 0.0))
+        .bg(if state.document_sidebar_hovered || is_open {
+            c.status_bar_button_hover
+        } else {
+            hsla(0., 0., 0., 0.)
+        })
+        .cursor_pointer()
+        .focus(|this| this.border_color(c.text_link))
+        .text_color(c.text_default)
+        .child(
+            svg()
+                .path(DOCUMENT_SIDEBAR_ICON)
+                .size(px(15.0))
+                .text_color(c.text_default),
+        )
+        .children(is_open.then(|| {
+            div()
+                .absolute()
+                .left(px(4.0))
+                .right(px(4.0))
+                .bottom(px(0.0))
+                .h(px(2.0))
+                .rounded(px(1.0))
+                .bg(c.text_link)
+                .debug_selector(|| "status-bar-document-sidebar-indicator".to_owned())
+        }))
+        .children(
+            (state.tooltip_visible == Some(StatusTooltip::DocumentSidebar)).then(|| {
+                status_bar_tooltip(
+                    label,
+                    theme,
+                    StatusTooltipAlignment::End,
+                    "status-bar-document-sidebar-tooltip".to_owned(),
+                )
+            }),
+        )
+        .on_hover(cx.listener(
+            |editor: &mut Editor,
+             hovered: &bool,
+             _window: &mut Window,
+             cx: &mut Context<Editor>| {
+                editor.set_status_document_sidebar_tooltip_hover(*hovered, cx);
+            },
+        ))
+        .on_click(cx.listener(
+            move |editor: &mut Editor,
+                  _: &gpui::ClickEvent,
+                  window: &mut Window,
+                  cx: &mut Context<Editor>| {
+                pointer_focus_handle.focus(window);
+                editor.toggle_document_sidebar_drawer(window, cx);
+            },
+        ))
+        .on_key_down(cx.listener(
+            |editor: &mut Editor,
+             event: &KeyDownEvent,
+             window: &mut Window,
+             cx: &mut Context<Editor>| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    editor.toggle_document_sidebar_drawer(window, cx);
+                    cx.stop_propagation();
+                }
+            },
+        ))
+        .into_any_element()
+}
+
+pub(super) fn render_line_ending_picker(
+    state: &mut StatusBarState,
+    current_label: String,
+    theme: &Theme,
+    cx: &mut Context<Editor>,
+) -> AnyElement {
+    let open = state.line_ending_menu_open;
+    let button_focus_handle = state
+        .line_ending_button_focus_handle
+        .get_or_insert_with(|| cx.focus_handle())
+        .clone();
+    if state.line_ending_focus_handles.is_none() {
+        state.line_ending_focus_handles = Some(std::array::from_fn(|_| cx.focus_handle()));
+    }
+    let focus_handles = state
+        .line_ending_focus_handles
+        .as_ref()
+        .expect("line-ending focus handles must be initialized")
+        .clone();
+    let first_item_focus = focus_handles[0].clone();
+    let pointer_focus_handle = button_focus_handle.clone();
+    let menu_items = [
+        ("lf", "LF", LineEnding::Lf),
+        ("crlf", "CRLF", LineEnding::CrLf),
+        ("cr", "CR", LineEnding::Cr),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (id, label, ending))| {
+        render_line_ending_menu_item(
+            id,
+            label,
+            ending,
+            current_label == label,
+            index,
+            focus_handles.clone(),
+            button_focus_handle.clone(),
+            theme,
+            cx,
+        )
+    })
+    .collect::<Vec<_>>();
+
+    div()
+        .id("status-bar-line-ending-picker")
+        .debug_selector(|| "status-bar-line-ending-picker".to_owned())
+        .relative()
+        .h(px(theme.dimensions.status_bar_height))
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .id("status-bar-line-ending-button")
+                .debug_selector(|| "status-bar-line-ending-button".to_owned())
+                .h(px(theme.dimensions.status_bar_height))
+                .min_w(px(30.0))
+                .px(px(5.0))
+                .tab_index(0)
+                .track_focus(&button_focus_handle)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.0))
+                .border(px(1.0))
+                .border_color(hsla(0.0, 0.0, 0.0, 0.0))
+                .bg(if open {
+                    theme.colors.status_bar_button_hover
+                } else {
+                    hsla(0.0, 0.0, 0.0, 0.0)
+                })
+                .hover(|this| this.bg(theme.colors.status_bar_button_hover))
+                .focus(|this| this.border_color(theme.colors.text_link))
+                .cursor_pointer()
+                .text_size(px(theme.dimensions.status_bar_text_size))
+                .text_color(theme.colors.status_bar_text)
+                .child(current_label)
+                .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
+                    pointer_focus_handle.focus(window);
+                    editor.status_bar.format_overflow_open = false;
+                    editor.status_bar.mode_menu_open = false;
+                    editor.status_bar.line_ending_menu_open =
+                        !editor.status_bar.line_ending_menu_open;
+                    cx.notify();
+                }))
+                .on_key_down(
+                    cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
+                        match event.keystroke.key.as_str() {
+                            "enter" | "space" => {
+                                editor.status_bar.format_overflow_open = false;
+                                editor.status_bar.mode_menu_open = false;
+                                editor.status_bar.line_ending_menu_open =
+                                    !editor.status_bar.line_ending_menu_open;
+                                if editor.status_bar.line_ending_menu_open {
+                                    first_item_focus.focus(window);
+                                }
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                            "escape" if editor.status_bar.line_ending_menu_open => {
+                                editor.status_bar.line_ending_menu_open = false;
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                            _ => {}
+                        }
+                    }),
+                ),
+        )
+        .children(open.then(|| {
+            div()
+                .id("status-bar-line-ending-menu")
+                .debug_selector(|| "status-bar-line-ending-menu".to_owned())
+                .absolute()
+                .right(px(0.0))
+                .bottom(px(theme.dimensions.status_bar_height + 4.0))
+                .w(px(92.0))
+                .occlude()
+                .p(px(4.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .bg(theme.colors.dialog_surface)
+                .border(px(theme.dimensions.dialog_border_width))
+                .border_color(theme.colors.dialog_border)
+                .rounded(px(8.0))
+                .shadow_lg()
+                .children(menu_items)
+        }))
+        .into_any_element()
+}
+
+fn render_line_ending_menu_item(
+    id: &'static str,
+    label: &'static str,
+    ending: LineEnding,
+    active: bool,
+    index: usize,
+    focus_handles: [FocusHandle; 3],
+    button_focus_handle: FocusHandle,
+    theme: &Theme,
+    cx: &mut Context<Editor>,
+) -> AnyElement {
+    let focus_handle = focus_handles[index].clone();
+    let pointer_focus_handle = focus_handle.clone();
+    let keyboard_focus_handles = focus_handles.clone();
+    div()
+        .id(SharedString::from(format!("status-bar-line-ending-{id}")))
+        .debug_selector(move || format!("status-bar-line-ending-{id}"))
+        .h(px(30.0))
+        .w_full()
+        .px(px(8.0))
+        .tab_index(0)
+        .track_focus(&focus_handle)
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .rounded(px(6.0))
+        .border(px(1.0))
+        .border_color(hsla(0.0, 0.0, 0.0, 0.0))
+        .bg(if active {
+            theme.colors.status_bar_button_hover
+        } else {
+            hsla(0.0, 0.0, 0.0, 0.0)
+        })
+        .hover(|this| this.bg(theme.colors.status_bar_button_hover))
+        .focus(|this| this.border_color(theme.colors.text_link))
+        .cursor_pointer()
+        .child(
+            div()
+                .flex_1()
+                .text_size(px(theme.dimensions.status_bar_text_size))
+                .text_color(theme.colors.text_default)
+                .child(label),
+        )
+        .children(active.then(|| {
+            svg()
+                .path("icon/ui/check.svg")
+                .size(px(14.0))
+                .text_color(theme.colors.text_link)
+        }))
+        .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
+            pointer_focus_handle.focus(window);
+            editor.status_bar.line_ending_menu_open = false;
+            editor.normalize_line_endings(ending, cx);
+            cx.notify();
+            cx.stop_propagation();
+        }))
+        .on_key_down(
+            cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "enter" | "space" => {
+                        editor.status_bar.line_ending_menu_open = false;
+                        editor.normalize_line_endings(ending, cx);
+                        cx.stop_propagation();
+                    }
+                    "escape" => {
+                        editor.status_bar.line_ending_menu_open = false;
+                        button_focus_handle.focus(window);
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    "up" => {
+                        keyboard_focus_handles[(index + 2) % 3].focus(window);
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        keyboard_focus_handles[(index + 1) % 3].focus(window);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }),
+        )
+        .into_any_element()
+}
+
 pub(super) fn render_mode_switch(
     state: &mut StatusBarState,
     view_mode: super::ViewMode,
@@ -333,6 +638,50 @@ pub(super) fn render_mode_switch(
     cx: &mut Context<Editor>,
 ) -> AnyElement {
     let d = &theme.dimensions;
+    if available_modes.len() == 1 {
+        // 单一模式是当前文档能力的静态状态，不伪装成可展开的选择器。
+        state.mode_menu_open = false;
+        let mode = available_modes[0];
+        let selector = format!("status-bar-mode-{mode:?}");
+        return div()
+            .id("status-bar-mode-picker")
+            .debug_selector(|| "status-bar-mode-picker".to_owned())
+            .h(px(d.status_bar_height))
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .id("status-bar-mode-switch")
+                    .debug_selector(|| "status-bar-mode-switch".to_owned())
+                    .size(px(d.status_bar_height))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .text_color(theme.colors.status_bar_text)
+                    .child(
+                        div()
+                            .id(ElementId::Name(selector.clone().into()))
+                            .debug_selector(move || selector.clone())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                svg()
+                                    .path(mode_icon(mode))
+                                    .size(px(15.0))
+                                    .text_color(theme.colors.status_bar_text),
+                            ),
+                    ),
+            )
+            .into_any_element();
+    }
+    let open = state.mode_menu_open;
+    let button_focus_handle = state
+        .mode_button_focus_handle
+        .get_or_insert_with(|| cx.focus_handle())
+        .clone();
     if state.mode_focus_handles.is_none() {
         state.mode_focus_handles = Some(std::array::from_fn(|_| cx.focus_handle()));
     }
@@ -342,75 +691,177 @@ pub(super) fn render_mode_switch(
         .expect("status mode focus handles must be initialized")
         .clone();
 
-    let segments = available_modes
+    let menu_items = available_modes
         .iter()
         .copied()
-        .map(|mode| {
-            let (label, focus) = match mode {
-                super::ViewMode::Rendered if json_document => (&strings.json_graph_live_edit, 0),
-                super::ViewMode::Rendered => (&strings.status_bar_mode_rendered, 0),
-                super::ViewMode::Source => (&strings.status_bar_mode_source, 1),
-                super::ViewMode::Split => (&strings.status_bar_mode_split, 2),
-                super::ViewMode::Preview => (&strings.status_bar_mode_preview, 3),
+        .enumerate()
+        .map(|(index, mode)| {
+            let label = match mode {
+                super::ViewMode::Rendered if json_document => &strings.json_graph_live_edit,
+                super::ViewMode::Rendered => &strings.status_bar_mode_rendered,
+                super::ViewMode::Source => &strings.status_bar_mode_source,
+                super::ViewMode::Split => &strings.status_bar_mode_split,
+                super::ViewMode::Preview => &strings.status_bar_mode_preview,
             };
-            render_mode_segment(
-                state,
+            render_mode_menu_item(
                 view_mode,
                 mode,
                 label,
-                focus_handles[focus].clone(),
+                index,
+                available_modes.len(),
+                focus_handles.clone(),
+                button_focus_handle.clone(),
                 theme,
                 cx,
             )
         })
         .collect::<Vec<_>>();
+    let current_label = match view_mode {
+        super::ViewMode::Rendered if json_document => &strings.json_graph_live_edit,
+        super::ViewMode::Rendered => &strings.status_bar_mode_rendered,
+        super::ViewMode::Source => &strings.status_bar_mode_source,
+        super::ViewMode::Split => &strings.status_bar_mode_split,
+        super::ViewMode::Preview => &strings.status_bar_mode_preview,
+    };
+    let current_icon = mode_icon(view_mode);
+    let pointer_focus_handle = button_focus_handle.clone();
+    let keyboard_item_focus = focus_handles[0].clone();
 
     div()
-        .id("status-bar-mode-switch")
-        .debug_selector(|| "status-bar-mode-switch".to_owned())
+        .id("status-bar-mode-picker")
+        .debug_selector(|| "status-bar-mode-picker".to_owned())
+        .relative()
         .h(px(d.status_bar_height))
         .flex()
         .items_center()
-        .gap(px(1.0))
-        .rounded(px(4.0))
-        .bg(theme.colors.status_bar_button_hover.opacity(0.45))
-        .children(segments)
+        .child(
+            div()
+                .id("status-bar-mode-switch")
+                .debug_selector(|| "status-bar-mode-switch".to_owned())
+                .relative()
+                .size(px(d.status_bar_height))
+                .tab_index(0)
+                .track_focus(&button_focus_handle)
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.0))
+                .border(px(1.0))
+                .border_color(hsla(0.0, 0.0, 0.0, 0.0))
+                .bg(if open || state.mode_hovered == Some(view_mode) {
+                    theme.colors.status_bar_button_hover
+                } else {
+                    hsla(0., 0., 0., 0.)
+                })
+                .cursor_pointer()
+                .focus(|this| this.border_color(theme.colors.text_link))
+                .text_color(theme.colors.status_bar_text)
+                .child(
+                    svg()
+                        .path(current_icon)
+                        .size(px(15.0))
+                        .text_color(theme.colors.status_bar_text),
+                )
+                .children(
+                    (!open && state.tooltip_visible == Some(StatusTooltip::Mode(view_mode))).then(
+                        || {
+                            status_bar_tooltip(
+                                current_label.to_owned(),
+                                theme,
+                                StatusTooltipAlignment::End,
+                                "status-bar-mode-tooltip".to_owned(),
+                            )
+                        },
+                    ),
+                )
+                .on_hover(cx.listener(move |editor, hovered: &bool, _window, cx| {
+                    editor.set_status_mode_tooltip_hover(view_mode, *hovered, cx);
+                }))
+                .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
+                    pointer_focus_handle.focus(window);
+                    editor.status_bar.format_overflow_open = false;
+                    editor.status_bar.line_ending_menu_open = false;
+                    editor.status_bar.mode_menu_open = !editor.status_bar.mode_menu_open;
+                    cx.notify();
+                }))
+                .on_key_down(
+                    cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
+                        match event.keystroke.key.as_str() {
+                            "enter" | "space" => {
+                                editor.status_bar.format_overflow_open = false;
+                                editor.status_bar.mode_menu_open =
+                                    !editor.status_bar.mode_menu_open;
+                                if editor.status_bar.mode_menu_open {
+                                    keyboard_item_focus.focus(window);
+                                }
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                            "escape" if editor.status_bar.mode_menu_open => {
+                                editor.status_bar.mode_menu_open = false;
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                            _ => {}
+                        }
+                    }),
+                ),
+        )
+        .children(open.then(|| {
+            div()
+                .id("status-bar-mode-menu")
+                .debug_selector(|| "status-bar-mode-menu".to_owned())
+                .absolute()
+                .right(px(0.0))
+                .bottom(px(d.status_bar_height + 4.0))
+                .min_w(px(120.0))
+                .occlude()
+                .p(px(4.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .bg(theme.colors.dialog_surface)
+                .border(px(d.dialog_border_width))
+                .border_color(theme.colors.dialog_border)
+                .rounded(px(8.0))
+                .shadow_lg()
+                .children(menu_items)
+        }))
         .into_any_element()
 }
 
-fn render_mode_segment(
-    state: &StatusBarState,
+fn render_mode_menu_item(
     current: super::ViewMode,
     mode: super::ViewMode,
     label: &str,
-    focus_handle: FocusHandle,
+    index: usize,
+    item_count: usize,
+    focus_handles: [FocusHandle; 4],
+    button_focus_handle: FocusHandle,
     theme: &Theme,
     cx: &mut Context<Editor>,
 ) -> AnyElement {
     let active = current == mode;
-    let hovered = state.mode_hovered == Some(mode);
-    let icon = match mode {
-        super::ViewMode::Rendered => LIVE_MODE_ICON,
-        super::ViewMode::Source => SOURCE_MODE_ICON,
-        super::ViewMode::Split => SPLIT_MODE_ICON,
-        super::ViewMode::Preview => PREVIEW_MODE_ICON,
-    };
+    let icon = mode_icon(mode);
+    let focus_handle = focus_handles[index].clone();
     let pointer_focus_handle = focus_handle.clone();
+    let keyboard_focus_handles = focus_handles.clone();
     div()
         .id(SharedString::from(format!("status-bar-mode-{mode:?}")))
         .debug_selector(move || format!("status-bar-mode-{mode:?}"))
-        .relative()
-        .size(px(theme.dimensions.status_bar_height))
+        .h(px(30.0))
+        .w_full()
+        .px(px(8.0))
         .tab_index(0)
         .track_focus(&focus_handle)
-        .flex_shrink_0()
         .flex()
         .items_center()
-        .justify_center()
-        .rounded(px(3.0))
+        .gap(px(8.0))
+        .rounded(px(6.0))
         .border(px(1.0))
         .border_color(hsla(0.0, 0.0, 0.0, 0.0))
-        .bg(if active || hovered {
+        .bg(if active {
             theme.colors.status_bar_button_hover
         } else {
             hsla(0., 0., 0., 0.)
@@ -424,54 +875,66 @@ fn render_mode_segment(
                 .size(px(15.0))
                 .text_color(theme.colors.status_bar_text),
         )
-        .children(active.then(|| {
+        .child(
             div()
-                .absolute()
-                .left(px(4.0))
-                .right(px(4.0))
-                .bottom(px(-1.0))
-                .h(px(2.0))
-                .rounded(px(1.0))
-                .bg(theme.colors.text_link)
-                .debug_selector(move || format!("status-bar-mode-{mode:?}-indicator"))
-        }))
-        .children(
-            (state.tooltip_visible == Some(StatusTooltip::Mode(mode))).then(|| {
-                let alignment = if mode == super::ViewMode::Preview {
-                    StatusTooltipAlignment::End
-                } else {
-                    StatusTooltipAlignment::Center
-                };
-                status_bar_tooltip(
-                    label.to_owned(),
-                    theme,
-                    alignment,
-                    format!("status-bar-mode-tooltip-{mode:?}"),
-                )
-            }),
+                .flex_1()
+                .text_size(px(theme.dimensions.status_bar_text_size))
+                .text_color(theme.colors.text_default)
+                .child(label.to_owned()),
         )
-        .on_hover(cx.listener(move |editor, hovered: &bool, _window, cx| {
-            editor.set_status_mode_tooltip_hover(mode, *hovered, cx);
+        .children(active.then(|| {
+            svg()
+                .path("icon/ui/check.svg")
+                .size(px(14.0))
+                .text_color(theme.colors.text_link)
+                .debug_selector(move || format!("status-bar-mode-{mode:?}-indicator"))
         }))
         .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
             pointer_focus_handle.focus(window);
+            editor.status_bar.mode_menu_open = false;
             editor.activate_status_view_mode(mode, window, cx);
         }))
         .on_key_down(
             cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    editor.activate_status_view_mode(mode, window, cx);
-                    cx.stop_propagation();
+                match event.keystroke.key.as_str() {
+                    "enter" | "space" => {
+                        editor.status_bar.mode_menu_open = false;
+                        editor.activate_status_view_mode(mode, window, cx);
+                        cx.stop_propagation();
+                    }
+                    "escape" => {
+                        editor.status_bar.mode_menu_open = false;
+                        button_focus_handle.focus(window);
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    "up" => {
+                        keyboard_focus_handles[(index + item_count - 1) % item_count].focus(window);
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        keyboard_focus_handles[(index + 1) % item_count].focus(window);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
                 }
             }),
         )
         .into_any_element()
 }
 
+fn mode_icon(mode: super::ViewMode) -> &'static str {
+    match mode {
+        super::ViewMode::Rendered => LIVE_MODE_ICON,
+        super::ViewMode::Source => SOURCE_MODE_ICON,
+        super::ViewMode::Split => SPLIT_MODE_ICON,
+        super::ViewMode::Preview => PREVIEW_MODE_ICON,
+    }
+}
+
 #[derive(Clone, Copy)]
 enum StatusTooltipAlignment {
     Start,
-    Center,
     End,
 }
 
@@ -504,7 +967,6 @@ fn status_bar_tooltip(
         .child(label);
     match alignment {
         StatusTooltipAlignment::Start => tooltip.left(px(0.0)),
-        StatusTooltipAlignment::Center => tooltip.left(px(-24.0)),
         StatusTooltipAlignment::End => tooltip.right(px(0.0)),
     }
     .into_any_element()

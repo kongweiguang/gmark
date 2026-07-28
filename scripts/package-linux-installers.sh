@@ -27,6 +27,8 @@ mkdir -p "$OUT"
 rm -rf "$STAGE"
 
 install -Dm755 "$ROOT/target/release/gmark" "$APPDIR/usr/bin/gmark"
+install -Dm755 "$ROOT/target/release/gmark-update-helper" \
+    "$APPDIR/usr/lib/gmark/gmark-update-helper"
 install -Dm644 "$ROOT/resources/linux/com.kongweiguang.gmark.desktop" \
     "$APPDIR/usr/share/applications/com.kongweiguang.gmark.desktop"
 install -Dm644 "$ROOT/resources/linux/icons/hicolor/256x256/apps/com.kongweiguang.gmark.png" \
@@ -55,6 +57,8 @@ ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" \
 chmod +x "$OUT/gmark-v$VERSION-linux-x86_64.AppImage"
 
 install -Dm755 "$ROOT/target/release/gmark" "$DEBROOT/usr/bin/gmark"
+install -Dm755 "$ROOT/target/release/gmark-update-helper" \
+    "$DEBROOT/usr/lib/gmark/gmark-update-helper"
 cp -a "$APPDIR/usr/share/." "$DEBROOT/usr/share/"
 mkdir -p "$DEBROOT/DEBIAN"
 cat > "$DEBROOT/DEBIAN/control" <<EOF

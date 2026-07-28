@@ -6,18 +6,8 @@
 //! interaction code can depend on stable semantic names instead of hard-coded
 //! values.
 
-use std::path::Path;
-use std::sync::Arc;
-
-use anyhow::{Context as _, bail};
-use gpui::{App, FontWeight, Global, Hsla, WindowAppearance, hsla, rgba};
+use gpui::{FontWeight, Hsla, rgba};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
-
-use crate::config::{
-    GmarkConfigDirs, merge_non_empty_json_values, object_without_empty_values,
-    prune_empty_json_values, read_json_or_jsonc, sanitize_config_file_stem,
-};
 
 /// Serializable font weight that maps to GPUI's [`FontWeight`] constants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,13 +247,9 @@ pub use model::Theme;
 
 #[path = "theme_parts/catalog.rs"]
 mod catalog;
-use catalog::BUILTIN_THEME_GMARK_LIGHT_NAME;
-pub(crate) use catalog::SYSTEM_THEME_ID;
 #[cfg(test)]
-use catalog::custom_theme_from_value;
-#[cfg(test)]
-use catalog::resolved_system_theme_id;
-pub use catalog::{ThemeCatalogEntry, ThemeManager};
+use catalog::resolved_theme_id;
+pub use catalog::{ThemeAppearance, ThemeManager, ThemePalette};
 #[cfg(test)]
 #[path = "../../tests/unit/theme/theme.rs"]
 mod tests;

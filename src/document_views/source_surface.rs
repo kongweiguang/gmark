@@ -311,7 +311,6 @@ impl DocumentHost {
             .unwrap_or_default();
         if existing.range().is_empty() || !existing.range().contains(&offset) {
             let caret = SourceAnchor::new(offset, SourceAffinity::After);
-            self.active_edit = None;
             self.set_source_selection(
                 SourceSelection {
                     anchor: caret,
@@ -319,15 +318,41 @@ impl DocumentHost {
                 },
                 cx,
             );
-            self.sync_source_selection_visuals(cx);
         }
-        self.source_context_menu = Some(event.position);
+        // 右键菜单命令由 DocumentHost 统一执行；不能继续让行内 Block 持有编辑权，
+        // 否则在已有选区内右击时，剪切、粘贴和全选都会被宿主的行内编辑保护提前拒绝。
+        self.active_edit = None;
+        self.sync_source_selection_visuals(cx);
+        let host_origin = self
+            .document_host_bounds
+            .lock()
+            .ok()
+            .and_then(|bounds| *bounds)
+            .map(|bounds| bounds.origin)
+            .unwrap_or_default();
+        self.source_context_menu = Some(point(
+            event.position.x - host_origin.x,
+            event.position.y - host_origin.y,
+        ));
         let menu_focus = self.source_context_menu_focus_handle.clone();
         // 菜单的 focus node 要到下一帧才进入 dispatch tree；延后聚焦可确保
         // Escape action 命中菜单自身，而不是沿用右键前的行内 Block 路径。
         window.defer(cx, move |window, _cx| menu_focus.focus(window));
         cx.stop_propagation();
         cx.notify();
+    }
+
+    pub(super) fn dismiss_source_context_menu_on_mouse_down(
+        &mut self,
+        _: &gpui::MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.source_context_menu.take().is_some() {
+            self.focus_handle.focus(window);
+            cx.stop_propagation();
+            cx.notify();
+        }
     }
 
     pub(super) fn capture_source_surface_mouse_down(
@@ -363,6 +388,12 @@ impl DocumentHost {
                 self.on_export_selection(&ExportSelection, window, cx)
             }
             SourceContextCommand::ExportSelectionUtf8 => self.export_selection_as_utf8(window, cx),
+            SourceContextCommand::FormatDocument => {
+                self.on_format_document(&FormatDocument, window, cx)
+            }
+            SourceContextCommand::FormatSelection => {
+                self.on_format_selection(&FormatSelection, window, cx)
+            }
         }
         cx.notify();
     }

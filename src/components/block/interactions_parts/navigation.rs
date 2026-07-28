@@ -305,6 +305,47 @@ impl Block {
             return;
         }
 
+        if self.kind() == BlockKind::MermaidBlock {
+            let source_hit = self.last_bounds.is_some_and(|bounds| {
+                event.position.x >= bounds.left()
+                    && event.position.x <= bounds.right()
+                    && event.position.y >= bounds.top()
+                    && event.position.y <= bounds.bottom()
+            });
+            if self.mermaid_view_mode() == MermaidViewMode::Preview || !source_hit {
+                self.is_selecting = false;
+                self.focus_handle.focus(window);
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+        }
+
+        // Resource cards are rendered inside the same block shell as editable
+        // Markdown. Claim their pointer gesture before the text handler can
+        // move the caret and switch the projection back to source text.
+        let resource_card_visible = self.record.resource.is_some()
+            && (!self.focus_handle.is_focused(window) || self.resource_selected);
+        if resource_card_visible {
+            self.is_selecting = false;
+            self.focus_handle.focus(window);
+            if event.click_count >= 2 {
+                if let Some(record) = self
+                    .record
+                    .resource
+                    .as_ref()
+                    .map(|resource| resource.with_base_dir(self.image_base_dir()))
+                {
+                    self.request_resource_open(&record, cx);
+                }
+            } else {
+                self.resource_selected = true;
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
+
         if self.showing_rendered_image() {
             self.is_selecting = false;
             if event.click_count >= 2 {

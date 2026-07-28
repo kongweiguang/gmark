@@ -65,6 +65,29 @@ impl Block {
         cx.notify();
     }
 
+    /// 将直接输入的 Mermaid 围栏升级为原生工作台，并把光标放在围栏正文中。
+    pub(crate) fn enter_mermaid_block(&mut self, fence: CodeFenceOpening, cx: &mut Context<Self>) {
+        let opening = self.display_text().trim_end().to_owned();
+        let closing = fence.ch.to_string().repeat(fence.len);
+        let source = format!("{opening}\n\n{closing}");
+        let cursor = opening.len() + 1;
+
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.clear_inline_projection();
+        self.record.kind = BlockKind::MermaidBlock;
+        self.mermaid_view_mode = MermaidViewMode::Source;
+        self.record.set_title(InlineTextTree::plain(source));
+        self.quote_reparse_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+        self.assign_collapsed_selection_offset(cursor, CollapsedCaretAffinity::Default, None);
+        self.marked_range = None;
+        self.cursor_blink_epoch = Instant::now();
+        self.clear_vertical_motion();
+        cx.emit(BlockEvent::Changed);
+        cx.notify();
+    }
+
     /// Convert the current paragraph into a display-math block. `body` becomes
     /// the formula source between the fences (empty for a fresh `$$` block), and
     /// the caret lands at the start of that body line.

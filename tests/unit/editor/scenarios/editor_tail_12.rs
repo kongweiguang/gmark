@@ -246,12 +246,26 @@ async fn table_and_drop_dialogs_use_standard_compact_layout(cx: &mut TestAppCont
     assert!(dialog.right() <= overlay.right());
     assert!(dialog.top() >= overlay.top());
     assert!(dialog.bottom() <= overlay.bottom());
+    let actions = visual_cx
+        .debug_bounds("table-insert-dialog-actions")
+        .unwrap();
     for selector in ["cancel-table-insert-dialog", "confirm-table-insert-dialog"] {
         let action = visual_cx.debug_bounds(selector).unwrap();
         assert!(action.left() >= dialog.left(), "{selector}");
         assert!(action.right() <= dialog.right(), "{selector}");
+        assert!(action.top() >= dialog.top(), "{selector} escaped top");
         assert!(f32::from(action.size.width) >= 72.0, "{selector}");
         assert_eq!(f32::from(action.size.height), 36.0, "{selector}");
+        assert!(
+            action.bottom() <= dialog.bottom(),
+            "{selector} escaped bottom: action={action:?}, dialog={dialog:?}"
+        );
+        let top_gap = f32::from(action.top() - actions.top());
+        let bottom_gap = f32::from(dialog.bottom() - action.bottom());
+        assert!(
+            (top_gap - bottom_gap).abs() <= 1.0,
+            "{selector} vertical gaps differ: top={top_gap}, bottom={bottom_gap}"
+        );
     }
 
     editor.update(visual_cx, |editor, cx| {
@@ -397,8 +411,9 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     .expect("large document probe");
     assert_eq!(probe.strategy, gmark_paged_document::OpenStrategy::Paged);
     let source = gmark_paged_document::FileSource::open(&path).expect("large document source");
-    let (editor, visual) =
-        cx.add_window_view(move |_window, cx| Editor::from_source_backed_file(cx, path, probe, source));
+    let (editor, visual) = cx.add_window_view(move |_window, cx| {
+        Editor::from_source_backed_file(cx, path, probe, source)
+    });
 
     for viewport in [size(px(1180.0), px(780.0)), size(px(720.0), px(520.0))] {
         visual.simulate_resize(viewport);
@@ -415,7 +430,9 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
         let large_content = visual.debug_bounds("document-host-tab-content").unwrap();
         let tab_strip = visual.debug_bounds("document-tab-strip").unwrap();
         let status_bar = visual.debug_bounds("status-bar").unwrap();
-        let large_status = visual.debug_bounds("status-bar-document-host-status").unwrap();
+        let large_status = visual
+            .debug_bounds("status-bar-document-host-status")
+            .unwrap();
 
         // Windows/macOS 使用应用内标题栏；Linux/FreeBSD 的客户端装饰由平台窗口层提供。
         // 大文件外壳契约由下面的主内容、Tab 和状态栏共同验证，不绑定平台装饰实现。
@@ -423,6 +440,13 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
             assert!(visual.debug_bounds("editor-titlebar").is_some());
         }
         assert!(visual.debug_bounds("status-bar-mode-switch").is_some());
+        let fixed_mode = visual.debug_bounds("status-bar-mode-switch").unwrap();
+        visual.simulate_click(fixed_mode.center(), Modifiers::default());
+        redraw(visual);
+        assert!(
+            visual.debug_bounds("status-bar-mode-menu").is_none(),
+            "a fixed Paged Source status must not open a misleading mode menu"
+        );
         assert!(visual.debug_bounds("status-bar-mode-Source").is_some());
         for unavailable in [
             "status-bar-mode-Rendered",
@@ -457,10 +481,11 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
         }
     }
 
-    for theme_id in ["gmark-light", "gmark"] {
+    for appearance in [ThemeAppearance::Light, ThemeAppearance::Dark] {
         visual.update(|_window, cx| {
+            let platform_appearance = cx.window_appearance();
             assert!(cx.update_global::<ThemeManager, _>(|manager, _cx| {
-                manager.set_theme_by_id(theme_id)
+                manager.set_theme_preference(appearance, ThemePalette::Xcode, platform_appearance)
             }));
             cx.refresh_windows();
         });
@@ -524,7 +549,11 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     }));
     visual.simulate_keystrokes("ctrl-g");
     redraw(visual);
-    assert!(visual.debug_bounds("document-host-navigation-panel").is_some());
+    assert!(
+        visual
+            .debug_bounds("document-host-navigation-panel")
+            .is_some()
+    );
     large_view.update(visual, |view, cx| view.close_navigation_for_test(cx));
     redraw(visual);
 
@@ -586,8 +615,16 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
     visual.simulate_keystrokes("escape");
     visual.simulate_keystrokes("ctrl-g");
     redraw(visual);
-    assert!(visual.debug_bounds("document-host-navigation-panel").is_some());
-    assert!(visual.debug_bounds("document-host-navigation-input").is_some());
+    assert!(
+        visual
+            .debug_bounds("document-host-navigation-panel")
+            .is_some()
+    );
+    assert!(
+        visual
+            .debug_bounds("document-host-navigation-input")
+            .is_some()
+    );
     visual.simulate_input("400");
     visual.run_until_parked();
     assert_eq!(

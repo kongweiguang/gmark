@@ -177,7 +177,10 @@ async fn mermaid_overlay_is_read_only_and_escape_restores_block_focus(cx: &mut T
     assert!(visual.debug_bounds("diagram-overlay-close").is_some());
     visual.simulate_keystrokes("escape");
     editor.read_with(visual, |editor, _cx| {
-        assert!(editor.diagram_overlay.is_none(), "Escape must clear overlay state");
+        assert!(
+            editor.diagram_overlay.is_none(),
+            "Escape must clear overlay state"
+        );
     });
     redraw(visual);
     editor.read_with(visual, |editor, cx| {
@@ -199,4 +202,201 @@ async fn mermaid_overlay_is_read_only_and_escape_restores_block_focus(cx: &mut T
                 .is_focused(window)
         );
     });
+}
+
+#[gpui::test]
+async fn mermaid_overlay_wheel_zooms_without_scrolling_source(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let source = format!(
+        "```mermaid\nflowchart LR\nA --> B\n```\n\n{}",
+        "Supporting paragraph.\n\n".repeat(80)
+    );
+    let (editor, visual) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, source, None));
+    redraw(visual);
+    visual.executor().advance_clock(Duration::from_millis(300));
+    visual.run_until_parked();
+    redraw(visual);
+    let open = visual
+        .debug_bounds("mermaid-open-overlay")
+        .expect("Mermaid enlarged-view button");
+    visual.simulate_click(open.center(), Modifiers::default());
+    redraw(visual);
+    visual.run_until_parked();
+    redraw(visual);
+    let diagram_bounds = visual
+        .debug_bounds("diagram-overlay-canvas")
+        .expect("Mermaid enlarged-view canvas");
+    let source_scroll_before =
+        editor.read_with(visual, |editor, _cx| editor.scroll_handle.offset());
+    editor.read_with(visual, |editor, _cx| {
+        assert!(
+            editor.scroll_handle.max_offset().height > px(0.0),
+            "test document must be vertically scrollable"
+        );
+    });
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: diagram_bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(120.0))),
+        ..Default::default()
+    });
+    redraw(visual);
+    let zoomed_bounds = visual
+        .debug_bounds("diagram-overlay-canvas")
+        .expect("zoomed Mermaid canvas");
+    assert!(
+        zoomed_bounds.size.width > diagram_bounds.size.width,
+        "wheel up must enlarge the rendered diagram"
+    );
+    let zoomed_scale = editor.read_with(visual, |editor, _cx| {
+        let state = editor.diagram_overlay.as_ref().expect("overlay state");
+        assert_eq!(
+            editor.scroll_handle.offset(),
+            source_scroll_before,
+            "diagram wheel input must not scroll the document behind the overlay"
+        );
+        state.manual_scale.expect("wheel up must zoom the diagram")
+    });
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: zoomed_bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        ..Default::default()
+    });
+    redraw(visual);
+    let zoomed_out_bounds = visual
+        .debug_bounds("diagram-overlay-canvas")
+        .expect("zoomed-out Mermaid canvas");
+    assert!(
+        zoomed_out_bounds.size.width < zoomed_bounds.size.width,
+        "wheel down must shrink the rendered diagram"
+    );
+    editor.read_with(visual, |editor, _cx| {
+        let scale = editor
+            .diagram_overlay
+            .as_ref()
+            .and_then(|state| state.manual_scale)
+            .expect("overlay keeps its explicit zoom level");
+        assert!(scale < zoomed_scale, "wheel down must zoom the diagram out");
+        assert_eq!(
+            editor.scroll_handle.offset(),
+            source_scroll_before,
+            "diagram wheel input must never scroll the document behind the overlay"
+        );
+    });
+}
+
+#[gpui::test]
+async fn mermaid_workbench_uses_explicit_modes_and_adapts_its_content_height(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let source = "```mermaid\nflowchart LR\nA --> B\n```";
+    let (editor, visual) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, source.to_owned(), None));
+    visual.simulate_resize(size(px(960.0), px(720.0)));
+    redraw(visual);
+    visual.executor().advance_clock(Duration::from_millis(300));
+    visual.run_until_parked();
+    redraw(visual);
+
+    let preview_frame = visual
+        .debug_bounds("mermaid-workbench-frame")
+        .expect("Mermaid workbench frame");
+    assert!(visual.debug_bounds("mermaid-preview-pane").is_some());
+    assert!(visual.debug_bounds("mermaid-source-pane").is_none());
+
+    let diagram = visual
+        .debug_bounds("mermaid-rendered-content")
+        .expect("rendered Mermaid diagram");
+    visual.simulate_click(diagram.center(), Modifiers::default());
+    redraw(visual);
+    assert!(
+        visual.debug_bounds("mermaid-preview-pane").is_some(),
+        "clicking the diagram must not implicitly enter source editing"
+    );
+
+    let source_mode = visual
+        .debug_bounds("mermaid-view-source")
+        .expect("source mode button");
+    visual.simulate_click(source_mode.center(), Modifiers::default());
+    redraw(visual);
+    let source_frame = visual
+        .debug_bounds("mermaid-workbench-frame")
+        .expect("source-mode frame");
+    assert_eq!(source_frame.size, preview_frame.size);
+    assert!(visual.debug_bounds("mermaid-source-pane").is_some());
+    assert!(visual.debug_bounds("mermaid-source-editor").is_some());
+
+    let split_mode = visual
+        .debug_bounds("mermaid-view-split")
+        .expect("split mode button");
+    visual.simulate_click(split_mode.center(), Modifiers::default());
+    redraw(visual);
+    let split_frame = visual
+        .debug_bounds("mermaid-workbench-frame")
+        .expect("split-mode frame");
+    assert_eq!(split_frame.size.width, preview_frame.size.width);
+    assert!(
+        split_frame.size.height > preview_frame.size.height,
+        "wide Split reserves its readable 420px content minimum"
+    );
+    assert!(visual.debug_bounds("mermaid-split-pane").is_some());
+    assert!(visual.debug_bounds("mermaid-source-editor").is_some());
+    assert!(visual.debug_bounds("mermaid-rendered-content").is_some());
+
+    let copy = visual
+        .debug_bounds("mermaid-copy-source")
+        .expect("Mermaid source copy button");
+    visual.simulate_click(copy.center(), Modifiers::default());
+    redraw(visual);
+    assert_eq!(
+        visual.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        Some(source)
+    );
+    editor.read_with(visual, |editor, cx| {
+        assert!(
+            editor
+                .document
+                .first_root()
+                .expect("Mermaid block")
+                .read(cx)
+                .mermaid_copy_feedback
+        );
+        assert_eq!(editor.source_document.text(), source);
+        assert!(!editor.document_dirty);
+    });
+    visual.executor().advance_clock(Duration::from_millis(1_200));
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, cx| {
+        assert!(
+            !editor
+                .document
+                .first_root()
+                .expect("Mermaid block")
+                .read(cx)
+                .mermaid_copy_feedback
+        );
+    });
+
+    visual.simulate_resize(size(px(600.0), px(720.0)));
+    visual.run_until_parked();
+    redraw(visual);
+    let narrow_preview = visual
+        .debug_bounds("mermaid-split-preview-narrow")
+        .expect("narrow split preview pane");
+    let narrow_source = visual
+        .debug_bounds("mermaid-source-editor")
+        .expect("narrow split source pane");
+    assert!(
+        narrow_source.bottom() <= narrow_preview.top(),
+        "narrow split must stack source above the preview"
+    );
+    assert!(
+        narrow_source.size.height >= px(280.0),
+        "narrow split source must remain readable"
+    );
+    assert!(
+        narrow_preview.size.height >= px(280.0),
+        "narrow split preview must remain readable"
+    );
 }

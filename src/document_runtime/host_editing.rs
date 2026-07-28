@@ -809,6 +809,7 @@ impl DocumentHost {
             replacement,
             preserve_view,
             false,
+            false,
             cx,
         );
     }
@@ -827,7 +828,7 @@ impl DocumentHost {
             cx.notify();
             return false;
         }
-        self.install_source_replacement(next_document, range, replacement, true, true, cx);
+        self.install_source_replacement(next_document, range, replacement, true, true, false, cx);
         true
     }
 
@@ -875,19 +876,36 @@ impl DocumentHost {
             cx.notify();
             return false;
         }
-        self.install_source_replacement(next_document, range, replacement, true, false, cx);
+        self.install_source_replacement(next_document, range, replacement, true, false, false, cx);
         true
     }
 
-    fn install_source_replacement(
+    pub(super) fn install_source_replacement(
         &mut self,
         mut next_document: DocumentSession,
         range: Range<u64>,
         replacement: &str,
         preserve_view: bool,
         preserve_structure: bool,
+        preserve_folds: bool,
         cx: &mut Context<Self>,
     ) {
+        if !preserve_folds && let Some(document) = self.document.as_ref() {
+            let start_line = document
+                .line_for_offset(range.start.min(document.len()))
+                .and_then(|line| usize::try_from(line).ok())
+                .unwrap_or_default();
+            let end_line = document
+                .line_for_offset(range.end.min(document.len()))
+                .and_then(|line| usize::try_from(line).ok())
+                .unwrap_or(start_line);
+            self.fold_projection.apply_source_edit(
+                range.clone(),
+                start_line,
+                end_line,
+                replacement,
+            );
+        }
         let caret = range.start.saturating_add(replacement.len() as u64);
         let selection = Some(PagedRecoverySelection::collapsed(
             caret,
@@ -918,7 +936,7 @@ impl DocumentHost {
         self.tail_enabled = false;
         if !preserve_view {
             self.view_mode = DocumentHostViewMode::Source;
-            self.sync_session_active_view();
+            self.sync_tab_active_view();
         }
         if !preserve_structure {
             self.structured_index = None;
@@ -1000,6 +1018,14 @@ impl DocumentHost {
     pub(super) fn on_export_selection(
         &mut self,
         _: &ExportSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_selection_export(false, window, cx);
+    }
+
+    pub(crate) fn export_selection_from_menu(
+        &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1210,6 +1236,17 @@ impl DocumentHost {
                     }
                 })
             });
+        let edit_lines = self.document.as_ref().map(|document| {
+            let start = document
+                .line_for_offset(range.start.min(document.len()))
+                .and_then(|line| usize::try_from(line).ok())
+                .unwrap_or(active.line);
+            let end = document
+                .line_for_offset(range.end.min(document.len()))
+                .and_then(|line| usize::try_from(line).ok())
+                .unwrap_or(start);
+            (start, end)
+        });
         let Some(mut next_document) = self.document.clone() else {
             return;
         };
@@ -1288,6 +1325,14 @@ impl DocumentHost {
                 if let Some(selection) = recovery_selection {
                     next_document.set_source_selection(selection);
                 }
+                if let Some((start_line, end_line)) = edit_lines {
+                    self.fold_projection.apply_source_edit(
+                        range.clone(),
+                        start_line,
+                        end_line,
+                        &replacement,
+                    );
+                }
                 let dirty = !next_document.is_pristine();
                 next_document.dirty = dirty;
                 self.install_document_session(next_document);
@@ -1302,7 +1347,7 @@ impl DocumentHost {
                     && self.view_mode == DocumentHostViewMode::Split;
                 if !preserve_json_split {
                     self.view_mode = DocumentHostViewMode::Source;
-                    self.sync_session_active_view();
+                    self.sync_tab_active_view();
                 }
                 self.structured_index = None;
                 self.invalidate_structured_runtime();
@@ -1482,10 +1527,7 @@ impl DocumentHost {
         let loading = if forced_encoding.is_some() {
             gmark_document_core::LoadingPolicy {
                 max_resident_bytes: Some(self.probe.options.max_resident_bytes),
-                max_resident_lines: Some(self.probe.options.max_resident_lines),
-                max_structural_units: Some(self.probe.options.max_structural_units),
                 force_safe_source: self.probe.force_safe_source,
-                ..gmark_document_core::LoadingPolicy::default()
             }
         } else {
             configured_loading
@@ -1518,8 +1560,6 @@ impl DocumentHost {
                         &path,
                         gmark_paged_document::ProbeOptions {
                             max_resident_bytes: loading_limits.max_resident_bytes,
-                            max_resident_lines: loading_limits.max_resident_lines,
-                            max_structural_units: loading_limits.max_structural_units,
                             ..gmark_paged_document::ProbeOptions::default()
                         },
                     )?;
@@ -1680,6 +1720,14 @@ impl DocumentHost {
         }
         // 保存会卸载活动行 Block；先把焦点交还宿主，保存结束后快捷键仍能继续工作。
         self.focus_handle.focus(window);
+        if crate::source_tools::format_on_save_for_file(
+            &self.path,
+            crate::preferences::EditorSettings::format_on_save(cx),
+        ) && self.probe.strategy != OpenStrategy::Paged
+        {
+            self.start_format_before_save(window.window_handle(), cx);
+            return;
+        }
         self.start_save(self.path.clone(), false, window.window_handle(), cx);
     }
 

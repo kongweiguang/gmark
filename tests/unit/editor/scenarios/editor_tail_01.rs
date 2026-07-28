@@ -555,6 +555,9 @@ async fn complex_render_failure_keeps_last_successful_math_and_mermaid_svg(
         visual_cx.simulate_resize(viewport);
         redraw(visual_cx);
         let content = visual_cx.debug_bounds("editor-content").unwrap();
+        let mermaid_frame = visual_cx
+            .debug_bounds("mermaid-workbench-frame")
+            .expect("Mermaid workbench frame");
         for (selector, icon_selector) in [
             ("math-render-warning", "math-render-warning-icon"),
             ("mermaid-render-warning", "mermaid-render-warning-icon"),
@@ -563,10 +566,17 @@ async fn complex_render_failure_keeps_last_successful_math_and_mermaid_svg(
             let icon = visual_cx.debug_bounds(icon_selector).unwrap();
             assert_eq!(warning.size.height, px(22.0));
             assert_eq!(icon.size, size(px(14.0), px(14.0)));
-            assert!(warning.left() >= content.left());
+            let visible_bounds = if selector == "mermaid-render-warning" {
+                // Mermaid 告警位于内部滚动内容中，未裁剪布局仍可能保留旧 SVG
+                // 的固有宽度；对外可见边界由工作台外框负责。
+                mermaid_frame
+            } else {
+                warning
+            };
+            assert!(visible_bounds.left() >= content.left());
             assert!(
-                warning.right() <= content.right(),
-                "{selector}: warning={warning:?}, content={content:?}"
+                visible_bounds.right() <= content.right(),
+                "{selector}: visible={visible_bounds:?}, warning={warning:?}, content={content:?}"
             );
             assert!(icon.left() >= warning.left());
             assert!(icon.right() <= warning.right());

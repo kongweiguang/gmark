@@ -19,7 +19,6 @@ impl Editor {
     ) -> bool {
         projection.regions.len() >= Self::VIRTUAL_SURFACE_REGION_THRESHOLD
     }
-
     // reason: platform menu and tests construct untitled editors; remove only with that compatibility entrypoint.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_markdown(
@@ -144,22 +143,26 @@ impl Editor {
             .enumerate()
             .map(|(line, text)| (line as u64, text.to_owned()))
             .collect();
+        let update_status = crate::updater::UpdateCoordinator::accessibility_status(cx);
         crate::accessibility::EditorAccessibilitySnapshot {
             title,
             dirty: self.is_document_dirty(),
-            status: if self.is_document_dirty() {
-                strings.large_document_text("modified").to_owned()
-            } else {
-                strings.large_document_text("saved").to_owned()
-            },
+            status: update_status.clone().unwrap_or_else(|| {
+                if self.is_document_dirty() {
+                    strings.large_document_text("modified").to_owned()
+                } else {
+                    strings.large_document_text("saved").to_owned()
+                }
+            }),
             error: self
                 .external_file_conflict
                 .then(|| strings.large_document_text("file_changed_disk").to_owned()),
-            busy: self.save_task.is_some() || self.export_in_progress,
+            busy: self.save_task.is_some() || self.export_in_progress || update_status.is_some(),
             search_visible: self.find_panel.is_some(),
             navigation_visible: false,
             caret: None,
             lines,
+            folds: Vec::new(),
         }
     }
 
@@ -171,11 +174,12 @@ impl Editor {
             | (u64::from(self.find_panel.is_some()) << 1)
             | (u64::from(self.external_file_conflict) << 2)
             | (u64::from(self.save_task.is_some()) << 3)
-            | (u64::from(self.export_in_progress) << 4);
+            | (u64::from(self.export_in_progress) << 4)
+            | (update_accessibility_revision(cx) << 5);
         self.source_document
             .revision()
             .get()
-            .wrapping_mul(32)
+            .wrapping_mul(4_096)
             .wrapping_add(flags)
     }
 
@@ -190,9 +194,15 @@ impl Editor {
                 editor.document_dirty = false;
                 editor.pending_window_edited = false;
                 editor.schedule_workspace_session_save(cx);
+                #[cfg(target_os = "macos")]
+                editor.schedule_platform_document_menu_refresh(cx);
                 cx.notify();
             }
-            crate::document_host::DocumentHostEvent::StateChanged => cx.notify(),
+            crate::document_host::DocumentHostEvent::StateChanged => {
+                #[cfg(target_os = "macos")]
+                editor.schedule_platform_document_menu_refresh(cx);
+                cx.notify();
+            }
             crate::document_host::DocumentHostEvent::ViewModeChanged(mode) => {
                 editor.view_mode = match mode {
                     crate::document_host::DocumentHostMode::Live => ViewMode::Rendered,
@@ -201,6 +211,8 @@ impl Editor {
                     crate::document_host::DocumentHostMode::Split => ViewMode::Split,
                 };
                 editor.schedule_workspace_session_save(cx);
+                #[cfg(target_os = "macos")]
+                editor.schedule_platform_document_menu_refresh(cx);
                 cx.notify();
             }
             crate::document_host::DocumentHostEvent::SplitRatioChanged(ratio) => {
@@ -360,6 +372,8 @@ impl Editor {
             split_divider_focus_handle: cx.focus_handle(),
             document_toolbar_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             file_open_failure_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
+            update_primary_focus_handle: cx.focus_handle(),
+            update_secondary_focus_handle: cx.focus_handle(),
             table_cells: HashMap::new(),
             view_mode: ViewMode::Rendered,
             pending_focus,
@@ -368,12 +382,14 @@ impl Editor {
             pending_scroll_recheck_after_layout: true,
             pending_save: false,
             pending_save_as: false,
+            pending_resource_insertion: None,
             save_task: None,
             save_queued: false,
             auto_save_task: None,
             spellcheck_task: None,
             export_task: None,
             export_cancel: None,
+            export_progress: None,
             export_in_progress: false,
             export_cancel_requested: false,
             pending_open_link: None,
@@ -407,13 +423,13 @@ impl Editor {
             pending_drop_replace_after_save: false,
             drop_replace_restore_focus: None,
             info_dialog: None,
-            update_check_in_progress: false,
             workspace: WorkspaceState::default(),
             tabs: tabs::TabState::new(),
             focus_mode: false,
             typewriter_mode: false,
             status_bar,
             context_menu: None,
+            resource_title_dialog: None,
             context_menu_keyboard_item: None,
             context_menu_keyboard_submenu_item: None,
             context_menu_scroll_handle: ScrollHandle::new(),
@@ -502,5 +518,16 @@ impl Editor {
             );
         }
         editor
+    }
+}
+
+fn update_accessibility_revision(cx: &App) -> u64 {
+    match crate::updater::UpdateCoordinator::try_state(cx) {
+        Some(crate::updater::UpdateState::Downloading {
+            downloaded, total, ..
+        }) if total > 0 => downloaded.saturating_mul(100) / total + 1,
+        Some(crate::updater::UpdateState::Verifying { .. }) => 102,
+        Some(crate::updater::UpdateState::Installing { .. }) => 103,
+        _ => 0,
     }
 }

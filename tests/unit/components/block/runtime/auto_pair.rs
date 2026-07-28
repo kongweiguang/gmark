@@ -59,7 +59,7 @@ fn markdown_pairs_promote_bold_and_keep_bullet_shortcut_reachable() {
 }
 
 #[test]
-fn backtick_pair_promotes_to_a_reachable_fence_prefix() {
+fn backtick_pair_keeps_fence_runs_reachable_without_blocking_longer_runs() {
     assert!(matches!(
         auto_pair_edit("", 0..0, "`", false, true),
         Some(AutoPairEdit::Replace { text, selected_range_relative, .. })
@@ -67,16 +67,11 @@ fn backtick_pair_promotes_to_a_reachable_fence_prefix() {
     ));
     assert_eq!(
         auto_pair_edit("``", 1..1, "`", false, true),
-        Some(AutoPairEdit::Replace {
-            range: 0..2,
-            text: "```".to_owned(),
-            selected_range_relative: 3..3,
-        })
+        Some(AutoPairEdit::MoveTo(2))
     );
-    assert_eq!(
-        auto_pair_edit("```", 3..3, "`", false, true),
-        Some(AutoPairEdit::MoveTo(3))
-    );
+    assert_eq!(auto_pair_edit("``", 2..2, "`", false, true), None);
+    assert_eq!(auto_pair_edit("```", 3..3, "`", false, true), None);
+    assert_eq!(auto_pair_edit("````", 4..4, "`", false, true), None);
 }
 
 #[test]

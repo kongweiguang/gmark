@@ -53,6 +53,7 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
           RELEASE_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
@@ -112,6 +113,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/payload | Out-Null
           Copy-Item target/release/gmark.exe dist/payload/gmark.exe
+          Copy-Item target/release/gmark-update-helper.exe dist/payload/gmark-update-helper.exe
           Copy-Item assets/icon/gmark.ico dist/payload/gmark.ico
           Copy-Item README.md,LICENSE dist/payload/
       - name: Install pinned Inno Setup
@@ -205,13 +207,15 @@ jobs:
           echo "GMARK_UPDATE_PUBLIC_KEY_BASE64=$UPDATE_PUBLIC_KEY_BASE64" >> "$GITHUB_ENV"
       - run: cargo build --release --locked
       - name: Build unsigned installable DMG
-        run: bash scripts/package-macos-dmg.sh "${{ needs.validate.outputs.version }}" "${{ matrix.arch }}" "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg"
+        run: bash scripts/package-macos-dmg.sh "${{ needs.validate.outputs.version }}" "${{ matrix.arch }}" "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg" "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.app.tar.gz"
       - name: Mount and verify DMG
         run: bash scripts/smoke-macos-dmg.sh "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg" "${{ needs.validate.outputs.version }}"
       - uses: actions/upload-artifact@v7
         with:
           name: gmark-macos-${{ matrix.arch }}-installer
-          path: dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg
+          path: |
+            dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg
+            dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.app.tar.gz
           if-no-files-found: error
 
   release:
@@ -239,6 +243,8 @@ jobs:
             "gmark-v$VERSION-windows-x86_64-setup.exe"
             "gmark-v$VERSION-macos-aarch64.dmg"
             "gmark-v$VERSION-macos-x86_64.dmg"
+            "gmark-v$VERSION-macos-aarch64.app.tar.gz"
+            "gmark-v$VERSION-macos-x86_64.app.tar.gz"
             "gmark-v$VERSION-linux-x86_64.AppImage"
             "gmark-v$VERSION-linux-x86_64.deb"
           )
@@ -266,6 +272,7 @@ jobs:
         env:
           PACKAGE_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
           RELEASE_CHANNEL: ${{ inputs.channel }}
           ROLLOUT_PERCENT: ${{ inputs.rollout_percent }}
           PAUSED: ${{ inputs.paused }}
@@ -281,10 +288,16 @@ jobs:
           chmod 600 "$private_key"
           common=(--version "$PACKAGE_VERSION" --release-tag "$RELEASE_TAG" --dist dist)
           update=("${common[@]}" --private-key "$private_key" --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" --output dist/update-manifest.json --rollout-percent "$ROLLOUT_PERCENT")
+          if [[ "$RELEASE_CHANNEL" == stable ]]; then
+            update+=(--v2-output dist/update-manifest-v2.json --notes "$RELEASE_TITLE")
+          fi
           release=(create "${common[@]}" --channel "$RELEASE_CHANNEL" --private-key "$private_key" --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" --output dist/release-artifacts.json --rollout-percent "$ROLLOUT_PERCENT")
           if [[ "$PAUSED" == true ]]; then update+=(--paused); release+=(--paused); fi
           python scripts/create-update-manifest.py "${update[@]}"
           python scripts/verify-update-manifest.py --manifest dist/update-manifest.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --expected-rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
+          if [[ "$RELEASE_CHANNEL" == stable ]]; then
+            python scripts/verify-update-manifest-v2.py --manifest dist/update-manifest-v2.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --expected-rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
+          fi
           python scripts/release-artifact-manifest.py "${release[@]}"
           python scripts/release-artifact-manifest.py verify --manifest dist/release-artifacts.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --channel "$RELEASE_CHANNEL" --rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
       - name: Publish or update GitHub Release

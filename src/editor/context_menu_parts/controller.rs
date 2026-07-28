@@ -123,6 +123,19 @@ impl Editor {
         }
         cx.stop_propagation();
         if let Some(block) = self.focusable_entity_by_id(entity_id) {
+            if block.read(cx).record.resource.is_some() {
+                self.close_menu_bar(cx);
+                self.context_menu = Some(ContextMenuState::Resource {
+                    position: event.position,
+                    entity_id,
+                });
+                self.context_menu_keyboard_item = None;
+                self.context_menu_keyboard_submenu_item = None;
+                self.context_menu_scroll_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+                cx.notify();
+                return;
+            }
             let offset = block.read(cx).index_for_mouse_position(event.position);
             let diagnostic = block
                 .read(cx)
@@ -291,6 +304,35 @@ impl Editor {
         let Some(ContextMenuState::Insert { target, .. }) = self.context_menu.take() else {
             return;
         };
+        self.context_menu_keyboard_item = None;
+        self.context_menu_keyboard_submenu_item = None;
+        self.context_menu_submenu_close_task = None;
+
+        if command == EditingCommandId::Resource {
+            let (parent, index) = match target {
+                TableInsertTarget::After(entity_id) => self
+                    .document
+                    .find_block_location(entity_id)
+                    .map(|location| (location.parent, location.index + 1))
+                    .unwrap_or((None, self.document.root_count())),
+                TableInsertTarget::Append => (None, self.document.root_count()),
+            };
+            // Keep the picker cancellable: the placeholder is an unattached
+            // entity and only the selected resource is committed to the tree.
+            let placeholder = Self::new_block(cx, BlockRecord::paragraph(String::new()));
+            Self::prompt_and_insert_resource(
+                self,
+                placeholder,
+                parent,
+                index,
+                BlockKind::Paragraph,
+                InlineTextTree::plain(String::new()),
+                0,
+                true,
+                cx,
+            );
+            return;
+        }
         let inserted = match command.plan() {
             EditingCommandPlan::InsertImage => Self::new_block(cx, BlockRecord::paragraph("![]()")),
             EditingCommandPlan::InsertMath => Self::new_block(cx, BlockRecord::math("$$\n\n$$")),
@@ -310,9 +352,6 @@ impl Editor {
             _ => return,
         };
 
-        self.context_menu_keyboard_item = None;
-        self.context_menu_keyboard_submenu_item = None;
-        self.context_menu_submenu_close_task = None;
         self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
         let (parent, index) = match target {
             TableInsertTarget::After(entity_id) => self
@@ -886,4 +925,499 @@ impl Editor {
             row.into_any_element()
         }
     }
+}
+
+impl Editor {
+    fn resource_context_block(&self, _cx: &App) -> Option<gpui::Entity<crate::components::Block>> {
+        let entity_id = match self.context_menu.as_ref()? {
+            ContextMenuState::Resource { entity_id, .. } => *entity_id,
+            _ => return None,
+        };
+        self.focusable_entity_by_id(entity_id)
+    }
+
+    /// Context-menu actions must use the runtime's base-directory-resolved
+    /// record. The source record intentionally keeps relative Markdown targets
+    /// lexical so save-as and round trips do not rewrite user text.
+    pub(in crate::editor) fn resource_context_record(&self, cx: &App) -> Option<ResourceRecord> {
+        let block = self.resource_context_block(cx)?;
+        let base_dir = self.image_base_dir();
+        let block = block.read(cx);
+        block
+            .resource_runtime()
+            .map(|runtime| runtime.record.clone())
+            .or_else(|| {
+                block
+                    .record
+                    .resource
+                    .as_ref()
+                    .map(|record| record.with_base_dir(base_dir.as_deref()))
+            })
+    }
+
+    /// The menu must not probe the filesystem synchronously. Mounted blocks
+    /// publish the cached adapter status; an unmounted/test block remains in
+    /// Loading until the next runtime-context synchronization.
+    pub(in crate::editor) fn resource_context_status(&self, cx: &App) -> Option<ResourceStatus> {
+        let block = self.resource_context_block(cx)?;
+        let block = block.read(cx);
+        block
+            .resource_runtime()
+            .map(|runtime| runtime.status.clone())
+            .or_else(|| {
+                block.record.resource.as_ref().map(|record| {
+                    if record.is_unsafe_url() {
+                        ResourceStatus::UnsafeScheme
+                    } else {
+                        ResourceStatus::Loading
+                    }
+                })
+            })
+    }
+
+    pub(super) fn open_resource_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self.resource_context_block(cx) else {
+            return;
+        };
+        let Some(record) = self.resource_context_record(cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        block.update(cx, |block, cx| {
+            block.request_resource_open(&record, cx);
+        });
+    }
+
+    pub(super) fn reveal_resource_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let block = self.resource_context_block(cx);
+        let path = self
+            .resource_context_record(cx)
+            .as_ref()
+            .and_then(ResourceRecord::local_path)
+            .map(std::path::Path::to_path_buf);
+        self.close_context_menu(cx);
+        if let Some(path) = path
+            && let Err(error) = crate::resource_io::reveal_local_resource(&path)
+        {
+            if let Some(block) = block {
+                block.update(cx, |block, cx| block.mark_resource_open_failed(cx));
+            }
+            eprintln!("failed to reveal resource '{}': {error}", path.display());
+        }
+    }
+
+    pub(super) fn edit_resource_title_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self.resource_context_block(cx) else {
+            return;
+        };
+        let Some(previous) = self.resource_context_record(cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        let label = previous.label.clone();
+        let input = cx.new(|cx| {
+            let mut input =
+                crate::components::Block::with_record(cx, BlockRecord::paragraph(label));
+            input.set_source_raw_mode();
+            input
+        });
+        input.read(cx).focus_handle.focus(window);
+        self.resource_title_dialog = Some(crate::editor::ResourceTitleDialogState {
+            entity_id: block.entity_id(),
+            previous,
+            input,
+        });
+        cx.notify();
+    }
+
+    pub(in crate::editor) fn cancel_resource_title_dialog(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.resource_title_dialog.take() {
+            if self.focusable_entity_by_id(dialog.entity_id).is_some() {
+                self.focus_block(dialog.entity_id);
+            }
+            cx.notify();
+        }
+    }
+
+    pub(in crate::editor) fn confirm_resource_title_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.resource_title_dialog.take() else {
+            return;
+        };
+        let label = dialog.input.read(cx).display_text().to_owned();
+        let Some(block) = self.focusable_entity_by_id(dialog.entity_id) else {
+            cx.notify();
+            return;
+        };
+        let destination = if dialog.previous.is_local() {
+            dialog.previous.destination.replace('\\', "/")
+        } else {
+            dialog.previous.destination.clone()
+        };
+        let base_dir = self.image_base_dir();
+        let record = ResourceRecord::from_parts(
+            label,
+            destination,
+            dialog.previous.explicit_kind,
+            base_dir.as_deref(),
+        );
+        let markdown = record.to_markdown();
+
+        self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+        let title = InlineTextTree::from_markdown(&markdown);
+        let cursor = title.visible_len();
+        Self::set_block_title_and_kind(&block, block.read(cx).kind(), title, cursor, cx);
+        self.rebuild_image_runtimes(cx);
+        self.mark_dirty(cx);
+        self.finalize_pending_undo_capture(cx);
+        self.focus_block(dialog.entity_id);
+        cx.notify();
+    }
+
+    pub(in crate::editor) fn on_resource_title_dialog_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "enter" => {
+                self.confirm_resource_title_dialog(cx);
+                cx.stop_propagation();
+            }
+            "escape" => {
+                self.cancel_resource_title_dialog(cx);
+                cx.stop_propagation();
+            }
+            _ => {}
+        }
+    }
+
+    pub(in crate::editor) fn on_confirm_resource_title_dialog(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_resource_title_dialog(cx);
+    }
+
+    pub(in crate::editor) fn on_cancel_resource_title_dialog(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_resource_title_dialog(cx);
+    }
+
+    pub(in crate::editor) fn render_resource_title_dialog_overlay(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.resource_title_dialog.as_ref()?;
+        let strings = cx.global::<I18nManager>().strings().clone();
+        let title = strings
+            .slash_commands
+            .get("resource_edit_title")
+            .cloned()
+            .unwrap_or_else(|| "Edit Resource Title".to_owned());
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let t = &theme.typography;
+        Some(
+            modal_overlay("resource-title-dialog-overlay", theme)
+                .capture_key_down(cx.listener(Self::on_resource_title_dialog_key_down))
+                .child(
+                    dialog_panel("resource-title-dialog", d.dialog_width.min(480.0), theme)
+                        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                            cx.stop_propagation()
+                        })
+                        .child(
+                            crate::editor::render::dialog_content(
+                                "resource-title-dialog-content",
+                                theme,
+                            )
+                            .child(dialog_title_with_icon(
+                                "resource-title-dialog-title",
+                                title,
+                                DialogTitleIcon::Files,
+                                theme,
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(t.dialog_body_size))
+                                    .text_color(c.dialog_body)
+                                    .child(
+                                        strings
+                                            .slash_commands
+                                            .get("resource_title_field")
+                                            .cloned()
+                                            .unwrap_or_else(|| "Title".to_owned()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("resource-title-dialog-input")
+                                    .debug_selector(|| "resource-title-dialog-input".to_owned())
+                                    .min_h(px(38.0))
+                                    .w_full()
+                                    .px(px(8.0))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(6.0))
+                                    .border(px(d.dialog_border_width))
+                                    .border_color(c.dialog_border)
+                                    .bg(c.source_mode_block_bg)
+                                    .child(dialog.input.clone()),
+                            ),
+                        )
+                        .child(
+                            dialog_actions(theme)
+                                .child(
+                                    dialog_button(
+                                        "cancel-resource-title-dialog",
+                                        strings.open_link_cancel.clone(),
+                                        DialogButtonKind::Secondary,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(Self::on_cancel_resource_title_dialog)),
+                                )
+                                .child(
+                                    dialog_button(
+                                        "confirm-resource-title-dialog",
+                                        strings.info_dialog_ok.clone(),
+                                        DialogButtonKind::Primary,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(Self::on_confirm_resource_title_dialog)),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn replace_resource_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self.resource_context_block(cx) else {
+            return;
+        };
+        let entity_id = block.entity_id();
+        let Some(previous) = self.resource_context_record(cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Replace resource".into()),
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let Ok(Ok(Some(paths))) = prompt.await else {
+                return;
+            };
+            let Some(source) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, move |editor, cx| {
+                let behavior = crate::preferences::read_app_preferences()
+                    .map(|preferences| preferences.resource_insert_behavior())
+                    .unwrap_or(crate::preferences::ImagePasteBehavior::None);
+                if editor.file_path.is_none()
+                    && behavior != crate::preferences::ImagePasteBehavior::None
+                {
+                    editor.pending_resource_insertion =
+                        Some(crate::editor::PendingResourceInsertion::Replace {
+                            entity_id,
+                            previous,
+                            source,
+                        });
+                    editor.request_save_document_as(cx);
+                    return;
+                }
+                editor.complete_resource_replacement(entity_id, previous, source, cx);
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn complete_resource_replacement(
+        &mut self,
+        entity_id: EntityId,
+        previous: ResourceRecord,
+        source: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let behavior = crate::preferences::read_app_preferences()
+            .map(|preferences| preferences.resource_insert_behavior())
+            .unwrap_or(crate::preferences::ImagePasteBehavior::None);
+        let document_path = self.file_path.clone();
+        let (markdown, materialized) = match crate::resource_io::resource_markdown_for_path(
+            &previous.label,
+            &source,
+            document_path.as_deref(),
+            behavior,
+            previous.explicit_kind,
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.show_image_paste_error(error, cx);
+                return;
+            }
+        };
+        let Some(block) = self.focusable_entity_by_id(entity_id) else {
+            materialized.cleanup_if_created();
+            return;
+        };
+
+        self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+        let title = InlineTextTree::from_markdown(&markdown);
+        let cursor = title.visible_len();
+        Self::set_block_title_and_kind(&block, block.read(cx).kind(), title, cursor, cx);
+        self.rebuild_image_runtimes(cx);
+        self.mark_dirty(cx);
+        self.finalize_pending_undo_capture(cx);
+        self.focus_block(entity_id);
+        cx.notify();
+    }
+
+    pub(super) fn copy_resource_address_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(destination) = self
+            .resource_context_record(cx)
+            .map(|resource| resource.destination)
+        else {
+            return;
+        };
+        self.close_context_menu(cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(destination));
+    }
+
+    pub(super) fn convert_resource_to_link_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self.resource_context_block(cx) else {
+            return;
+        };
+        let Some(record) = self.resource_context_record(cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        let markdown = plain_link_markdown(&record);
+        self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+        let title = InlineTextTree::from_markdown(&markdown);
+        let cursor = title.visible_len();
+        Self::set_block_title_and_kind(&block, block.read(cx).kind(), title, cursor, cx);
+        self.rebuild_image_runtimes(cx);
+        self.mark_dirty(cx);
+        self.finalize_pending_undo_capture(cx);
+        self.focus_block(block.entity_id());
+        cx.notify();
+    }
+
+    pub(super) fn delete_resource_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self.resource_context_block(cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        block.update(cx, |_, cx| {
+            cx.emit(crate::components::BlockEvent::RequestDelete)
+        });
+    }
+
+    pub(super) fn relocate_resource_from_context_menu(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self.resource_context_block(cx) else {
+            return;
+        };
+        let entity_id = block.entity_id();
+        let document_path = self.file_path.clone();
+        let Some(previous) = self.resource_context_record(cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Relocate resource".into()),
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let Ok(Ok(Some(paths))) = prompt.await else {
+                return;
+            };
+            let Some(source) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, move |editor, cx| {
+                let Some(block) = editor.focusable_entity_by_id(entity_id) else {
+                    return;
+                };
+                let Ok((markdown, _materialized)) = crate::resource_io::resource_markdown_for_path(
+                    &previous.label,
+                    &source,
+                    document_path.as_deref(),
+                    crate::preferences::ImagePasteBehavior::None,
+                    previous.explicit_kind,
+                ) else {
+                    return;
+                };
+                editor.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+                let title = InlineTextTree::from_markdown(&markdown);
+                let cursor = title.visible_len();
+                Self::set_block_title_and_kind(&block, block.read(cx).kind(), title, cursor, cx);
+                editor.rebuild_image_runtimes(cx);
+                editor.mark_dirty(cx);
+                editor.finalize_pending_undo_capture(cx);
+                editor.focus_block(entity_id);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+fn plain_link_markdown(record: &ResourceRecord) -> String {
+    let marked = record.to_markdown();
+    marked
+        .rfind(" \"gmark:resource")
+        .map(|index| format!("{}{}", &marked[..index], ')'))
+        .unwrap_or(marked)
 }

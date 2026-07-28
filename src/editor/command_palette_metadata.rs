@@ -38,6 +38,7 @@ pub(super) fn localized_action_description(
                 EditingCommandId::InlineMath => "插入行内数学公式或格式化所选内容",
                 EditingCommandId::InlineCode => "为所选文字添加或移除行内代码格式",
                 EditingCommandId::Link => "把所选文字转换为链接或编辑现有链接",
+                EditingCommandId::Resource => "选择文件并插入资源卡片",
                 _ => return format!("执行“{label}”命令"),
             }
             .to_owned();
@@ -85,9 +86,7 @@ pub(super) fn localized_action_description(
             "normalizelineendingscrlf" => "将整篇文档的换行符转换为 Windows 常用的 CRLF",
             "normalizelineendingscr" => "将整篇文档的换行符转换为传统 Mac 使用的 CR",
             "addlanguageconfig" => "导入自定义语言包并用于界面显示",
-            "addthemeconfig" => "导入自定义主题配置并应用到界面",
             "selectlanguage" => "选择 gmark 界面使用的语言",
-            "selecttheme" => "选择适合当前环境的界面主题",
             "checkforupdates" => "检查 GitHub Releases 中是否有更新版本",
             "opencrashreports" => "打开本机崩溃报告目录，便于排查问题",
             "openprivacypolicy" => "查看 gmark 的隐私政策",

@@ -1,6 +1,6 @@
 # @author kongweiguang
 
-"""Create and self-verify the signed gmark update-manifest envelope."""
+"""Create and self-verify legacy and v2 signed gmark updater manifests."""
 
 from __future__ import annotations
 
@@ -16,12 +16,19 @@ from pathlib import Path
 from release_crypto import resolve_openssl
 
 
-ARTIFACT_SUFFIXES = {
+LEGACY_ARTIFACT_SUFFIXES = {
     "windows-x86_64": "windows-x86_64-setup.exe",
     "macos-x86_64": "macos-x86_64.dmg",
     "macos-aarch64": "macos-aarch64.dmg",
     "linux-x86_64": "linux-x86_64.AppImage",
     "linux-x86_64-deb": "linux-x86_64.deb",
+}
+
+V2_ARTIFACTS = {
+    "windows-x86_64": ("windows-x86_64-setup.exe", "windows-setup-exe", "windows"),
+    "macos-x86_64": ("macos-x86_64.app.tar.gz", "macos-app-tar-gz", "macos"),
+    "macos-aarch64": ("macos-aarch64.app.tar.gz", "macos-app-tar-gz", "macos"),
+    "linux-x86_64": ("linux-x86_64.AppImage", "linux-app-image", "linux"),
 }
 
 
@@ -41,8 +48,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--private-key", type=Path, required=True)
     parser.add_argument("--public-key-base64", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--v2-output", type=Path)
+    parser.add_argument("--notes", default="")
     parser.add_argument("--rollout-percent", type=int, default=100)
     parser.add_argument("--paused", action="store_true")
+    parser.add_argument(
+        "--windows-system-trust",
+        choices=("unsigned", "authenticode"),
+        default="unsigned",
+    )
+    parser.add_argument(
+        "--macos-system-trust",
+        choices=("unsigned", "developer-id-notarized"),
+        default="unsigned",
+    )
     return parser.parse_args()
 
 
@@ -52,123 +71,131 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def main() -> None:
-    args = parse_args()
-    if args.release_tag != f"v{args.version}":
-        raise SystemExit("release tag must exactly match v<version>")
-    if not 0 <= args.rollout_percent <= 100:
-        raise SystemExit("rollout percent must be between 0 and 100")
+def configured_public_key(encoded: str) -> bytes:
     try:
-        configured_public_key = base64.b64decode(
-            args.public_key_base64,
-            validate=True,
-        )
+        key = base64.b64decode(encoded, validate=True)
     except ValueError as error:
         raise SystemExit(f"invalid public key base64: {error}") from error
-    if len(configured_public_key) != 32:
+    if len(key) != 32:
         raise SystemExit("Ed25519 public key must decode to exactly 32 bytes")
+    return key
 
-    artifacts: dict[str, dict[str, str]] = {}
-    release_download = (
-        f"https://github.com/kongweiguang/gmark/releases/download/{args.release_tag}"
-    )
-    for artifact_id, suffix in ARTIFACT_SUFFIXES.items():
-        filename = f"gmark-{args.release_tag}-{suffix}"
-        path = args.dist / filename
-        if not path.is_file():
-            raise SystemExit(f"required release artifact is missing: {path}")
-        artifacts[artifact_id] = {
-            "url": f"{release_download}/{filename}",
-            "sha256": sha256_file(path),
-        }
 
-    payload = {
-        "schema_version": 1,
-        "version": args.version,
-        "published_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "paused": args.paused,
-        "rollout_percent": args.rollout_percent,
-        "release_url": (
-            f"https://github.com/kongweiguang/gmark/releases/tag/{args.release_tag}"
-        ),
-        "artifacts": artifacts,
-    }
+def signed_envelope(payload: dict[str, object], args: argparse.Namespace, public_key: bytes) -> dict[str, object]:
     payload_bytes = json.dumps(
         payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-
     with tempfile.TemporaryDirectory(prefix="gmark-update-sign-") as temporary:
         temporary = Path(temporary)
         payload_path = temporary / "payload.json"
         signature_path = temporary / "signature.bin"
         public_der_path = temporary / "public.der"
         payload_path.write_bytes(payload_bytes)
-        run(
-            [
-                "openssl",
-                "pkeyutl",
-                "-sign",
-                "-rawin",
-                "-inkey",
-                str(args.private_key),
-                "-in",
-                str(payload_path),
-                "-out",
-                str(signature_path),
-            ]
-        )
-        run(
-            [
-                "openssl",
-                "pkey",
-                "-in",
-                str(args.private_key),
-                "-pubout",
-                "-outform",
-                "DER",
-                "-out",
-                str(public_der_path),
-            ]
-        )
+        run([
+            "openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(args.private_key),
+            "-in", str(payload_path), "-out", str(signature_path),
+        ])
+        run([
+            "openssl", "pkey", "-in", str(args.private_key), "-pubout", "-outform", "DER",
+            "-out", str(public_der_path),
+        ])
         public_der = public_der_path.read_bytes()
-        if len(public_der) < 32 or public_der[-32:] != configured_public_key:
+        if len(public_der) < 32 or public_der[-32:] != public_key:
             raise SystemExit("private key does not match the configured update public key")
-        run(
-            [
-                "openssl",
-                "pkeyutl",
-                "-verify",
-                "-rawin",
-                "-pubin",
-                "-inkey",
-                str(public_der_path),
-                "-keyform",
-                "DER",
-                "-in",
-                str(payload_path),
-                "-sigfile",
-                str(signature_path),
-            ]
-        )
+        run([
+            "openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-inkey",
+            str(public_der_path), "-keyform", "DER", "-in", str(payload_path),
+            "-sigfile", str(signature_path),
+        ])
         signature = signature_path.read_bytes()
-
     if len(signature) != 64:
         raise SystemExit(f"Ed25519 signature must be 64 bytes, got {len(signature)}")
-    envelope = {
+    return {
         "schema_version": 1,
         "algorithm": "Ed25519",
         "payload": base64.b64encode(payload_bytes).decode("ascii"),
         "signature": base64.b64encode(signature).decode("ascii"),
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
+
+
+def write_envelope(path: Path, envelope: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         json.dumps(envelope, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
         newline="\n",
     )
+
+
+def require_artifact(dist: Path, release_tag: str, suffix: str) -> tuple[Path, str]:
+    filename = f"gmark-{release_tag}-{suffix}"
+    path = dist / filename
+    if not path.is_file():
+        raise SystemExit(f"required release artifact is missing: {path}")
+    return path, filename
+
+
+def main() -> None:
+    args = parse_args()
+    if args.release_tag != f"v{args.version}":
+        raise SystemExit("release tag must exactly match v<version>")
+    if args.v2_output and "-" in args.version:
+        raise SystemExit("automatic updater manifests currently support stable SemVer only")
+    if not 0 <= args.rollout_percent <= 100:
+        raise SystemExit("rollout percent must be between 0 and 100")
+    public_key = configured_public_key(args.public_key_base64)
+    release_download = f"https://github.com/kongweiguang/gmark/releases/download/{args.release_tag}"
+    published_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    legacy_artifacts: dict[str, dict[str, str]] = {}
+    for artifact_id, suffix in LEGACY_ARTIFACT_SUFFIXES.items():
+        path, filename = require_artifact(args.dist, args.release_tag, suffix)
+        legacy_artifacts[artifact_id] = {
+            "url": f"{release_download}/{filename}",
+            "sha256": sha256_file(path),
+        }
+    legacy_payload = {
+        "schema_version": 1,
+        "version": args.version,
+        "published_at": published_at,
+        "paused": args.paused,
+        "rollout_percent": args.rollout_percent,
+        "release_url": f"https://github.com/kongweiguang/gmark/releases/tag/{args.release_tag}",
+        "artifacts": legacy_artifacts,
+    }
+    write_envelope(args.output, signed_envelope(legacy_payload, args, public_key))
+
+    if args.v2_output:
+        v2_artifacts: dict[str, dict[str, object]] = {}
+        for artifact_id, (suffix, package_format, platform) in V2_ARTIFACTS.items():
+            path, filename = require_artifact(args.dist, args.release_tag, suffix)
+            system_trust = {
+                "windows": args.windows_system_trust,
+                "macos": args.macos_system_trust,
+                "linux": "not-applicable",
+            }[platform]
+            v2_artifacts[artifact_id] = {
+                "url": f"{release_download}/{filename}",
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+                "format": package_format,
+                "system_trust": system_trust,
+            }
+        v2_payload = {
+            "schema_version": 2,
+            "channel": "stable",
+            "version": args.version,
+            "published_at": published_at,
+            "notes": args.notes,
+            "paused": args.paused,
+            "rollout_percent": args.rollout_percent,
+            "release_url": f"https://github.com/kongweiguang/gmark/releases/tag/{args.release_tag}",
+            "artifacts": v2_artifacts,
+        }
+        write_envelope(args.v2_output, signed_envelope(v2_payload, args, public_key))
 
 
 if __name__ == "__main__":

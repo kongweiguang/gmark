@@ -288,6 +288,35 @@ impl Editor {
         let t = &theme.typography;
         let strings = cx.global::<I18nManager>().strings();
         let cancel_requested = self.export_cancel_requested;
+        let progress_text = self
+            .export_progress
+            .as_ref()
+            .map(|progress| {
+                let completed = progress
+                    .completed
+                    .load(std::sync::atomic::Ordering::Acquire);
+                let total = progress
+                    .total
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .max(1);
+                SharedString::from(format!(
+                    "{} ({}/{})",
+                    if cancel_requested {
+                        strings.export_cancelling.as_str()
+                    } else {
+                        strings.export_in_progress.as_str()
+                    },
+                    completed.min(total),
+                    total
+                ))
+            })
+            .unwrap_or_else(|| {
+                if cancel_requested {
+                    strings.export_cancelling.clone().into()
+                } else {
+                    strings.export_in_progress.clone().into()
+                }
+            });
         let cancel_button = div()
             .id("cancel-export")
             .debug_selector(|| "cancel-export".to_owned())
@@ -319,6 +348,11 @@ impl Editor {
             .id("export-progress")
             .debug_selector(|| "export-progress".to_owned())
             .absolute()
+            // 进度条仅遮挡自身命中区域；外围编辑器仍保持非模态可交互。
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
             .right(px(12.0))
             .bottom(px(bottom_offset + 10.0))
             .h(px(36.0))
@@ -352,11 +386,7 @@ impl Editor {
                     .overflow_hidden()
                     .truncate()
                     .debug_selector(|| "export-progress-label".to_owned())
-                    .child(if cancel_requested {
-                        strings.export_cancelling.clone()
-                    } else {
-                        strings.export_in_progress.clone()
-                    }),
+                    .child(progress_text),
             )
             .child(cancel_button)
             .into_any_element()

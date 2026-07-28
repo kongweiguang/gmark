@@ -2,8 +2,8 @@
 
 //! Theme configuration and global theme access.
 //!
-//! Themes are JSON-serializable so editor colors, spacing, and typography can
-//! be swapped without changing the runtime logic.
+//! Built-in themes are JSON-serializable for export and regression fixtures so
+//! editor colors, spacing, and typography stay separate from render logic.
 
 mod theme;
 pub use theme::*;

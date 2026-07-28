@@ -12,7 +12,7 @@ use url::Url;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WorkspaceCreateKind {
-    MarkdownFile,
+    File,
     Directory,
 }
 
@@ -38,14 +38,12 @@ impl WorkspaceCreatePlan {
             bail!("destination already exists: '{}'", self.path.display());
         }
         match self.kind {
-            WorkspaceCreateKind::MarkdownFile => {
+            WorkspaceCreateKind::File => {
                 let mut file = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
                     .open(&self.path)
-                    .with_context(|| {
-                        format!("failed to create Markdown file '{}'", self.path.display())
-                    })?;
+                    .with_context(|| format!("failed to create file '{}'", self.path.display()))?;
                 file.write_all(&self.initial_bytes)?;
                 file.flush()?;
                 file.sync_all()?;
@@ -63,7 +61,7 @@ impl WorkspaceCreatePlan {
             bail!("created path was replaced by a symbolic link");
         }
         match self.kind {
-            WorkspaceCreateKind::MarkdownFile => {
+            WorkspaceCreateKind::File => {
                 if !metadata.is_file() || fs::read(&self.path)? != self.initial_bytes {
                     bail!("created file has changed and cannot be removed safely");
                 }
@@ -108,9 +106,6 @@ pub(super) fn plan_workspace_create(
     let path = parent.join(file_name);
     if path.exists() {
         bail!("destination already exists: '{}'", path.display());
-    }
-    if kind == WorkspaceCreateKind::MarkdownFile && !super::workspace::is_markdown_file(&path) {
-        bail!("new files must use the .md or .markdown extension");
     }
     Ok(WorkspaceCreatePlan {
         root,
@@ -325,6 +320,7 @@ pub(super) fn canonicalize_workspace_path(path: &Path) -> io::Result<PathBuf> {
 struct DestinationSpan {
     range: std::ops::Range<usize>,
     parsed: String,
+    preserve_verbatim: bool,
 }
 
 fn rewrite_markdown_links(
@@ -342,6 +338,11 @@ fn rewrite_markdown_links(
 
     let mut replacements = Vec::new();
     for span in spans {
+        // 资源卡片的目标由文档源码持有。移动工作区文件不能偷偷改变其
+        // 相对地址；失效后由运行时状态和“重新定位”流程显式处理。
+        if span.preserve_verbatim {
+            continue;
+        }
         let raw_destination = &source[span.range.clone()];
         let Some(rewritten) = rewrite_destination(
             &span.parsed,
@@ -377,6 +378,7 @@ fn markdown_destination_spans(source: &str) -> Vec<DestinationSpan> {
             spans.push(DestinationSpan {
                 range,
                 parsed: definition.dest.to_string(),
+                preserve_verbatim: false,
             });
         }
     }
@@ -385,17 +387,24 @@ fn markdown_destination_spans(source: &str) -> Vec<DestinationSpan> {
         let Event::Start(tag) = event else {
             continue;
         };
-        let (link_type, parsed) = match tag {
+        let (link_type, parsed, preserve_verbatim) = match tag {
             Tag::Link {
                 link_type,
                 dest_url,
                 ..
-            }
-            | Tag::Image {
+            } => (
+                link_type,
+                dest_url.to_string(),
+                source
+                    .get(range.clone())
+                    .and_then(|markdown| crate::components::ResourceRecord::parse(markdown, None))
+                    .is_some(),
+            ),
+            Tag::Image {
                 link_type,
                 dest_url,
                 ..
-            } => (link_type, dest_url.to_string()),
+            } => (link_type, dest_url.to_string(), false),
             _ => continue,
         };
         if link_type != LinkType::Inline {
@@ -405,6 +414,7 @@ fn markdown_destination_spans(source: &str) -> Vec<DestinationSpan> {
             spans.push(DestinationSpan {
                 range: destination,
                 parsed,
+                preserve_verbatim,
             });
         }
     }

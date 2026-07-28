@@ -717,6 +717,7 @@ fn estimate_region_height(kind: ProjectionRegionKind, line_count: usize) -> f32 
         ProjectionRegionKind::AtxHeading | ProjectionRegionKind::SetextHeading => 34.0,
         ProjectionRegionKind::Separator => 20.0,
         ProjectionRegionKind::StandaloneImage => 220.0,
+        ProjectionRegionKind::StandaloneResource => 96.0,
         ProjectionRegionKind::RootTableCandidate | ProjectionRegionKind::PipelessTable => 32.0,
         ProjectionRegionKind::FencedCode
         | ProjectionRegionKind::Frontmatter

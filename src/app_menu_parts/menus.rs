@@ -1,6 +1,10 @@
 // @author kongweiguang
 
 use super::*;
+use crate::components::{
+    CancelFormatting, CollapseAllFolds, CollapseFold, ExpandAllFolds, ExpandFold, FormatDocument,
+    FormatSelection,
+};
 
 pub(super) fn build_menus(
     _theme_manager: &ThemeManager,
@@ -8,6 +12,9 @@ pub(super) fn build_menus(
     recent_files: &[PathBuf],
 ) -> Vec<Menu> {
     let strings = i18n_manager.strings().clone();
+    let chinese = i18n_manager.current_language_id().starts_with("zh");
+    let folding_label = if chinese { "折叠" } else { "Folding" };
+    let format_label = if chinese { "格式化" } else { "Format" };
 
     let recent_items = if recent_files.is_empty() {
         vec![MenuItem::action(
@@ -60,31 +67,6 @@ pub(super) fn build_menus(
                     MenuItem::separator(),
                     MenuItem::action(strings.menu_save.clone(), SaveDocument),
                     MenuItem::action(strings.menu_save_as.clone(), SaveDocumentAs),
-                    MenuItem::submenu(Menu {
-                        name: strings.menu_export.clone().into(),
-                        items: vec![
-                            MenuItem::action(strings.menu_export_html.clone(), ExportHtml),
-                            MenuItem::action(strings.menu_export_image.clone(), ExportImage),
-                            MenuItem::action(strings.menu_export_pdf.clone(), ExportPdf),
-                        ],
-                    }),
-                    MenuItem::submenu(Menu {
-                        name: strings.menu_line_endings.clone().into(),
-                        items: vec![
-                            MenuItem::action(
-                                strings.menu_line_ending_lf.clone(),
-                                NormalizeLineEndingsLf,
-                            ),
-                            MenuItem::action(
-                                strings.menu_line_ending_crlf.clone(),
-                                NormalizeLineEndingsCrLf,
-                            ),
-                            MenuItem::action(
-                                strings.menu_line_ending_cr.clone(),
-                                NormalizeLineEndingsCr,
-                            ),
-                        ],
-                    }),
                 ],
             },
         ]
@@ -123,31 +105,6 @@ pub(super) fn build_menus(
                     MenuItem::separator(),
                     MenuItem::action(strings.menu_save.clone(), SaveDocument),
                     MenuItem::action(strings.menu_save_as.clone(), SaveDocumentAs),
-                    MenuItem::submenu(Menu {
-                        name: strings.menu_export.clone().into(),
-                        items: vec![
-                            MenuItem::action(strings.menu_export_html.clone(), ExportHtml),
-                            MenuItem::action(strings.menu_export_image.clone(), ExportImage),
-                            MenuItem::action(strings.menu_export_pdf.clone(), ExportPdf),
-                        ],
-                    }),
-                    MenuItem::submenu(Menu {
-                        name: strings.menu_line_endings.clone().into(),
-                        items: vec![
-                            MenuItem::action(
-                                strings.menu_line_ending_lf.clone(),
-                                NormalizeLineEndingsLf,
-                            ),
-                            MenuItem::action(
-                                strings.menu_line_ending_crlf.clone(),
-                                NormalizeLineEndingsCrLf,
-                            ),
-                            MenuItem::action(
-                                strings.menu_line_ending_cr.clone(),
-                                NormalizeLineEndingsCr,
-                            ),
-                        ],
-                    }),
                 ],
             },
         ]
@@ -204,10 +161,6 @@ pub(super) fn build_menus(
                 MenuItem::separator(),
                 MenuItem::action(strings.preferences_shortcut_cut.clone(), Cut),
                 MenuItem::action(strings.preferences_shortcut_copy.clone(), Copy),
-                MenuItem::action(
-                    strings.preferences_shortcut_copy_as_markdown.clone(),
-                    CopyAsMarkdown,
-                ),
                 MenuItem::action(strings.preferences_shortcut_paste.clone(), Paste),
                 MenuItem::action(
                     strings.preferences_shortcut_paste_as_plain_text.clone(),
@@ -229,12 +182,83 @@ pub(super) fn build_menus(
                     strings.preferences_shortcut_find_previous.clone(),
                     FindPrevious,
                 ),
+                MenuItem::separator(),
+                MenuItem::submenu(Menu {
+                    name: folding_label.into(),
+                    items: vec![
+                        MenuItem::action(
+                            if chinese {
+                                "折叠当前区域"
+                            } else {
+                                "Collapse Fold"
+                            },
+                            CollapseFold,
+                        ),
+                        MenuItem::action(
+                            if chinese {
+                                "展开当前区域"
+                            } else {
+                                "Expand Fold"
+                            },
+                            ExpandFold,
+                        ),
+                        MenuItem::action(
+                            if chinese {
+                                "全部折叠"
+                            } else {
+                                "Collapse All"
+                            },
+                            CollapseAllFolds,
+                        ),
+                        MenuItem::action(
+                            if chinese {
+                                "全部展开"
+                            } else {
+                                "Expand All"
+                            },
+                            ExpandAllFolds,
+                        ),
+                    ],
+                }),
+                MenuItem::submenu(Menu {
+                    name: format_label.into(),
+                    items: vec![
+                        MenuItem::action(
+                            if chinese {
+                                "格式化文档"
+                            } else {
+                                "Format Document"
+                            },
+                            FormatDocument,
+                        ),
+                        MenuItem::action(
+                            if chinese {
+                                "格式化选区"
+                            } else {
+                                "Format Selection"
+                            },
+                            FormatSelection,
+                        ),
+                        MenuItem::action(
+                            if chinese {
+                                "取消格式化"
+                            } else {
+                                "Cancel Formatting"
+                            },
+                            CancelFormatting,
+                        ),
+                    ],
+                }),
             ],
         },
         Menu {
             name: strings.menu_view.into(),
             items: vec![
                 MenuItem::action(strings.menu_toggle_workspace.clone(), ToggleWorkspace),
+                MenuItem::action(
+                    strings.menu_toggle_document_sidebar.clone(),
+                    ToggleDocumentSidebar,
+                ),
                 MenuItem::separator(),
                 MenuItem::action(strings.menu_toggle_focus_mode.clone(), ToggleFocusMode),
                 MenuItem::action(
@@ -257,19 +281,47 @@ pub(crate) fn install_menus(cx: &mut App) {
         cx.set_global(AppMenuState::default());
     }
     let recent_files = recent_files_for_menu();
-    let owned = build_menus(
+    #[cfg(target_os = "macos")]
+    let active_document_menu = cx.active_window().and_then(|window| {
+        let editor = window.downcast::<Editor>().ok()?;
+        editor
+            .update(cx, |editor, _window, cx| {
+                Some((
+                    editor.build_document_menu(cx),
+                    editor.build_document_menu(cx),
+                ))
+            })
+            .ok()
+            .flatten()
+    });
+    #[allow(unused_mut)]
+    let mut owned = build_menus(
         cx.global::<ThemeManager>(),
         cx.global::<I18nManager>(),
         &recent_files,
     )
     .into_iter()
     .map(Menu::owned)
-    .collect();
-    let menus = build_menus(
+    .collect::<Vec<_>>();
+    #[allow(unused_mut)]
+    let mut menus = build_menus(
         cx.global::<ThemeManager>(),
         cx.global::<I18nManager>(),
         &recent_files,
     );
+    #[cfg(target_os = "macos")]
+    if let Some((owned_dynamic, dynamic)) = active_document_menu {
+        let owned_index = owned
+            .iter()
+            .position(|menu| matches!(menu.name.as_ref(), "Help" | "帮助"))
+            .unwrap_or(owned.len());
+        owned.insert(owned_index, owned_dynamic.owned());
+        let menu_index = menus
+            .iter()
+            .position(|menu| matches!(menu.name.as_ref(), "Help" | "帮助"))
+            .unwrap_or(menus.len());
+        menus.insert(menu_index, dynamic);
+    }
     cx.global_mut::<AppMenuState>().in_window_menus = owned;
     cx.set_menus(menus);
 }
@@ -437,66 +489,6 @@ pub(super) fn prompt_and_import_language_config_with_error_window(
     .detach();
 }
 
-pub(super) fn prompt_and_import_theme_config(cx: &mut App) {
-    let error_window = cx.active_window();
-    prompt_and_import_theme_config_with_error_window(cx, error_window);
-}
-
-pub(super) fn prompt_and_import_theme_config_with_error_window(
-    cx: &mut App,
-    error_window: Option<AnyWindowHandle>,
-) {
-    let prompt_title = cx
-        .global::<I18nManager>()
-        .strings()
-        .add_theme_config_prompt
-        .clone();
-    let prompt = cx.prompt_for_paths(PathPromptOptions {
-        files: true,
-        directories: false,
-        multiple: false,
-        prompt: Some(prompt_title.into()),
-    });
-
-    cx.spawn(async move |cx| match prompt.await {
-        Ok(Ok(Some(paths))) => {
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            let _ = cx.update(move |cx| {
-                let result = import_theme_config_and_select(cx, &path);
-                match result {
-                    Ok(_) => {
-                        install_menus(cx);
-                        cx.refresh_windows();
-                    }
-                    Err(err) => {
-                        let title = cx
-                            .global::<I18nManager>()
-                            .strings()
-                            .config_import_failed_title
-                            .clone();
-                        show_window_prompt(error_window, &title, &err.to_string(), cx);
-                    }
-                }
-            });
-        }
-        Ok(Err(err)) => {
-            let detail = err.to_string();
-            let _ = cx.update(move |cx| {
-                let title = cx
-                    .global::<I18nManager>()
-                    .strings()
-                    .config_import_failed_title
-                    .clone();
-                show_window_prompt(error_window, &title, &detail, cx);
-            });
-        }
-        Ok(Ok(None)) | Err(_) => {}
-    })
-    .detach();
-}
-
 fn handle_window_closed(cx: &mut App) {
     if cx.windows().is_empty() {
         cx.quit();
@@ -537,9 +529,6 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &AddLanguageConfig, cx| {
         dispatch_menu_action(&AddLanguageConfig, cx);
     });
-    cx.on_action(|_: &AddThemeConfig, cx| {
-        dispatch_menu_action(&AddThemeConfig, cx);
-    });
     cx.on_action(|_: &SaveDocument, cx| {
         dispatch_menu_action(&SaveDocument, cx);
     });
@@ -555,6 +544,27 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &ExportPdf, cx| {
         dispatch_menu_action(&ExportPdf, cx);
     });
+    cx.on_action(|_: &ExportSelection, cx| {
+        dispatch_menu_action(&ExportSelection, cx);
+    });
+    cx.on_action(|_: &ShowDocumentInfo, cx| {
+        dispatch_menu_action(&ShowDocumentInfo, cx);
+    });
+    cx.on_action(|_: &ShowDocumentOutline, cx| {
+        dispatch_menu_action(&ShowDocumentOutline, cx);
+    });
+    cx.on_action(|_: &ShowStructureView, cx| {
+        dispatch_menu_action(&ShowStructureView, cx);
+    });
+    cx.on_action(|_: &ShowStructuredInspector, cx| {
+        dispatch_menu_action(&ShowStructuredInspector, cx);
+    });
+    cx.on_action(|_: &FocusStructuredFilter, cx| {
+        dispatch_menu_action(&FocusStructuredFilter, cx);
+    });
+    cx.on_action(|_: &FocusStructuredColumns, cx| {
+        dispatch_menu_action(&FocusStructuredColumns, cx);
+    });
     cx.on_action(|_: &NormalizeLineEndingsLf, cx| {
         dispatch_menu_action(&NormalizeLineEndingsLf, cx);
     });
@@ -563,9 +573,6 @@ pub(crate) fn init(cx: &mut App) {
     });
     cx.on_action(|_: &NormalizeLineEndingsCr, cx| {
         dispatch_menu_action(&NormalizeLineEndingsCr, cx);
-    });
-    cx.on_action(|action: &SelectTheme, cx| {
-        dispatch_menu_action(action, cx);
     });
     cx.on_action(|action: &SelectLanguage, cx| {
         dispatch_menu_action(action, cx);
@@ -625,6 +632,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &SetTaskList, cx| dispatch_menu_action(&SetTaskList, cx));
     cx.on_action(|_: &SetQuote, cx| dispatch_menu_action(&SetQuote, cx));
     cx.on_action(|_: &SetCodeBlock, cx| dispatch_menu_action(&SetCodeBlock, cx));
+    cx.on_action(|_: &InsertResource, cx| dispatch_menu_action(&InsertResource, cx));
     cx.on_action(|_: &QuitApplication, cx| {
         dispatch_menu_action(&QuitApplication, cx);
     });

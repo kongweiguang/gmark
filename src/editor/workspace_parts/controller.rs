@@ -20,6 +20,168 @@ impl Editor {
         }
     }
 
+    pub(in crate::editor) fn document_sidebar_docked_open_preference(&self) -> bool {
+        self.workspace
+            .document_sidebar_docked_open_preference
+            .unwrap_or(false)
+    }
+
+    pub(in crate::editor) fn restore_document_sidebar_docked_open_preference(
+        &mut self,
+        open: Option<bool>,
+    ) {
+        let Some(open) = open else {
+            return;
+        };
+        self.workspace.document_sidebar_docked_open_preference = Some(open);
+        if self.workspace.document_sidebar_compact_layout != Some(true) {
+            self.workspace.document_sidebar_open = open;
+        }
+    }
+
+    pub(in crate::editor) fn sync_document_sidebar_visibility_for_viewport(
+        &mut self,
+        viewport_width: f32,
+    ) {
+        let compact = workspace_uses_overlay(viewport_width);
+        if self.workspace.document_sidebar_compact_layout == Some(compact) {
+            return;
+        }
+        self.workspace.document_sidebar_compact_layout = Some(compact);
+        self.workspace.document_sidebar_open = if compact {
+            false
+        } else {
+            self.document_sidebar_docked_open_preference()
+        };
+    }
+
+    pub(in crate::editor) fn document_sidebar_panel_width(&self) -> Option<f32> {
+        self.workspace.document_sidebar_panel_width
+    }
+
+    pub(in crate::editor) fn restore_document_sidebar_panel_width(&mut self, width: Option<f32>) {
+        self.workspace.document_sidebar_panel_width =
+            width.filter(|width| width.is_finite()).map(|width| {
+                width.clamp(
+                    DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH,
+                    DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
+                )
+            });
+        self.workspace.document_sidebar_resize_session = None;
+    }
+
+    pub(super) fn start_document_sidebar_resize(
+        &mut self,
+        pointer_x: Pixels,
+        panel_width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.document_sidebar_resize_session = Some(WorkspaceResizeSession {
+            start_x: pointer_x,
+            start_width: panel_width,
+            direction: -1.0,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn ensure_document_sidebar_resize_focus_handle(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
+        self.workspace
+            .document_sidebar_resize_focus_handle
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
+    pub(in crate::editor) fn ensure_document_sidebar_focus_handle(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
+        self.workspace
+            .document_sidebar_focus_handle
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
+    pub(super) fn on_document_sidebar_resize_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        rendered_width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let step = if event.keystroke.modifiers.shift {
+            WORKSPACE_RESIZE_KEYBOARD_LARGE_STEP
+        } else {
+            WORKSPACE_RESIZE_KEYBOARD_STEP
+        };
+        let current = self
+            .workspace
+            .document_sidebar_panel_width
+            .unwrap_or(rendered_width);
+        let next = match event.keystroke.key.as_str() {
+            "left" => Some((current + step).clamp(
+                DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH,
+                DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
+            )),
+            "right" => Some((current - step).clamp(
+                DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH,
+                DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
+            )),
+            "home" => Some(DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH),
+            "end" => Some(DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH),
+            "enter" => None,
+            _ => return,
+        };
+        if self.workspace.document_sidebar_panel_width != next {
+            self.workspace.document_sidebar_panel_width = next;
+            self.workspace.document_sidebar_resize_session = None;
+            self.schedule_workspace_session_save(cx);
+            cx.notify();
+        }
+        cx.stop_propagation();
+    }
+
+    pub(in crate::editor) fn on_document_sidebar_resize_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(session) = self.workspace.document_sidebar_resize_session else {
+            return false;
+        };
+        let width = (session.start_width
+            + f32::from(event.position.x - session.start_x) * session.direction)
+            .clamp(
+                DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH,
+                DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
+            );
+        if self.workspace.document_sidebar_panel_width != Some(width) {
+            self.workspace.document_sidebar_panel_width = Some(width);
+            cx.notify();
+        }
+        cx.stop_propagation();
+        true
+    }
+
+    pub(in crate::editor) fn on_document_sidebar_resize_mouse_up(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self
+            .workspace
+            .document_sidebar_resize_session
+            .take()
+            .is_some()
+        {
+            self.schedule_workspace_session_save(cx);
+            cx.notify();
+            cx.stop_propagation();
+            return true;
+        }
+        false
+    }
+
     pub(in crate::editor) fn sync_workspace_visibility_for_viewport(
         &mut self,
         viewport_width: f32,
@@ -52,17 +214,12 @@ impl Editor {
         &mut self,
         pointer_x: Pixels,
         panel_width: f32,
-        position: WorkspaceSidebarPosition,
         cx: &mut Context<Self>,
     ) {
         self.workspace.resize_session = Some(WorkspaceResizeSession {
             start_x: pointer_x,
             start_width: panel_width,
-            direction: if position == WorkspaceSidebarPosition::Left {
-                1.0
-            } else {
-                -1.0
-            },
+            direction: 1.0,
         });
         cx.notify();
     }
@@ -95,7 +252,6 @@ impl Editor {
         &mut self,
         event: &KeyDownEvent,
         rendered_width: f32,
-        position: WorkspaceSidebarPosition,
         cx: &mut Context<Self>,
     ) {
         let step = if event.keystroke.modifiers.shift {
@@ -104,19 +260,17 @@ impl Editor {
             WORKSPACE_RESIZE_KEYBOARD_STEP
         };
         let current = self.workspace.panel_width.unwrap_or(rendered_width);
-        let next = match (event.keystroke.key.as_str(), position) {
-            ("left", WorkspaceSidebarPosition::Left)
-            | ("right", WorkspaceSidebarPosition::Right) => {
+        let next = match event.keystroke.key.as_str() {
+            "left" => {
                 Some((current - step).clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH))
             }
-            ("right", WorkspaceSidebarPosition::Left)
-            | ("left", WorkspaceSidebarPosition::Right) => {
+            "right" => {
                 Some((current + step).clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH))
             }
-            ("home", _) => Some(WORKSPACE_PANEL_MIN_WIDTH),
-            ("end", _) => Some(WORKSPACE_PANEL_MAX_WIDTH),
+            "home" => Some(WORKSPACE_PANEL_MIN_WIDTH),
+            "end" => Some(WORKSPACE_PANEL_MAX_WIDTH),
             // 自动宽度继续由 viewport ratio 算法决定，窗口缩放时能自然适配。
-            ("enter", _) => None,
+            "enter" => None,
             _ => return,
         };
         if self.workspace.panel_width != next {
@@ -217,7 +371,48 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn ensure_workspace_focus_handle(&mut self, cx: &mut Context<Self>) -> FocusHandle {
+    pub(crate) fn toggle_document_sidebar_drawer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let compact = workspace_uses_overlay(f32::from(window.viewport_size().width));
+        if self.workspace.document_sidebar_open {
+            self.workspace.document_sidebar_open = false;
+            self.focus_editor_after_workspace(window, cx);
+        } else {
+            self.close_menu_bar(cx);
+            self.dismiss_contextual_overlays(cx);
+            self.workspace.document_sidebar_open = true;
+            self.ensure_document_sidebar_focus_handle(cx).focus(window);
+        }
+        if !compact {
+            self.workspace.document_sidebar_docked_open_preference =
+                Some(self.workspace.document_sidebar_open);
+            self.schedule_workspace_session_save(cx);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn open_document_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.workspace.document_sidebar_open = true;
+        self.workspace.document_sidebar_docked_open_preference = Some(true);
+        self.sync_workspace_outline(cx);
+        self.ensure_document_sidebar_focus_handle(cx).focus(window);
+        self.schedule_workspace_session_save(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_toggle_document_sidebar_action(
+        &mut self,
+        _: &crate::components::ToggleDocumentSidebar,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_document_sidebar_drawer(window, cx);
+    }
+
+    pub(crate) fn ensure_workspace_focus_handle(&mut self, cx: &mut Context<Self>) -> FocusHandle {
         self.workspace
             .focus_handle
             .get_or_insert_with(|| cx.focus_handle())
@@ -413,5 +608,34 @@ impl Editor {
             cx.notify();
         }
         handled
+    }
+
+    pub(in crate::editor) fn handle_document_sidebar_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let focused = self
+            .workspace
+            .document_sidebar_focus_handle
+            .as_ref()
+            .is_some_and(|focus| focus.is_focused(window));
+        if !focused || !self.workspace.document_sidebar_open {
+            return false;
+        }
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                if !workspace_uses_overlay(f32::from(window.viewport_size().width)) {
+                    return false;
+                }
+                self.workspace.document_sidebar_open = false;
+                self.focus_editor_after_workspace(window, cx);
+                cx.notify();
+                true
+            }
+            "tab" | "shift-tab" => false,
+            _ => false,
+        }
     }
 }

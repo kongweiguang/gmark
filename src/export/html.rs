@@ -2,9 +2,12 @@
 
 //! HTML document generation for Markdown export.
 
-use std::fs;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use anyhow::{Context as _, anyhow};
 use base64::{Engine as _, engine::general_purpose};
 use gpui::{Hsla, Rgba};
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html};
@@ -15,6 +18,7 @@ use crate::components::{
     parse_image_reference_definitions, parse_mermaid_fence_source, parse_mermaid_fence_start,
     parse_standalone_image, render_latex_to_svg, render_mermaid_to_svg, sanitize_html_for_export,
 };
+use crate::components::{ResourceKind, ResourceLocation, ResourceRecord};
 use crate::net;
 use crate::theme::{FontWeightDef, Theme};
 
@@ -84,7 +88,8 @@ fn markdown_options() -> Options {
 }
 
 fn render_browser_html_body(markdown: &str, theme: &Theme, base_dir: Option<&Path>) -> String {
-    let rewritten = rewrite_scaled_standalone_images(markdown);
+    let rewritten = rewrite_standalone_resource_cards(markdown, base_dir);
+    let rewritten = rewrite_scaled_standalone_images(&rewritten);
     let rewritten = rewrite_visible_comment_blocks(&rewritten);
     let rewritten = rewrite_unsafe_html_blocks(&rewritten, base_dir);
     let rewritten = rewrite_display_math_blocks(&rewritten, theme);
@@ -98,6 +103,422 @@ fn render_browser_html_body(markdown: &str, theme: &Theme, base_dir: Option<&Pat
     let mut body = String::new();
     html::push_html(&mut body, parser);
     inject_heading_ids(&body, &collect_toc_entries(markdown))
+}
+
+/// Copies local resource-card targets beside a concrete HTML export and
+/// returns source with static, safe card markup. The caller owns the returned
+/// files and must remove only created_files when the export is cancelled or
+/// fails; pre-existing identical assets are intentionally retained.
+pub(crate) struct PreparedHtmlResources {
+    pub(crate) markdown: String,
+    pub(crate) created_files: Vec<PathBuf>,
+    pub(crate) created_asset_dir: Option<PathBuf>,
+}
+
+impl PreparedHtmlResources {
+    pub(crate) fn cleanup_created(&self) {
+        for path in &self.created_files {
+            let _ = fs::remove_file(path);
+        }
+        if let Some(dir) = self.created_asset_dir.as_deref() {
+            let _ = fs::remove_dir(dir);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_html_resources(
+    markdown: &str,
+    source_base_dir: Option<&Path>,
+    export_path: &Path,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<PreparedHtmlResources> {
+    prepare_html_resources_with_progress(markdown, source_base_dir, export_path, cancelled, None)
+}
+
+/// Resource-copy variant used by the editor progress surface. The optional
+/// counter is deliberately narrow so pure export tests and callers do not need
+/// to construct UI state.
+pub(crate) fn prepare_html_resources_with_progress(
+    markdown: &str,
+    source_base_dir: Option<&Path>,
+    export_path: &Path,
+    cancelled: &AtomicBool,
+    completed: Option<&AtomicUsize>,
+) -> anyhow::Result<PreparedHtmlResources> {
+    let export_dir = export_path
+        .parent()
+        .ok_or_else(|| anyhow!("HTML export path has no parent directory"))?;
+    let stem = export_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("untitled");
+    let asset_dir = export_dir.join(format!("{stem}.assets"));
+    let mut created_files = Vec::new();
+    let mut created_asset_dir = None;
+    let mut rewritten = Vec::with_capacity(markdown.lines().count());
+    let mut active_fence: Option<(char, usize)> = None;
+    let result = (|| {
+        for line in markdown.split('\n') {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(anyhow!("export cancelled"));
+            }
+            if let Some((marker, run_len)) = active_fence {
+                rewritten.push(line.to_owned());
+                if is_closing_fence(line, marker, run_len) {
+                    active_fence = None;
+                }
+                continue;
+            }
+            if let Some(fence) = opening_fence(line) {
+                active_fence = Some(fence);
+                rewritten.push(line.to_owned());
+                continue;
+            }
+            let Some((prefix, record)) = standalone_resource_line(line, source_base_dir) else {
+                rewritten.push(line.to_owned());
+                continue;
+            };
+
+            let (href, status) = match &record.location {
+                ResourceLocation::Local(path) if path.is_file() => {
+                    if !asset_dir.exists() {
+                        fs::create_dir_all(&asset_dir).with_context(|| {
+                            format!("failed to create '{}'", asset_dir.display())
+                        })?;
+                        created_asset_dir = Some(asset_dir.clone());
+                    }
+                    let file_name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or("resource");
+                    let preferred = asset_dir.join(file_name);
+                    let (target, reused) = if preferred.exists() {
+                        // 附件可能很大；相同内容复用必须流式比较，不能把两个文件同时读入内存。
+                        let same = files_have_same_contents(path, &preferred).unwrap_or(false);
+                        if same {
+                            (preferred, true)
+                        } else {
+                            (unique_export_asset_path(&asset_dir, file_name), false)
+                        }
+                    } else {
+                        (preferred, false)
+                    };
+                    if !reused {
+                        copy_export_asset_cancellable(path, &target, cancelled)?;
+                        created_files.push(target.clone());
+                    }
+                    let relative = relative_export_asset_href(
+                        asset_dir
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("assets"),
+                        target
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("resource"),
+                    );
+                    (Some(relative), "就绪".to_owned())
+                }
+                ResourceLocation::Local(_) => (None, "文件不存在".to_owned()),
+                ResourceLocation::Url(_) if record.is_unsafe_url() => {
+                    (None, "协议不支持".to_owned())
+                }
+                ResourceLocation::Url(url) => (Some(url.to_string()), "在线".to_owned()),
+            };
+            if matches!(&record.location, ResourceLocation::Local(_))
+                && let Some(completed) = completed
+            {
+                completed.fetch_add(1, Ordering::Release);
+            }
+            rewritten.push(format!(
+                "{prefix}{}",
+                render_resource_card_html(&record, href.as_deref(), &status)
+            ));
+        }
+        Ok::<(), anyhow::Error>(())
+    })();
+    if let Err(error) = result {
+        for path in &created_files {
+            let _ = fs::remove_file(path);
+        }
+        if let Some(dir) = created_asset_dir.as_deref() {
+            let _ = fs::remove_dir(dir);
+        }
+        return Err(error);
+    }
+
+    Ok(PreparedHtmlResources {
+        markdown: rewritten.join("\n"),
+        created_files,
+        created_asset_dir,
+    })
+}
+
+pub(crate) fn count_local_resource_cards(markdown: &str, source_base_dir: Option<&Path>) -> usize {
+    let mut active_fence: Option<(char, usize)> = None;
+    markdown
+        .split('\n')
+        .filter_map(|line| {
+            if let Some((marker, run_len)) = active_fence {
+                if is_closing_fence(line, marker, run_len) {
+                    active_fence = None;
+                }
+                return None;
+            }
+            if let Some(fence) = opening_fence(line) {
+                active_fence = Some(fence);
+                return None;
+            }
+            let (_, record) = standalone_resource_line(line, source_base_dir)?;
+            matches!(&record.location, ResourceLocation::Local(_)).then_some(())
+        })
+        .count()
+}
+
+fn rewrite_standalone_resource_cards(markdown: &str, base_dir: Option<&Path>) -> String {
+    let mut active_fence: Option<(char, usize)> = None;
+    let mut rewritten = Vec::with_capacity(markdown.lines().count());
+    for line in markdown.split('\n') {
+        if let Some((marker, run_len)) = active_fence {
+            rewritten.push(line.to_owned());
+            if is_closing_fence(line, marker, run_len) {
+                active_fence = None;
+            }
+            continue;
+        }
+        if let Some(fence) = opening_fence(line) {
+            active_fence = Some(fence);
+            rewritten.push(line.to_owned());
+            continue;
+        }
+        let replacement = standalone_resource_line(line, base_dir).map(|(prefix, record)| {
+            let status = match &record.location {
+                ResourceLocation::Local(path) if path.is_file() => "就绪",
+                ResourceLocation::Local(_) => "文件不存在",
+                ResourceLocation::Url(_) if record.is_unsafe_url() => "协议不支持",
+                ResourceLocation::Url(_) => "在线",
+            };
+            let href = match &record.location {
+                ResourceLocation::Url(url) if !record.is_unsafe_url() => Some(url.to_string()),
+                _ => None,
+            };
+            format!(
+                "{prefix}{}",
+                render_resource_card_html(&record, href.as_deref(), status)
+            )
+        });
+        rewritten.push(replacement.unwrap_or_else(|| line.to_owned()));
+    }
+    rewritten.join("\n")
+}
+
+/// Returns the Markdown container prefix and parses only the link content.
+/// Keeping the prefix is important for list/blockquote resources: replacing
+/// the full line with raw HTML would silently remove the list or quote in an
+/// exported document.
+fn standalone_resource_line(
+    line: &str,
+    base_dir: Option<&Path>,
+) -> Option<(String, ResourceRecord)> {
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let rest = &line[indent_len..];
+    let (prefix_len, content) = resource_container_prefix(rest);
+    let record = ResourceRecord::parse(content.trim(), base_dir)?;
+    Some((format!("{indent}{}", &rest[..prefix_len]), record))
+}
+
+fn resource_container_prefix(line: &str) -> (usize, &str) {
+    if let Some(after_marker) = line.strip_prefix('>') {
+        let whitespace_len = after_marker.len() - after_marker.trim_start().len();
+        if whitespace_len > 0 {
+            let mut prefix_len = 1 + whitespace_len;
+            let content = &line[prefix_len..];
+            if content.starts_with("[!")
+                && let Some(close) = content.find(']')
+            {
+                let after_header = &content[close + 1..];
+                let separator_len = after_header.len() - after_header.trim_start().len();
+                if separator_len > 0 {
+                    prefix_len += close + 1 + separator_len;
+                }
+            }
+            return (prefix_len, &line[prefix_len..]);
+        }
+    }
+
+    if matches!(line.as_bytes().first(), Some(b'-' | b'*' | b'+')) {
+        let marker_end = 1;
+        let whitespace_len = line[marker_end..].len() - line[marker_end..].trim_start().len();
+        if whitespace_len > 0 {
+            let mut prefix_len = marker_end + whitespace_len;
+            let content = &line[prefix_len..];
+            if matches!(content.get(..3), Some("[ ]" | "[x]" | "[X]"))
+                && content
+                    .as_bytes()
+                    .get(3)
+                    .is_some_and(u8::is_ascii_whitespace)
+            {
+                let task_separator_len = content[3..].len() - content[3..].trim_start().len();
+                prefix_len += 3 + task_separator_len;
+            }
+            return (prefix_len, &line[prefix_len..]);
+        }
+    }
+
+    let digit_len = line
+        .as_bytes()
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digit_len > 0
+        && matches!(line.as_bytes().get(digit_len), Some(b'.' | b')'))
+        && line
+            .as_bytes()
+            .get(digit_len + 1)
+            .is_some_and(u8::is_ascii_whitespace)
+    {
+        let whitespace_start = digit_len + 1;
+        let whitespace_len =
+            line[whitespace_start..].len() - line[whitespace_start..].trim_start().len();
+        let prefix_len = whitespace_start + whitespace_len;
+        return (prefix_len, &line[prefix_len..]);
+    }
+
+    (0, line)
+}
+
+fn render_resource_card_html(record: &ResourceRecord, href: Option<&str>, status: &str) -> String {
+    let kind = match record.kind {
+        ResourceKind::File => "FILE",
+        ResourceKind::Video => "VIDEO",
+    };
+    let target = match &record.location {
+        ResourceLocation::Local(path) => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("resource"),
+        ResourceLocation::Url(url) => url.host_str().unwrap_or(url.as_str()),
+    };
+    let content = format!(
+        "<span class=\"gmark-resource-kind\">{}</span><span class=\"gmark-resource-main\"><strong>{}</strong><small>{}</small></span><span class=\"gmark-resource-status\">{}</span>",
+        escape_html(kind),
+        escape_html(&record.label),
+        escape_html(target),
+        escape_html(status),
+    );
+    match href.filter(|href| !href.is_empty()) {
+        Some(href) => format!(
+            "<a class=\"gmark-resource-card\" href=\"{}\">{content}</a>",
+            escape_html(href)
+        ),
+        None => format!("<div class=\"gmark-resource-card\">{content}</div>"),
+    }
+}
+
+fn unique_export_asset_path(dir: &Path, preferred_name: &str) -> PathBuf {
+    let preferred = Path::new(preferred_name);
+    let stem = preferred
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("resource");
+    let extension = preferred
+        .extension()
+        .and_then(|extension| extension.to_str());
+    for index in 0.. {
+        let name = if index == 0 {
+            preferred_name.to_owned()
+        } else if let Some(extension) = extension {
+            format!("{stem}{index}.{extension}")
+        } else {
+            format!("{stem}{index}")
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded asset name search should always return")
+}
+
+fn files_have_same_contents(source: &Path, target: &Path) -> std::io::Result<bool> {
+    if fs::metadata(source)?.len() != fs::metadata(target)?.len() {
+        return Ok(false);
+    }
+
+    let mut source = BufReader::new(File::open(source)?);
+    let mut target = BufReader::new(File::open(target)?);
+    let mut source_buffer = [0u8; 64 * 1024];
+    let mut target_buffer = [0u8; 64 * 1024];
+    loop {
+        let source_len = source.read(&mut source_buffer)?;
+        let target_len = target.read(&mut target_buffer)?;
+        if source_len != target_len || source_buffer[..source_len] != target_buffer[..target_len] {
+            return Ok(false);
+        }
+        if source_len == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+fn copy_export_asset_cancellable(
+    source: &Path,
+    target: &Path,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<()> {
+    let mut target_created = false;
+    let result = (|| {
+        let source_file = File::open(source)
+            .with_context(|| format!("failed to open resource '{}'", source.display()))?;
+        // create_new 是“不覆盖”的最终防线；exists() 只用于确定性命名，不能承担竞态安全。
+        let target_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)
+            .with_context(|| format!("failed to create resource '{}'", target.display()))?;
+        target_created = true;
+        let mut reader = BufReader::new(source_file);
+        let mut writer = BufWriter::new(target_file);
+        let mut buffer = vec![0u8; 256 * 1024];
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(anyhow!("export cancelled"));
+            }
+            let read = reader
+                .read(&mut buffer)
+                .with_context(|| format!("failed to read resource '{}'", source.display()))?;
+            if read == 0 {
+                break;
+            }
+            writer
+                .write_all(&buffer[..read])
+                .with_context(|| format!("failed to copy resource to '{}'", target.display()))?;
+        }
+        writer
+            .flush()
+            .with_context(|| format!("failed to finish resource '{}'", target.display()))
+    })();
+    if result.is_err() && target_created {
+        let _ = fs::remove_file(target);
+    }
+    result
+}
+
+fn relative_export_asset_href(asset_dir_name: &str, file_name: &str) -> String {
+    let Ok(mut url) = url::Url::parse("https://gmark.invalid/") else {
+        return format!("./{asset_dir_name}/{file_name}");
+    };
+    let Ok(mut segments) = url.path_segments_mut() else {
+        return format!("./{asset_dir_name}/{file_name}");
+    };
+    segments.push(asset_dir_name).push(file_name);
+    drop(segments);
+    format!(".{}", url.path())
 }
 
 /// Replaces only standalone source markers. Fenced code remains literal so snippets can document

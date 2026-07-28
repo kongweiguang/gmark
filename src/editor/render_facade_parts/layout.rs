@@ -129,7 +129,7 @@ pub(super) fn menu_shortcut_slot(text: String, theme: &Theme) -> Div {
     div()
         .ml(px(MENU_SHORTCUT_GAP))
         .min_w(px(MENU_SHORTCUT_SLOT))
-        .max_w(px(100.0))
+        .max_w(px(MENU_SHORTCUT_MAX_WIDTH))
         .flex_shrink_0()
         .overflow_hidden()
         .truncate()
@@ -574,15 +574,11 @@ pub(super) fn menu_bar_button_width(label: &str, dimensions: &ThemeDimensions) -
 }
 
 pub(super) fn top_level_menu_button_width(
-    index: usize,
+    _index: usize,
     label: &str,
     dimensions: &ThemeDimensions,
 ) -> f32 {
-    if index == 0 && label == "gmark" {
-        dimensions.status_bar_height
-    } else {
-        menu_bar_button_width(label, dimensions)
-    }
+    menu_bar_button_width(label, dimensions)
 }
 
 pub(super) fn visible_menu_button_count(menu_expanded: bool, menu_count: usize) -> usize {
@@ -635,9 +631,11 @@ pub(super) fn menu_panel_width_for_labels<S: AsRef<str>>(
         .iter()
         .map(|label| estimated_menu_label_width(label.as_ref(), dimensions.menu_text_size))
         .fold(0.0, f32::max);
+    // 面板按快捷键槽的最大宽度预留空间；否则 Ctrl+Shift+V 等长组合会反向挤压命令标签。
     let content_width = widest_label
+        + MENU_ICON_SLOT
         + dimensions.menu_item_padding_x * 2.0
-        + MENU_SHORTCUT_SLOT
+        + MENU_SHORTCUT_MAX_WIDTH
         + MENU_SHORTCUT_GAP;
     dimensions.menu_panel_width.max(content_width.ceil())
 }
@@ -749,9 +747,7 @@ pub(super) fn import_menu_split_index(items: &[OwnedMenuItem]) -> Option<usize> 
         return None;
     };
 
-    if action.as_ref().as_any().is::<AddThemeConfig>()
-        || action.as_ref().as_any().is::<AddLanguageConfig>()
-    {
+    if action.as_ref().as_any().is::<AddLanguageConfig>() {
         Some(prefix.len())
     } else {
         None

@@ -12,6 +12,99 @@ pub(crate) struct PagedDocumentMetricsSnapshot {
 }
 
 impl DocumentHost {
+    /// The probe is the authoritative format source for contextual navigation.
+    /// File extensions are insufficient for JSONL/TSV and safe-source fallbacks.
+    pub(crate) fn document_menu_format(&self) -> DocumentMenuFormat {
+        DocumentMenuFormat::from_document_format(&self.probe.format)
+    }
+
+    pub(crate) fn document_length(&self) -> u64 {
+        self.probe.len
+    }
+
+    pub(crate) fn document_line_count(&self) -> u64 {
+        self.line_count() as u64
+    }
+
+    pub(crate) fn document_line_ending_label(&self) -> String {
+        let Some(summary) = self
+            .document
+            .as_ref()
+            .and_then(DocumentSession::resident_source_document)
+            .map(gmark_document::SourceDocument::source_format_summary)
+        else {
+            // Paged documents intentionally avoid a whole-file scan. The
+            // source view still exposes individual endings when requested.
+            return "—".to_owned();
+        };
+        match summary.line_endings {
+            gmark_document::LineEndingStatus::None => match summary.dominant {
+                gmark_document::LineEnding::Lf => "LF".to_owned(),
+                gmark_document::LineEnding::CrLf => "CRLF".to_owned(),
+                gmark_document::LineEnding::Cr => "CR".to_owned(),
+            },
+            gmark_document::LineEndingStatus::Uniform(ending) => match ending {
+                gmark_document::LineEnding::Lf => "LF".to_owned(),
+                gmark_document::LineEnding::CrLf => "CRLF".to_owned(),
+                gmark_document::LineEnding::Cr => "CR".to_owned(),
+            },
+            gmark_document::LineEndingStatus::Mixed => "Mixed".to_owned(),
+        }
+    }
+
+    pub(crate) fn is_paged_document(&self) -> bool {
+        self.probe.strategy == OpenStrategy::Paged
+    }
+
+    pub(crate) fn selection_export_in_progress(&self) -> bool {
+        self.selection_export_cancellation.is_some()
+    }
+
+    pub(crate) fn has_source_selection(&self) -> bool {
+        self.selected_source_byte_range().is_some()
+    }
+
+    pub(crate) fn supports_structured_filter(&self) -> bool {
+        matches!(
+            self.probe.format,
+            DocumentFormat::Json | DocumentFormat::JsonLines | DocumentFormat::Delimited { .. }
+        )
+    }
+
+    pub(crate) fn has_json_graph_selection(&self) -> bool {
+        self.probe.format == DocumentFormat::Json && self.graph_selected_item.is_some()
+    }
+
+    pub(crate) fn focus_structured_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.supports_structured_filter() {
+            return;
+        }
+        if self.view_mode == DocumentHostViewMode::Source {
+            self.show_structure_view(cx);
+        }
+        let focus_handle = self.structured_filter_input.read(cx).focus_handle.clone();
+        focus_handle.focus(window);
+        cx.notify();
+    }
+
+    pub(crate) fn focus_structured_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_delimited_document() {
+            return;
+        }
+        self.show_live_view(cx);
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    pub(crate) fn focus_json_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.probe.format != DocumentFormat::Json {
+            return;
+        }
+        self.show_structure_view(cx);
+        self.graph_focus_handle.focus(window);
+        cx.notify();
+    }
+
     pub(crate) fn restore_workspace_source_state(
         &mut self,
         mut selection: SourceSelection,
@@ -21,7 +114,7 @@ impl DocumentHost {
         let len = self.probe.len;
         selection.anchor.byte_offset = selection.anchor.byte_offset.min(len);
         selection.head.byte_offset = selection.head.byte_offset.min(len);
-        let state = document_view_state_mut(&mut self.document, &mut self.pending_view_state);
+        let state = document_view_state_mut(&mut self.document, &mut self.tab_view_state);
         state.source.selection = selection;
         state.source.top_byte_anchor = selection.head;
         state.source.line_offset_y = scroll_y;
@@ -35,12 +128,7 @@ impl DocumentHost {
     }
 
     pub(crate) fn workspace_source_state(&self) -> (SourceSelection, Point<Pixels>) {
-        let state = self
-            .document
-            .as_ref()
-            .map(|document| &document.view_state)
-            .or(self.pending_view_state.as_ref())
-            .expect("host must own session or pending view state");
+        let state = &self.tab_view_state;
         let handle = self.scroll_handle.0.borrow().base_handle.clone();
         let top_line = self.source_list_origin.saturating_add(
             (-f32::from(handle.offset().y) / self.source_row_height.max(1.0))
@@ -66,6 +154,8 @@ impl DocumentHost {
         let recovery_started = crate::perf::start();
         let recovery_profile = probe.profile();
         let recovery_plan = session_plan(&recovery_profile, &probe, probe.strategy, false);
+        let recovery_format = probe.format.clone();
+        let recovered_structure_enabled = derived_views_enabled(probe.strategy);
         let fallback_source = source.clone();
         let fallback_encoding = probe.encoding.clone();
         let mut view = Self::new(path, probe, source, cx);
@@ -81,7 +171,30 @@ impl DocumentHost {
             let result = cx
                 .background_spawn(async move {
                     match replay_paged_recovery(&journal_path) {
-                        Ok(recovered) => Ok((Some(recovered), None)),
+                        Ok(recovered) => {
+                            // Resident 恢复文档的磁盘基线已经过期；结构视图必须从恢复后的
+                            // PieceDocument 快照构建，不能继续读取原文件，也不必等到保存。
+                            let structured = (|| {
+                                if !recovered_structure_enabled {
+                                    return Ok(None);
+                                }
+                                let bytes: Arc<[u8]> = recovered
+                                    .document
+                                    .read_range_cancellable(
+                                        0..recovered.document.len(),
+                                        &cancellation,
+                                    )?
+                                    .into();
+                                build_structured_index(
+                                    recovered.prepared_source.source(),
+                                    &recovered.document.line_index(),
+                                    recovery_format.clone(),
+                                    &cancellation,
+                                    Some(bytes),
+                                )
+                            })();
+                            Ok((Some((recovered, structured)), None))
+                        }
                         Err(recovery_error) => {
                             if cancellation.is_cancelled() {
                                 return Err(PagedDocumentError::Cancelled);
@@ -121,7 +234,7 @@ impl DocumentHost {
                 }
                 view.coordinator.index_cancellation = None;
                 match result {
-                    Ok((Some(recovered), _)) => {
+                    Ok((Some((recovered, structured)), _)) => {
                         let strings = cx.global::<I18nManager>().strings_arc();
                         let selection = recovered.selection;
                         let selected_line = selection.as_ref().and_then(|selection| {
@@ -144,10 +257,10 @@ impl DocumentHost {
                         if let Some(selection) = selection {
                             document.set_source_selection(selection);
                         }
-                        document_view_state_mut(&mut view.document, &mut view.pending_view_state)
+                        document_view_state_mut(&mut view.document, &mut view.tab_view_state)
                             .source
                             .selection = document.source_selection();
-                        document_view_state_mut(&mut view.document, &mut view.pending_view_state)
+                        document_view_state_mut(&mut view.document, &mut view.tab_view_state)
                             .source
                             .top_byte_anchor = document.source_selection().head;
                         view.install_document_session(document);
@@ -158,16 +271,19 @@ impl DocumentHost {
                         view.coordinator.recovery_error = (recovered.read_status
                             == gmark_paged_document::PagedRecoveryReadStatus::TruncatedTail)
                             .then(|| strings.large_document_text("recovered_tail").into());
-                        view.structured_index = None;
                         view.invalidate_structured_runtime();
-                        view.structure_error = Some(
-                            strings
-                                .large_document_text("recovered_structured_paused")
-                                .into(),
-                        );
-                        view.structure_error_byte = None;
+                        match structured {
+                            Ok(index) => {
+                                view.structured_index = index;
+                                view.clear_structure_error();
+                            }
+                            Err(error) => {
+                                view.structured_index = None;
+                                view.set_structure_error(error, cx);
+                            }
+                        }
                         view.view_mode = DocumentHostViewMode::Source;
-                        view.sync_session_active_view();
+                        view.sync_tab_active_view();
                         set_document_dirty_state(&mut view.document, &mut view.pending_dirty, true);
                         view.tail_enabled = false;
                         if let Some(line) = selected_line {
@@ -205,7 +321,7 @@ impl DocumentHost {
                                 .into(),
                         );
                         view.view_mode = DocumentHostViewMode::Source;
-                        view.sync_session_active_view();
+                        view.sync_tab_active_view();
                         view.tail_enabled = false;
                     }
                     Ok((None, None)) => {}
@@ -226,6 +342,20 @@ impl DocumentHost {
 
     pub(crate) fn is_dirty(&self) -> bool {
         document_dirty_state(&self.document, &self.pending_dirty)
+    }
+
+    /// “不保存”是终止当前恢复会话，不只是隐藏窗口级 dirty 标记。
+    pub(crate) fn discard_unsaved_changes(&mut self, cx: &mut Context<Self>) {
+        if let Some(journal) = self.coordinator.recovery_journal.take()
+            && let Err(error) = journal.checkpoint()
+        {
+            self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
+            // 保留句柄，让 Drop 在窗口销毁时按 clean 状态再尝试一次 checkpoint。
+            self.coordinator.recovery_journal = Some(journal);
+        }
+        set_document_dirty_state(&mut self.document, &mut self.pending_dirty, false);
+        cx.emit(DocumentHostEvent::StateChanged);
+        cx.notify();
     }
 
     pub(crate) fn encoding_label(&self) -> String {
@@ -322,6 +452,7 @@ impl DocumentHost {
     }
 
     pub(crate) fn show_source_view(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_view_context_menus();
         self.mode_notice = None;
         self.set_view_mode(DocumentHostViewMode::Source, cx);
         cx.emit(DocumentHostEvent::StateChanged);
@@ -329,13 +460,14 @@ impl DocumentHost {
     }
 
     pub(crate) fn show_structure_view(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_view_context_menus();
         self.mode_notice = None;
         self.request_registered_projection(cx);
         if self.probe.format == DocumentFormat::Json {
             self.active_edit = None;
             self.graph_needs_fit |= self.view_mode != DocumentHostViewMode::Structure;
             self.view_mode = DocumentHostViewMode::Structure;
-            self.sync_session_active_view();
+            self.sync_tab_active_view();
             cx.notify();
         } else {
             self.set_view_mode(DocumentHostViewMode::Structure, cx);
@@ -347,6 +479,7 @@ impl DocumentHost {
     }
 
     pub(crate) fn show_live_view(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_view_context_menus();
         self.mode_notice = None;
         if !self.is_delimited_document() {
             self.show_structure_view(cx);
@@ -359,19 +492,27 @@ impl DocumentHost {
     }
 
     pub(crate) fn show_split_view(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_view_context_menus();
         self.mode_notice = None;
         if self.probe.format == DocumentFormat::Json || self.structured_index.is_some() {
             self.request_registered_projection(cx);
             self.active_edit = None;
             self.graph_needs_fit |= self.view_mode != DocumentHostViewMode::Split;
             self.view_mode = DocumentHostViewMode::Split;
-            self.sync_session_active_view();
+            self.sync_tab_active_view();
             cx.emit(DocumentHostEvent::StateChanged);
             cx.emit(DocumentHostEvent::ViewModeChanged(DocumentHostMode::Split));
             cx.notify();
         } else {
             self.show_source_view(cx);
         }
+    }
+
+    /// 视图切换会替换菜单所属的局部坐标空间，旧菜单不能跨模式继续存在。
+    fn dismiss_view_context_menus(&mut self) {
+        self.source_context_menu = None;
+        self.graph_context_menu = None;
+        self.structured_context_target = None;
     }
 
     pub(crate) fn structure_view_active(&self) -> bool {
@@ -387,7 +528,7 @@ impl DocumentHost {
 
     pub(crate) fn show_mode_unavailable(&mut self, mode: &'static str, cx: &mut Context<Self>) {
         self.view_mode = DocumentHostViewMode::Source;
-        self.sync_session_active_view();
+        self.sync_tab_active_view();
         self.mode_notice = Some(
             format!(
                 "{mode} needs a resident Markdown projection; Source remains available for this file size"
@@ -760,12 +901,7 @@ impl DocumentHost {
 
     #[cfg(test)]
     pub(crate) fn workspace_source_state_for_test(&self) -> (SourceSelection, f32) {
-        let state = self
-            .document
-            .as_ref()
-            .map(|document| &document.view_state)
-            .or(self.pending_view_state.as_ref())
-            .expect("host must own session or pending view state");
+        let state = &self.tab_view_state;
         (state.source.selection, state.source.line_offset_y)
     }
 
@@ -1026,6 +1162,21 @@ impl DocumentHost {
             .iter()
             .map(|(line, row)| (*line as u64, row.text.to_string()))
             .collect();
+        let folds = self
+            .fold_projection
+            .regions()
+            .iter()
+            .filter(|region| {
+                self.displayed_screen_lines
+                    .rows
+                    .contains_key(&region.start_line)
+            })
+            .map(|region| crate::accessibility::AccessibilityFold {
+                start_line: region.start_line as u64,
+                end_line: region.end_line as u64,
+                collapsed: self.fold_projection.is_collapsed(region.id),
+            })
+            .collect();
         let error = self
             .error
             .as_ref()
@@ -1044,6 +1195,7 @@ impl DocumentHost {
             navigation_visible: self.navigation_visible,
             caret: Some(self.accessibility_caret(cx)),
             lines,
+            folds,
         }
     }
 
@@ -1073,6 +1225,16 @@ impl DocumentHost {
             )
             .wrapping_mul(31)
             .wrapping_add(self.displayed_screen_lines.rows.len() as u64);
+        let fold_signature = self
+            .fold_projection
+            .regions()
+            .iter()
+            .fold(0_u64, |hash, region| {
+                hash.wrapping_mul(31)
+                    .wrapping_add(region.start_line as u64)
+                    .wrapping_mul(31)
+                    .wrapping_add(u64::from(self.fold_projection.is_collapsed(region.id)))
+            });
         let mut message_hasher = std::collections::hash_map::DefaultHasher::new();
         self.error.hash(&mut message_hasher);
         self.structure_error.hash(&mut message_hasher);
@@ -1089,6 +1251,8 @@ impl DocumentHost {
             .wrapping_add(self.displayed_screen_lines.column_window_start)
             .wrapping_mul(31)
             .wrapping_add(row_signature)
+            .wrapping_mul(31)
+            .wrapping_add(fold_signature)
             .wrapping_mul(31)
             .wrapping_add(self.coordinator.search_generation)
             .wrapping_mul(31)

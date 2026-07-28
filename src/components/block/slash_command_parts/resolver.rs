@@ -2,6 +2,24 @@
 
 use super::*;
 
+pub(super) fn slash_menu_surface_bounds(
+    kind: &BlockKind,
+    text_bounds: Option<Bounds<Pixels>>,
+    visual_bounds: Option<Bounds<Pixels>>,
+) -> Option<(Bounds<Pixels>, bool)> {
+    // Mermaid 的 Source/Split 曾经生成过文本布局后，Preview 仍可能保留 last_bounds。
+    // 块操作属于整个工作台，必须优先锚定稳定的视觉外壳，不能跟随旧光标漂到块底部。
+    if kind == &BlockKind::MermaidBlock
+        && let Some(bounds) = visual_bounds
+    {
+        return Some((bounds, true));
+    }
+    if let Some(bounds) = text_bounds {
+        return Some((bounds, false));
+    }
+    None
+}
+
 pub(super) fn selected_available_index(
     commands: &[SlashCommand],
     current: usize,
@@ -64,6 +82,40 @@ pub(super) fn slash_menu_child_index(state: &SlashMenuState, target: usize) -> u
         child_index += 1;
     }
     child_index
+}
+
+pub(super) fn block_gutter_container_inset(
+    in_callout: bool,
+    in_footnote: bool,
+    rendered_content_inset: f32,
+    callout_shell_inset: f32,
+    footnote_shell_inset: f32,
+) -> f32 {
+    let callout_inset = if in_callout {
+        rendered_content_inset + callout_shell_inset
+    } else {
+        0.0
+    };
+    let footnote_inset = if in_footnote {
+        rendered_content_inset + footnote_shell_inset
+    } else {
+        0.0
+    };
+    callout_inset + footnote_inset
+}
+
+pub(super) fn block_gutter_represents_semantic_block(
+    kind: &BlockKind,
+    in_callout: bool,
+    in_footnote: bool,
+) -> bool {
+    if in_footnote {
+        kind.is_footnote_definition()
+    } else if in_callout {
+        kind.is_callout()
+    } else {
+        true
+    }
 }
 
 impl Block {
@@ -302,20 +354,34 @@ impl Block {
             || self.is_table_cell()
             || self.show_source_line_numbers()
             || self.compact_source_host()
+            // Callout/脚注虽由多个内部 Block 承担编辑，但对用户是一个语义块；
+            // 只有容器头部拥有操作入口，正文子块不得重复暴露。
+            || !block_gutter_represents_semantic_block(
+                &self.kind(),
+                self.callout_anchor.is_some(),
+                self.footnote_anchor.is_some(),
+            )
         {
             return None;
         }
         let c = &theme.colors;
+        let d = &theme.dimensions;
+        // Callout 与脚注的实体会被编辑器级卡片再次缩进。块操作入口抵消这些外层
+        // inset，始终锚定到文档内容列左边；嵌套脚注需要同时抵消两层容器。
+        let container_inset = block_gutter_container_inset(
+            self.callout_anchor.is_some(),
+            self.footnote_anchor.is_some(),
+            crate::components::rendered_content_inset(d),
+            d.callout_padding_x + d.callout_border_width,
+            d.footnote_padding_x + 1.0,
+        );
         let actions_label: SharedString = strings
             .slash_commands
             .get("group_block")
             .cloned()
             .unwrap_or_else(|| "Block Actions".to_owned())
             .into();
-        let button = |id: &'static str,
-                      icon: &'static str,
-                      tooltip: SharedString,
-                      on_click: Box<BlockGutterAction>| {
+        let button = |id: &'static str, icon: &'static str, tooltip: SharedString| {
             div()
                 .id(id)
                 .size(px(24.0))
@@ -335,9 +401,6 @@ impl Block {
                         .text_color(c.dialog_muted)
                         .debug_selector(move || format!("{id}-icon")),
                 )
-                .on_click(cx.listener(move |block, _event, window, cx| {
-                    on_click(block, window, cx);
-                }))
         };
         let drag_payload = BlockDragPayload {
             source: cx.entity().entity_id(),
@@ -346,11 +409,6 @@ impl Block {
             "block-context-actions",
             "icon/ui/more-horizontal.svg",
             actions_label,
-            Box::new(|block, window, cx| {
-                block.focus_handle.focus(window);
-                block.open_block_action_menu(cx);
-                cx.notify();
-            }),
         )
         .debug_selector(move || {
             if focused {
@@ -358,25 +416,34 @@ impl Block {
             } else {
                 "block-context-actions".to_owned()
             }
-        })
-        .cursor_move()
-        .on_drag(drag_payload, |_payload, _position, _window, cx| {
-            cx.new(|_| BlockDragPreview)
         });
         Some(
             div()
                 .id("block-context-gutter")
                 .debug_selector(|| "block-context-gutter".to_owned())
                 .absolute()
-                .left_0()
+                .left(px(-container_inset))
                 .top(px(2.0))
                 .h(px(28.0))
                 .px(px(2.0))
                 .flex()
                 .items_center()
-                // 单一“…”入口留在内容列内部；小窗口不会裁剪，所有块也保持左对齐。
+                // 单一“…”入口留在文档内容列左侧；小窗口不会裁剪，所有块也保持左对齐。
                 .opacity(if focused { 1.0 } else { 0.0 })
                 .group_hover(group, |gutter| gutter.opacity(1.0))
+                // 事件放在稳定的 gutter 外壳上；未聚焦块按下后即使子按钮重绘也不会丢失操作。
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|block, _event, window, cx| {
+                        block.focus_handle.focus(window);
+                        block.open_block_action_menu(cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
+                .on_drag(drag_payload, |_payload, _position, _window, cx| {
+                    cx.new(|_| BlockDragPreview)
+                })
                 .child(actions_button)
                 .into_any_element(),
         )
@@ -488,12 +555,32 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let state = self.slash_menu.as_ref()?;
-        let text_bounds = self.last_bounds?;
-        let anchor = self.active_range_or_cursor_bounds().unwrap_or(text_bounds);
+        let visual_bounds = self
+            .mermaid_workbench_bounds
+            .lock()
+            .ok()
+            .and_then(|bounds| *bounds);
+        let (text_bounds, visual_block_anchor) =
+            slash_menu_surface_bounds(&self.kind(), self.last_bounds, visual_bounds)?;
+        let anchor = if visual_block_anchor {
+            Bounds::new(text_bounds.origin, size(px(1.0), px(44.0)))
+        } else {
+            self.active_range_or_cursor_bounds().unwrap_or(text_bounds)
+        };
         let placement =
             slash_menu_placement(anchor, viewport, slash_menu_estimated_height(state, theme));
-        let origin_left = f32::from(text_bounds.left()) - theme.dimensions.block_padding_x;
-        let origin_top = f32::from(text_bounds.top()) - theme.dimensions.block_padding_y;
+        let origin_left = f32::from(text_bounds.left())
+            - if visual_block_anchor {
+                0.0
+            } else {
+                theme.dimensions.block_padding_x
+            };
+        let origin_top = f32::from(text_bounds.top())
+            - if visual_block_anchor {
+                0.0
+            } else {
+                theme.dimensions.block_padding_y
+            };
         let context = self.editing_command_context();
         let c = &theme.colors;
         let d = &theme.dimensions;

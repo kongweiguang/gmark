@@ -65,7 +65,7 @@ impl Editor {
             .enumerate()
             .map(|(index, label)| top_level_menu_button_width(index, label, d))
             .collect::<Vec<_>>();
-        // 应用图标独立控制一级导航；下拉面板开关不再影响导航展开状态。
+        // 应用文字标识独立控制一级导航；下拉面板开关不再影响导航展开状态。
         let visible_button_count =
             visible_menu_button_count(self.menu_bar_expanded, menu_labels.len());
         let menu_width = d.menu_bar_padding_x * 2.0
@@ -115,17 +115,6 @@ impl Editor {
                         let button_editor = editor.clone();
                         let click_editor = editor.clone();
                         let button_width = button_widths[index];
-                        let button_height = if index == 0 {
-                            d.status_bar_height
-                        } else {
-                            d.menu_bar_button_height
-                        };
-                        // 图标按钮不能沿用文字菜单的 8px 横向内边距，否则 20px SVG 会在 24px 槽内被压缩到 8px。
-                        let button_padding_x = if index == 0 {
-                            0.0
-                        } else {
-                            d.menu_bar_button_padding_x
-                        };
 
                         let button = div()
                             .id(("app-menu-button", index))
@@ -136,9 +125,9 @@ impl Editor {
                                     format!("app-menu-button-{index}")
                                 }
                             })
-                            .h(px(button_height))
+                            .h(px(d.menu_bar_button_height))
                             .w(px(button_width))
-                            .px(px(button_padding_x))
+                            .px(px(d.menu_bar_button_padding_x))
                             .flex()
                             .flex_shrink_0()
                             .items_center()
@@ -153,16 +142,24 @@ impl Editor {
                             .active(|this| this.opacity(0.92))
                             .cursor_pointer()
                             .text_size(px(d.menu_text_size))
-                            .font_weight(t.dialog_button_weight.to_font_weight())
-                            .text_color(c.dialog_secondary_button_text)
+                            .font_weight(if index == 0 {
+                                t.dialog_title_weight.to_font_weight()
+                            } else {
+                                t.dialog_button_weight.to_font_weight()
+                            })
+                            .text_color(if index == 0 {
+                                c.dialog_title
+                            } else {
+                                c.dialog_secondary_button_text
+                            })
                             .whitespace_nowrap();
 
                         if index == 0 {
                             button
                                 .child(
-                                    // GPUI 的 `svg()` 会把所有不透明像素压成单色蒙版；品牌图标
-                                    // 必须走 `img()`，才能保留深色底与白色字形的 RGBA 层次。
-                                    img(MENU_LAUNCHER_ICON).size(px(MENU_LAUNCHER_ICON_SIZE)),
+                                    div()
+                                        .debug_selector(|| "app-menu-launcher-wordmark".to_owned())
+                                        .child(label),
                                 )
                                 .on_hover(move |hovered, _window, cx| {
                                     if *hovered {
@@ -205,6 +202,7 @@ impl Editor {
         theme: &Theme,
         editor: WeakEntity<Self>,
         window: &Window,
+        cx: &App,
     ) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -221,6 +219,9 @@ impl Editor {
                 .into_any_element(),
             OwnedMenuItem::Action { name, action, .. } => {
                 let is_disabled = action.as_ref().as_any().is::<NoRecentFiles>();
+                let checked = self.document_menu_action_checked(action.as_ref());
+                let disabled_reason =
+                    self.document_menu_disabled_reason(&name, action.as_ref(), cx);
                 let is_keyboard_focused = self.menu_keyboard_item == Some(item_index);
                 let shortcut = menu_shortcut_text(window, action.as_ref());
                 let click_editor = editor.clone();
@@ -247,6 +248,14 @@ impl Editor {
                     } else {
                         c.dialog_secondary_button_text
                     })
+                    .child(menu_icon_slot(
+                        checked.then_some("icon/ui/check.svg"),
+                        if is_disabled {
+                            c.dialog_muted
+                        } else {
+                            c.dialog_secondary_button_text
+                        },
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -267,6 +276,12 @@ impl Editor {
                             });
                         }
                     });
+
+                let base = if let Some(reason) = disabled_reason {
+                    base.tooltip(move |_window, cx| crate::ui::ui_tooltip(reason.clone(), cx))
+                } else {
+                    base
+                };
 
                 if is_disabled {
                     base.into_any_element()
@@ -309,6 +324,8 @@ impl Editor {
                     .text_size(px(d.menu_text_size))
                     .font_weight(t.dialog_body_weight.to_font_weight())
                     .text_color(c.dialog_secondary_button_text)
+                    // 所有菜单项共用固定前导槽，避免子菜单标题比普通命令向左错位。
+                    .child(menu_icon_slot(None, c.dialog_secondary_button_text))
                     .child(
                         div()
                             .flex_1()
@@ -340,6 +357,7 @@ impl Editor {
                 .bg(c.dialog_surface)
                 .text_size(px(d.menu_text_size))
                 .text_color(c.dialog_muted)
+                .child(menu_icon_slot(None, c.dialog_muted))
                 .child(
                     div()
                         .flex_1()
@@ -432,6 +450,13 @@ impl Editor {
                                 OwnedMenuItem::Action { name, action, .. } => {
                                     let is_disabled =
                                         action.as_ref().as_any().is::<NoRecentFiles>();
+                                    let checked =
+                                        self.document_menu_action_checked(action.as_ref());
+                                    let disabled_reason = self.document_menu_disabled_reason(
+                                        &name,
+                                        action.as_ref(),
+                                        cx,
+                                    );
                                     let is_keyboard_focused =
                                         self.menu_keyboard_submenu_item == Some(item_index);
                                     let shortcut = menu_shortcut_text(window, action.as_ref());
@@ -457,6 +482,14 @@ impl Editor {
                                         } else {
                                             c.dialog_secondary_button_text
                                         })
+                                        .child(menu_icon_slot(
+                                            checked.then_some("icon/ui/check.svg"),
+                                            if is_disabled {
+                                                c.dialog_muted
+                                            } else {
+                                                c.dialog_secondary_button_text
+                                            },
+                                        ))
                                         .child(
                                             div()
                                                 .flex_1()
@@ -479,6 +512,14 @@ impl Editor {
                                                 });
                                             }
                                         });
+
+                                    let base = if let Some(reason) = disabled_reason {
+                                        base.tooltip(move |_window, cx| {
+                                            crate::ui::ui_tooltip(reason.clone(), cx)
+                                        })
+                                    } else {
+                                        base
+                                    };
 
                                     if is_disabled {
                                         base.into_any_element()
@@ -624,6 +665,7 @@ impl Editor {
                                         theme,
                                         editor.clone(),
                                         window,
+                                        cx,
                                     )
                                 },
                             )),
@@ -642,6 +684,7 @@ impl Editor {
                             theme,
                             editor.clone(),
                             window,
+                            cx,
                         )
                     });
 
@@ -655,7 +698,14 @@ impl Editor {
                 .cloned()
                 .enumerate()
                 .map(|(item_index, item)| {
-                    self.render_in_window_menu_item(item, item_index, theme, editor.clone(), window)
+                    self.render_in_window_menu_item(
+                        item,
+                        item_index,
+                        theme,
+                        editor.clone(),
+                        window,
+                        cx,
+                    )
                 });
 
             main_panel.children(items).into_any_element()

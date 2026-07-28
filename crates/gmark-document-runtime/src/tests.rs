@@ -76,8 +76,6 @@ fn resident_growth_over_frozen_limit_warns_without_hot_migration() {
     let profile = profile(DocumentFormat::PlainText, 7);
     let policy = LoadingPolicy {
         max_resident_bytes: Some(7),
-        max_resident_lines: Some(u64::MAX),
-        max_structural_units: Some(u64::MAX),
         ..LoadingPolicy::default()
     };
     let plan = policy.resolve(&profile);

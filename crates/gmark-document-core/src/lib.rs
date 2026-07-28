@@ -11,9 +11,8 @@ mod view;
 
 pub use errors::{OpenError, PersistenceError, ProjectionError};
 pub use policy::{
-    BALANCED_LIMITS, DocumentBackendKind, DocumentFormat, DocumentProfile, HIGH_PERFORMANCE_LIMITS,
-    LOW_MEMORY_LIMITS, LoadingLimits, LoadingPolicy, LoadingPreset, OpenPlan, OpenPolicy,
-    OpenPolicyResolver, OpenReason, TextEncoding,
+    DEFAULT_LOADING_LIMITS, DocumentBackendKind, DocumentFormat, DocumentProfile, LoadingLimits,
+    LoadingPolicy, OpenPlan, OpenPolicy, OpenPolicyResolver, OpenReason, TextEncoding,
 };
 pub use recovery::{RecoveryAction, RecoveryBackend, RecoveryRecord};
 pub use snapshot::{DocumentSnapshot, SnapshotError};

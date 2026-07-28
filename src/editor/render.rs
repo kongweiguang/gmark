@@ -14,8 +14,8 @@ use super::{
 };
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::CalloutVariant;
-use crate::components::{AddLanguageConfig, AddThemeConfig, Block, NoRecentFiles};
-use crate::config::{EditorSettings, WorkspaceSidebarPosition};
+use crate::components::{AddLanguageConfig, Block, NoRecentFiles};
+use crate::config::EditorSettings;
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::perf;
 use crate::theme::{Theme, ThemeDimensions, ThemeManager};
@@ -29,13 +29,11 @@ const RENDER_OVERDRAW_PX: f32 = 800.0;
 /// 小文档完整挂载更稳定；达到该行数后，块级裁剪才有足够收益覆盖布局复杂度。
 pub(super) const RENDER_ROW_VIRTUALIZATION_THRESHOLD: usize = 512;
 const CHEVRON_RIGHT_ICON: &str = "icon/ui/chevron-right.svg";
-const MENU_LAUNCHER_ICON: &str = "icon/gmark-icon.svg";
-// Canonical 应用图标包含 G 与 M 两层细节，20px 才能在高密度标题栏中保持辨识度。
-const MENU_LAUNCHER_ICON_SIZE: f32 = 20.0;
 const EXPORT_PROGRESS_ICON: &str = "icon/ui/file-output.svg";
 const CLOSE_ICON: &str = "icon/ui/close.svg";
 const MENU_ICON_SLOT: f32 = 18.0;
 const MENU_SHORTCUT_SLOT: f32 = 64.0;
+const MENU_SHORTCUT_MAX_WIDTH: f32 = 100.0;
 #[derive(Clone, Copy)]
 pub(super) enum DocumentToolbarAction {
     QuickOpen,
@@ -73,14 +71,8 @@ fn clamped_split_pane_ratio(ratio: f32, available_width: f32) -> f32 {
     ratio.clamp(minimum, maximum)
 }
 
-fn editor_tab_strip_insets(
-    position: WorkspaceSidebarPosition,
-    docked_workspace_width: f32,
-) -> (f32, f32) {
-    match position {
-        WorkspaceSidebarPosition::Left => (docked_workspace_width, 0.0),
-        WorkspaceSidebarPosition::Right => (0.0, docked_workspace_width),
-    }
+fn editor_tab_strip_insets(docked_workspace_width: f32) -> (f32, f32) {
+    (docked_workspace_width, 0.0)
 }
 
 pub(crate) fn editor_top_padding(typewriter_mode: bool, viewport_height: f32) -> f32 {
@@ -95,6 +87,11 @@ pub(crate) fn editor_top_padding(typewriter_mode: bool, viewport_height: f32) ->
 /// Source 是同一种代码阅读表面，不因 Resident/SourceBacked 或文件格式改变顶部节奏。
 pub(crate) fn source_editor_top_padding(dimensions: &ThemeDimensions) -> f32 {
     dimensions.editor_padding
+}
+
+/// Source 需要为 gutter 留出空间，正文左右留白保持为编辑器基础间距的一半。
+pub(crate) fn source_editor_horizontal_padding(dimensions: &ThemeDimensions) -> f32 {
+    dimensions.editor_padding * 0.5
 }
 
 pub(super) fn editor_bottom_padding(viewport_height: f32, dimensions: &ThemeDimensions) -> f32 {

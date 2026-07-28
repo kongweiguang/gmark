@@ -48,8 +48,6 @@ impl EditorDocumentSession {
         };
         let plan = LoadingPolicy {
             max_resident_bytes: Some(limits.max_resident_bytes),
-            max_resident_lines: Some(limits.max_resident_lines),
-            max_structural_units: Some(limits.max_structural_units),
             ..LoadingPolicy::default()
         }
         .resolve(&profile);

@@ -21,6 +21,7 @@ pub(crate) enum EditingCommandId {
     CodeBlock,
     Table,
     Image,
+    Resource,
     Math,
     Mermaid,
     CalloutNote,
@@ -165,6 +166,7 @@ pub(crate) enum EditingCommandPlan {
     ChangeBlockKind(BlockKind),
     InsertTable,
     InsertImage,
+    InsertResource,
     InsertMath,
     InsertMermaid,
     InsertFootnoteDefinition,
@@ -176,7 +178,7 @@ pub(crate) enum EditingCommandPlan {
     ApplyInline(EditingCommandId),
 }
 
-pub(crate) const SLASH_COMMANDS: [EditingCommandId; 28] = [
+pub(crate) const SLASH_COMMANDS: [EditingCommandId; 29] = [
     EditingCommandId::Paragraph,
     EditingCommandId::Heading1,
     EditingCommandId::Heading2,
@@ -191,6 +193,7 @@ pub(crate) const SLASH_COMMANDS: [EditingCommandId; 28] = [
     EditingCommandId::CodeBlock,
     EditingCommandId::Table,
     EditingCommandId::Image,
+    EditingCommandId::Resource,
     EditingCommandId::Math,
     EditingCommandId::Mermaid,
     EditingCommandId::CalloutNote,
@@ -223,16 +226,17 @@ pub(crate) const TRANSFORM_COMMANDS: [EditingCommandId; 12] = [
 ];
 
 /// 插入入口共用这一份清单，避免块操作、右键菜单和斜杠菜单的能力漂移。
-pub(crate) const INSERT_COMMANDS: [EditingCommandId; 6] = [
+pub(crate) const INSERT_COMMANDS: [EditingCommandId; 7] = [
     EditingCommandId::Table,
     EditingCommandId::Image,
+    EditingCommandId::Resource,
     EditingCommandId::Math,
     EditingCommandId::Mermaid,
     EditingCommandId::FootnoteDefinition,
     EditingCommandId::HorizontalRule,
 ];
 
-pub(crate) const BLOCK_MENU_COMMANDS: [EditingCommandId; 28] = [
+pub(crate) const BLOCK_MENU_COMMANDS: [EditingCommandId; 29] = [
     EditingCommandId::Paragraph,
     EditingCommandId::Heading1,
     EditingCommandId::Heading2,
@@ -247,6 +251,7 @@ pub(crate) const BLOCK_MENU_COMMANDS: [EditingCommandId; 28] = [
     EditingCommandId::CodeBlock,
     EditingCommandId::Table,
     EditingCommandId::Image,
+    EditingCommandId::Resource,
     EditingCommandId::Math,
     EditingCommandId::Mermaid,
     EditingCommandId::CalloutNote,
@@ -295,6 +300,7 @@ impl EditingCommandId {
             CodeBlock => "code_block",
             Table => "table",
             Image => "image",
+            Resource => "resource",
             Math => "math",
             Mermaid => "mermaid",
             CalloutNote => "callout_note",
@@ -463,6 +469,21 @@ impl EditingCommandId {
                 "image",
                 "icon/ui/image.svg",
                 &["image", "picture", "图片", "图像", "tp", "tx"],
+            ),
+            Resource => descriptor(
+                self,
+                Insert,
+                "resource",
+                "icon/ui/file.svg",
+                &[
+                    "resource",
+                    "attachment",
+                    "file",
+                    "资源",
+                    "附件",
+                    "文件",
+                    "zy",
+                ],
             ),
             Math => descriptor(
                 self,
@@ -677,7 +698,7 @@ impl EditingCommandId {
             DuplicateBlock | DeleteBlock => context.editable_block(),
             MoveBlockUp => context.can_move_up(),
             MoveBlockDown => context.can_move_down(),
-            Table | Image | Math | Mermaid | FootnoteDefinition | FootnoteReference
+            Table | Image | Resource | Math | Mermaid | FootnoteDefinition | FootnoteReference
             | HorizontalRule => context.editable_block(),
             CalloutNote | CalloutTip | CalloutImportant | CalloutWarning | CalloutCaution => {
                 context.editable_rich_block()
@@ -710,6 +731,7 @@ impl EditingCommandId {
             }
             Table => EditingCommandPlan::InsertTable,
             Image => EditingCommandPlan::InsertImage,
+            Resource => EditingCommandPlan::InsertResource,
             Math => EditingCommandPlan::InsertMath,
             Mermaid => EditingCommandPlan::InsertMermaid,
             FootnoteDefinition => EditingCommandPlan::InsertFootnoteDefinition,
@@ -760,6 +782,7 @@ pub(crate) fn editing_command_specs() -> Vec<EditingCommandSpec> {
         EditingCommandId::CodeBlock,
         EditingCommandId::Table,
         EditingCommandId::Image,
+        EditingCommandId::Resource,
         EditingCommandId::Math,
         EditingCommandId::Mermaid,
         EditingCommandId::CalloutNote,

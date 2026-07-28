@@ -582,6 +582,28 @@ async fn app_menu_opened_dirty_file_window_prompts_only_that_window(cx: &mut Tes
 }
 
 #[gpui::test]
+async fn discard_and_close_clears_resident_document_dirty_state(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    cx.update(|cx| crate::updater::UpdateCoordinator::init(false, cx));
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_owned(), None));
+
+    editor.update(visual, |editor, cx| editor.mark_dirty(cx));
+    visual.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            assert!(!editor.on_window_should_close(window, cx));
+            assert!(editor.show_unsaved_changes_dialog);
+            assert!(editor.source_document.is_dirty());
+
+            editor.on_discard_and_close(&gpui::ClickEvent::default(), window, cx);
+
+            assert!(!editor.source_document.is_dirty());
+            assert!(!editor.show_unsaved_changes_dialog);
+        });
+    });
+}
+
+#[gpui::test]
 async fn app_menu_opened_dirty_window_close_guard_prompts_only_that_window(
     cx: &mut TestAppContext,
 ) {

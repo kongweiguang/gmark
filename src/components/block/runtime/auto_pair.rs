@@ -147,18 +147,18 @@ fn auto_pair_edit(
         return None;
     }
 
-    // 空段落首个反引号仍创建行内代码对；连续输入第二、第三个反引号时，
-    // 把这组输入提升为单个围栏前缀，并让第三次按键停在围栏末尾。
-    // 这样既保留一键行内代码，也让 ```language + Enter 可达。
+    // 空段落首个反引号仍创建行内代码对；再次输入时越过自动生成的闭合符。
+    // 光标到达纯反引号行末后必须退回普通输入，否则后续按键会持续被吞掉，
+    // 用户也就无法输入 CommonMark 允许的三个及更长围栏。
     if input == "`" && source == "``" && selection == (1..1) {
-        return Some(AutoPairEdit::Replace {
-            range: 0..2,
-            text: "```".to_owned(),
-            selected_range_relative: 3..3,
-        });
+        return Some(AutoPairEdit::MoveTo(2));
     }
-    if input == "`" && source == "```" && selection == (3..3) {
-        return Some(AutoPairEdit::MoveTo(3));
+    if input == "`"
+        && selection == (source.len()..source.len())
+        && source.len() >= 2
+        && source.bytes().all(|byte| byte == b'`')
+    {
+        return None;
     }
 
     if collapsed && markdown_closing_marker(input).is_some_and(|marker| next == Some(marker)) {

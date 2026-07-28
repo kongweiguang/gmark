@@ -2,42 +2,20 @@
 
 use super::*;
 use gpui::{PathBuilder, canvas, point};
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
 
-const GRAPH_CARD_MIN_WIDTH: f32 = 210.0;
-const GRAPH_CARD_MAX_WIDTH: f32 = 340.0;
-const GRAPH_CARD_HEADER_HEIGHT: f32 = 34.0;
-const GRAPH_CARD_ROW_HEIGHT: f32 = 28.0;
-const GRAPH_COLUMN_GAP: f32 = 150.0;
-const GRAPH_ROW_GAP: f32 = 24.0;
-const GRAPH_CANVAS_PADDING: f32 = 72.0;
-const GRAPH_MIN_ZOOM: f32 = 0.3;
-const GRAPH_MAX_ZOOM: f32 = 2.0;
-
-#[derive(Clone, Debug, PartialEq)]
-struct PositionedGraphNode {
-    index: usize,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct PositionedGraphEdge {
-    from: gpui::Point<gpui::Pixels>,
-    to: gpui::Point<gpui::Pixels>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-struct GraphLayout {
-    nodes: Vec<PositionedGraphNode>,
-    edges: Vec<PositionedGraphEdge>,
-    width: f32,
-    height: f32,
-}
+#[path = "json_graph/model.rs"]
+pub(super) mod model;
+#[path = "json_graph/style.rs"]
+mod style;
+pub(super) use model::GraphLayoutCache;
+use model::{
+    CARD_HEADER_HEIGHT as GRAPH_CARD_HEADER_HEIGHT, CARD_ROW_HEIGHT as GRAPH_CARD_ROW_HEIGHT,
+    GraphLayoutKey, MAX_ZOOM as GRAPH_MAX_ZOOM, MIN_ZOOM as GRAPH_MIN_ZOOM, READABLE_MIN_ZOOM,
+    ROW_LIMIT_STEP, SEARCH_REVEAL_ZOOM, edge_intersects_viewport, fit_camera, graph_layout,
+    initial_collapsed_items, node_intersects_viewport, row_limit, selected_path_edges,
+};
+use style::JsonGraphPalette;
 
 #[derive(Clone, Copy)]
 enum GraphCardRow<'a> {
@@ -68,6 +46,32 @@ fn graph_card_rows<'a>(
     rows
 }
 
+fn search_reveal_row_limit(
+    graph: &JsonGraphProjection,
+    selected: &JsonGraphItemId,
+) -> Option<(JsonGraphItemId, usize)> {
+    graph.nodes.iter().find_map(|node| {
+        let outgoing = graph.edges.iter().filter(|edge| edge.from == node.id);
+        graph_card_rows(node, outgoing)
+            .iter()
+            .position(|row| match row {
+                GraphCardRow::Field(field) => field.id == *selected,
+                GraphCardRow::Child(edge) => edge.to == *selected,
+            })
+            .map(|row| {
+                let required = row + 1;
+                let limit = if required <= model::DEFAULT_ROW_LIMIT {
+                    model::DEFAULT_ROW_LIMIT
+                } else {
+                    model::DEFAULT_ROW_LIMIT
+                        + (required - model::DEFAULT_ROW_LIMIT).div_ceil(ROW_LIMIT_STEP)
+                            * ROW_LIMIT_STEP
+                };
+                (node.id.clone(), limit)
+            })
+    })
+}
+
 pub(super) fn json_graph_node_matches_query(node: &JsonGraphNode, query: &str) -> bool {
     node.label.to_lowercase().contains(query)
         || node.json_path.to_lowercase().contains(query)
@@ -76,197 +80,6 @@ pub(super) fn json_graph_node_matches_query(node: &JsonGraphNode, query: &str) -
                 || field.label.to_lowercase().contains(query)
                 || field.display_value.to_lowercase().contains(query)
         })
-}
-
-fn card_size(node: &JsonGraphNode) -> (f32, f32) {
-    let widest = std::iter::once(node.label.chars().count())
-        .chain(
-            node.fields
-                .iter()
-                .map(|field| field.label.chars().count() + field.display_value.chars().count() + 3),
-        )
-        .max()
-        .unwrap_or(8);
-    let width =
-        (64.0 + widest.min(42) as f32 * 7.0).clamp(GRAPH_CARD_MIN_WIDTH, GRAPH_CARD_MAX_WIDTH);
-    let rows = (node.fields.len() + node.child_count).max(1);
-    let height = GRAPH_CARD_HEADER_HEIGHT + rows as f32 * GRAPH_CARD_ROW_HEIGHT;
-    (width, height)
-}
-
-fn graph_layout<T>(graph: &JsonGraphProjection, collapsed: &HashSet<T>) -> GraphLayout
-where
-    T: Borrow<str> + Eq + Hash,
-{
-    if graph.nodes.is_empty() {
-        return GraphLayout::default();
-    }
-    let index_by_id = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id.as_str(), index))
-        .collect::<HashMap<_, _>>();
-    let mut children = vec![Vec::new(); graph.nodes.len()];
-    let mut parent = vec![None; graph.nodes.len()];
-    for edge in graph.edges.iter() {
-        let (Some(&from), Some(&to)) = (
-            index_by_id.get(edge.from.as_str()),
-            index_by_id.get(edge.to.as_str()),
-        ) else {
-            continue;
-        };
-        children[from].push(to);
-        parent[to] = Some(from);
-    }
-    let roots = parent
-        .iter()
-        .enumerate()
-        .filter_map(|(index, parent)| parent.is_none().then_some(index))
-        .collect::<Vec<_>>();
-    let mut visible = vec![false; graph.nodes.len()];
-    let mut depth = vec![0usize; graph.nodes.len()];
-    let mut stack = roots
-        .iter()
-        .rev()
-        .map(|root| (*root, false))
-        .collect::<Vec<_>>();
-    let mut postorder = Vec::new();
-    while let Some((index, visited)) = stack.pop() {
-        if visited {
-            postorder.push(index);
-            continue;
-        }
-        visible[index] = true;
-        stack.push((index, true));
-        if collapsed.contains(graph.nodes[index].id.as_str()) {
-            continue;
-        }
-        for &child in children[index].iter().rev() {
-            depth[child] = depth[index].saturating_add(1);
-            stack.push((child, false));
-        }
-    }
-    let sizes = graph.nodes.iter().map(card_size).collect::<Vec<_>>();
-    let mut subtree_height = vec![0.0f32; graph.nodes.len()];
-    for &index in &postorder {
-        let child_height = children[index]
-            .iter()
-            .filter(|child| visible[**child])
-            .map(|child| subtree_height[*child])
-            .sum::<f32>();
-        let child_count = children[index]
-            .iter()
-            .filter(|child| visible[**child])
-            .count();
-        let child_height = child_height + GRAPH_ROW_GAP * child_count.saturating_sub(1) as f32;
-        subtree_height[index] = sizes[index].1.max(child_height);
-    }
-    let max_width_by_depth = depth
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| visible[*index])
-        .fold(Vec::<f32>::new(), |mut widths, (index, depth)| {
-            if widths.len() <= *depth {
-                widths.resize(*depth + 1, 0.0);
-            }
-            widths[*depth] = widths[*depth].max(sizes[index].0);
-            widths
-        });
-    let mut x_by_depth = Vec::with_capacity(max_width_by_depth.len());
-    let mut x = GRAPH_CANVAS_PADDING;
-    for width in &max_width_by_depth {
-        x_by_depth.push(x);
-        x += *width + GRAPH_COLUMN_GAP;
-    }
-    let mut positions = vec![None; graph.nodes.len()];
-    let mut root_top = GRAPH_CANVAS_PADDING;
-    let mut queue = roots
-        .iter()
-        .map(|root| {
-            let top = root_top;
-            root_top += subtree_height[*root] + GRAPH_ROW_GAP;
-            (*root, top)
-        })
-        .collect::<Vec<_>>();
-    while let Some((index, subtree_top)) = queue.pop() {
-        if !visible[index] {
-            continue;
-        }
-        let (width, height) = sizes[index];
-        let y = subtree_top + (subtree_height[index] - height) * 0.5;
-        positions[index] = Some(PositionedGraphNode {
-            index,
-            x: x_by_depth[depth[index]],
-            y,
-            width,
-            height,
-        });
-        let mut child_top = subtree_top;
-        for &child in children[index].iter().filter(|child| visible[**child]) {
-            queue.push((child, child_top));
-            child_top += subtree_height[child] + GRAPH_ROW_GAP;
-        }
-    }
-    let nodes = positions.iter().flatten().cloned().collect::<Vec<_>>();
-    let edges = graph
-        .edges
-        .iter()
-        .filter_map(|edge| {
-            let from = *index_by_id.get(edge.from.as_str())?;
-            let to = *index_by_id.get(edge.to.as_str())?;
-            let from = positions[from].as_ref()?;
-            let to = positions[to].as_ref()?;
-            let source_row = graph_card_rows(
-                &graph.nodes[from.index],
-                graph
-                    .edges
-                    .iter()
-                    .filter(|candidate| candidate.from == edge.from),
-            )
-            .iter()
-            .position(|row| {
-                matches!(row, GraphCardRow::Child(candidate) if candidate.parent_port == edge.parent_port)
-            })?;
-            Some(PositionedGraphEdge {
-                from: point(
-                    px(from.x + from.width),
-                    px(from.y
-                        + GRAPH_CARD_HEADER_HEIGHT
-                        + (source_row as f32 + 0.5) * GRAPH_CARD_ROW_HEIGHT),
-                ),
-                to: point(px(to.x), px(to.y + GRAPH_CARD_HEADER_HEIGHT * 0.5)),
-            })
-        })
-        .collect::<Vec<_>>();
-    let width = nodes
-        .iter()
-        .map(|node| node.x + node.width)
-        .fold(0.0, f32::max)
-        + GRAPH_CANVAS_PADDING;
-    let height = nodes
-        .iter()
-        .map(|node| node.y + node.height)
-        .fold(0.0, f32::max)
-        + GRAPH_CANVAS_PADDING;
-    GraphLayout {
-        nodes,
-        edges,
-        width,
-        height,
-    }
-}
-
-fn fit_camera(layout: &GraphLayout, viewport_width: f32, viewport_height: f32) -> (f32, f32, f32) {
-    if layout.width <= 0.0 || layout.height <= 0.0 {
-        return (0.0, 0.0, 1.0);
-    }
-    let zoom = ((viewport_width - 48.0).max(1.0) / layout.width)
-        .min((viewport_height - 48.0).max(1.0) / layout.height)
-        .clamp(GRAPH_MIN_ZOOM, 1.0);
-    let camera_x = ((viewport_width - layout.width * zoom) * 0.5).max(0.0);
-    let camera_y = ((viewport_height - layout.height * zoom) * 0.5).max(0.0);
-    (camera_x, camera_y, zoom)
 }
 
 fn zoom_camera_around(
@@ -318,6 +131,53 @@ fn bounded_graph_content(
             .unwrap_or_else(|| fallback.to_owned().into());
     }
     format!("{byte_len} bytes · {fallback}").into()
+}
+
+/// 图投影路径包含同级物理序号，用于稳定定位重复键；详情和剪贴板只暴露标准 JSONPath。
+fn jsonpath_for_display(internal_path: &str) -> String {
+    let Some(path) = internal_path.strip_prefix('$') else {
+        return internal_path.to_owned();
+    };
+    let mut jsonpath = String::from("$");
+    let path = path.strip_prefix('/').unwrap_or(path);
+    if path.is_empty() {
+        return jsonpath;
+    }
+
+    for segment in path.split('/') {
+        if !segment.contains('#') && segment.chars().all(|character| character.is_ascii_digit()) {
+            jsonpath.push('[');
+            jsonpath.push_str(segment);
+            jsonpath.push(']');
+            continue;
+        }
+
+        let key = segment
+            .rsplit_once('#')
+            .filter(|(_, ordinal)| {
+                !ordinal.is_empty() && ordinal.chars().all(|character| character.is_ascii_digit())
+            })
+            .map_or(segment, |(key, _)| key)
+            .replace("~1", "/")
+            .replace("~0", "~");
+        let shorthand = key
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+            && key
+                .chars()
+                .skip(1)
+                .all(|character| character.is_ascii_alphanumeric() || character == '_');
+        if shorthand {
+            jsonpath.push('.');
+            jsonpath.push_str(&key);
+        } else {
+            jsonpath.push_str("['");
+            jsonpath.push_str(&key.replace('\\', "\\\\").replace('\'', "\\'"));
+            jsonpath.push_str("']");
+        }
+    }
+    jsonpath
 }
 
 fn node_edit_target(snapshot: &JsonGraphSnapshot, node: &JsonGraphNode) -> JsonGraphEditTarget {
@@ -521,7 +381,7 @@ impl DocumentHost {
     ) {
         self.graph_focus_handle.focus(window);
         self.graph_selected_item = Some(id.clone());
-        document_view_state_mut(&mut self.document, &mut self.pending_view_state)
+        document_view_state_mut(&mut self.document, &mut self.tab_view_state)
             .derived
             .entry(DocumentViewId::json_graph())
             .or_default()
@@ -530,6 +390,16 @@ impl DocumentHost {
             self.select_json_source_range(source, true, cx);
         }
         cx.notify();
+    }
+
+    pub(super) fn dismiss_json_graph_details(&mut self) {
+        self.graph_selected_item = None;
+        if let Some(state) = document_view_state_mut(&mut self.document, &mut self.tab_view_state)
+            .derived
+            .get_mut(&DocumentViewId::json_graph())
+        {
+            state.selected_item = None;
+        }
     }
 
     fn navigate_json_graph_search(&mut self, delta: i32, cx: &mut Context<Self>) {
@@ -767,7 +637,19 @@ impl DocumentHost {
         else {
             return;
         };
-        let state = document_view_state_mut(&mut self.document, &mut self.pending_view_state)
+        // 搜索可以命中高密度卡片中尚未构造的行；先提升该卡片的运行时行预算，
+        // 再展开祖先，保证随后布局得到真实端口并能把命中项居中。
+        if let Some((parent, required)) = search_reveal_row_limit(graph, selected) {
+            let limit = self
+                .graph_row_limits
+                .entry(parent)
+                .or_insert(model::DEFAULT_ROW_LIMIT);
+            if required > *limit {
+                *limit = required;
+                self.graph_layout_cache = None;
+            }
+        }
+        let state = document_view_state_mut(&mut self.document, &mut self.tab_view_state)
             .derived
             .entry(DocumentViewId::json_graph())
             .or_default();
@@ -783,6 +665,7 @@ impl DocumentHost {
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings().clone();
         let colors = &theme.colors;
+        let palette = JsonGraphPalette::from_theme(colors);
         let installed_snapshot = self
             .derived_projection_snapshot
             .as_ref()
@@ -843,9 +726,22 @@ impl DocumentHost {
         let graph = installed_snapshot.projection();
         let projection_epoch = installed_snapshot.document_epoch();
         let projection_revision = installed_snapshot.revision();
+        let projection_identity = (
+            installed_snapshot.document_epoch(),
+            installed_snapshot.revision(),
+            installed_snapshot.generation(),
+        );
+        if self.graph_projection_identity != Some(projection_identity) {
+            self.graph_projection_identity = Some(projection_identity);
+            self.graph_row_limits.clear();
+            self.graph_layout_cache = None;
+            self.graph_state_initialized = false;
+            self.graph_needs_fit = true;
+            self.graph_fit_all_requested = false;
+        }
 
         let view_id = DocumentViewId::json_graph();
-        let view_state = document_view_state_mut(&mut self.document, &mut self.pending_view_state)
+        let view_state = document_view_state_mut(&mut self.document, &mut self.tab_view_state)
             .derived
             .entry(view_id.clone())
             .or_default();
@@ -853,12 +749,21 @@ impl DocumentHost {
         if self.graph_last_viewport.is_none_or(|last| {
             (last.0 - viewport.0).abs() > 1.0 || (last.1 - viewport.1).abs() > 1.0
         }) {
+            if let Some(last) = self.graph_last_viewport
+                && !self.graph_needs_fit
+            {
+                let zoom = view_state.zoom.max(f32::EPSILON);
+                let world_x = (last.0 * 0.5 - view_state.camera_x) / zoom;
+                let world_y = (last.1 * 0.5 - view_state.camera_y) / zoom;
+                view_state.camera_x = viewport.0 * 0.5 - world_x * zoom;
+                view_state.camera_y = viewport.1 * 0.5 - world_y * zoom;
+            }
             self.graph_last_viewport = Some(viewport);
-            self.graph_needs_fit = true;
         }
         if !self.graph_state_initialized {
-            // 1,500 项预算已经限制了首屏复杂度；默认完整展开，避免用户误以为深层数据缺失。
-            view_state.collapsed_items.clear();
+            if view_state.collapsed_items.is_empty() {
+                view_state.collapsed_items = initial_collapsed_items(graph, &self.graph_row_limits);
+            }
             self.graph_state_initialized = true;
         }
         let collapsed = view_state
@@ -866,15 +771,41 @@ impl DocumentHost {
             .iter()
             .cloned()
             .collect::<HashSet<_>>();
-        let layout = graph_layout(graph, &collapsed);
+        let layout_key = GraphLayoutKey::new(
+            projection_identity.0,
+            projection_identity.1,
+            projection_identity.2,
+            &collapsed,
+            &self.graph_row_limits,
+        );
+        let layout = if let Some(cache) = self
+            .graph_layout_cache
+            .as_ref()
+            .filter(|cache| cache.key == layout_key)
+        {
+            cache.layout.clone()
+        } else {
+            let layout = Arc::new(graph_layout(graph, &collapsed, &self.graph_row_limits));
+            self.graph_layout_cache = Some(GraphLayoutCache {
+                key: layout_key,
+                layout: layout.clone(),
+            });
+            layout
+        };
         if self.graph_needs_fit
             || (view_state.camera_x == 0.0 && view_state.camera_y == 0.0 && view_state.zoom == 1.0)
         {
-            let (x, y, zoom) = fit_camera(&layout, viewport_width, viewport_height);
+            let minimum_zoom = if self.graph_fit_all_requested {
+                GRAPH_MIN_ZOOM
+            } else {
+                READABLE_MIN_ZOOM
+            };
+            let (x, y, zoom) = fit_camera(&layout, viewport_width, viewport_height, minimum_zoom);
             view_state.camera_x = x;
             view_state.camera_y = y;
             view_state.zoom = zoom;
             self.graph_needs_fit = false;
+            self.graph_fit_all_requested = false;
         }
         if let Some((anchor_id, anchor_position)) = self.graph_recenter_anchor.take()
             && let Some(position) = layout
@@ -893,6 +824,7 @@ impl DocumentHost {
                 .iter()
                 .find(|position| graph.nodes[position.index].id == target)
         {
+            view_state.zoom = view_state.zoom.max(SEARCH_REVEAL_ZOOM);
             view_state.camera_x =
                 viewport_width * 0.5 - (position.x + position.width * 0.5) * view_state.zoom;
             view_state.camera_y =
@@ -906,20 +838,53 @@ impl DocumentHost {
             .read(cx)
             .display_text()
             .to_lowercase();
+        let index_by_id = graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id.as_str(), index))
+            .collect::<HashMap<_, _>>();
         let selected_id = self
             .graph_selected_item
             .as_ref()
             .map(JsonGraphItemId::as_str);
-        let selected_source_range = self.graph_selected_item.as_ref().and_then(|selected| {
-            graph.nodes.iter().find_map(|node| {
-                if node.id == *selected {
-                    return Some(node.source.range.clone());
-                }
-                node.fields
+        let selected_node_index = selected_id.and_then(|id| {
+            index_by_id.get(id).copied().or_else(|| {
+                graph
+                    .nodes
                     .iter()
-                    .find(|field| field.id == *selected)
-                    .map(|field| field.source.range.clone())
+                    .position(|node| node.fields.iter().any(|field| field.id.as_str() == id))
             })
+        });
+        let keyboard_nodes = layout
+            .visible_order
+            .iter()
+            .filter_map(|index| {
+                let node = graph.nodes.get(*index)?;
+                let parent = layout
+                    .parent_by_node
+                    .get(*index)
+                    .and_then(|parent| *parent)
+                    .and_then(|parent| graph.nodes.get(parent))
+                    .map(|parent| parent.id.clone());
+                let first_child = layout
+                    .children_by_node
+                    .get(*index)
+                    .and_then(|children| children.first())
+                    .and_then(|child| graph.nodes.get(*child))
+                    .map(|child| child.id.clone());
+                Some((
+                    node.id.clone(),
+                    node.source.range.clone(),
+                    parent,
+                    first_child,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let keyboard_selected_position = selected_node_index.and_then(|selected| {
+            keyboard_nodes
+                .iter()
+                .position(|(id, _, _, _)| graph.nodes[selected].id == *id)
         });
         let selected_detail = self.graph_selected_item.as_ref().and_then(|selected| {
             graph.nodes.iter().find_map(|node| {
@@ -942,22 +907,43 @@ impl DocumentHost {
                 ))
             })
         });
-        let edge_color = colors.dialog_border.opacity(0.8);
-        let grid_color = colors.dialog_border.opacity(0.18);
+        let selected_edge_color = palette.accent.opacity(0.96);
+        let grid_color = palette.grid;
         let graph_bounds = Arc::new(Mutex::new(None));
+        let selected_edges = selected_path_edges(&layout, selected_node_index);
+        let mut branch_by_index = vec![None; graph.nodes.len()];
+        for node in &layout.nodes {
+            branch_by_index[node.index] = node.branch;
+        }
         let edge_paths = layout
             .edges
             .iter()
+            .filter(|edge| {
+                edge_intersects_viewport(
+                    edge,
+                    camera_x,
+                    camera_y,
+                    zoom,
+                    viewport_width,
+                    viewport_height,
+                )
+            })
             .map(|edge| {
                 let from = point(
-                    px(camera_x + f32::from(edge.from.x) * zoom),
-                    px(camera_y + f32::from(edge.from.y) * zoom),
+                    px(camera_x + edge.from_x * zoom),
+                    px(camera_y + edge.from_y * zoom),
                 );
                 let to = point(
-                    px(camera_x + f32::from(edge.to.x) * zoom),
-                    px(camera_y + f32::from(edge.to.y) * zoom),
+                    px(camera_x + edge.to_x * zoom),
+                    px(camera_y + edge.to_y * zoom),
                 );
-                (from, to)
+                let branch = branch_by_index.get(edge.to_index).copied().flatten();
+                (
+                    from,
+                    to,
+                    selected_edges.contains(&edge.edge_index),
+                    palette.branch(branch, palette.edge),
+                )
             })
             .collect::<Vec<_>>();
         let graph_bounds_for_prepaint = graph_bounds.clone();
@@ -971,37 +957,28 @@ impl DocumentHost {
                 let spacing = (32.0 * zoom).clamp(18.0, 56.0);
                 let width = f32::from(bounds.size.width);
                 let height = f32::from(bounds.size.height);
+                let mut grid = PathBuilder::stroke(px(1.0));
                 let mut x = camera_x.rem_euclid(spacing);
                 while x <= width {
-                    let mut builder = PathBuilder::stroke(px(1.0));
-                    builder.move_to(point(bounds.origin.x + px(x), bounds.origin.y));
-                    builder.line_to(point(
-                        bounds.origin.x + px(x),
-                        bounds.origin.y + bounds.size.height,
-                    ));
-                    if let Ok(path) = builder.build() {
-                        window.paint_path(path, grid_color);
+                    let mut y = camera_y.rem_euclid(spacing);
+                    while y <= height {
+                        let center = point(bounds.origin.x + px(x), bounds.origin.y + px(y));
+                        grid.move_to(point(center.x - px(1.5), center.y));
+                        grid.line_to(point(center.x + px(1.5), center.y));
+                        grid.move_to(point(center.x, center.y - px(1.5)));
+                        grid.line_to(point(center.x, center.y + px(1.5)));
+                        y += spacing;
                     }
                     x += spacing;
                 }
-                let mut y = camera_y.rem_euclid(spacing);
-                while y <= height {
-                    let mut builder = PathBuilder::stroke(px(1.0));
-                    builder.move_to(point(bounds.origin.x, bounds.origin.y + px(y)));
-                    builder.line_to(point(
-                        bounds.origin.x + bounds.size.width,
-                        bounds.origin.y + px(y),
-                    ));
-                    if let Ok(path) = builder.build() {
-                        window.paint_path(path, grid_color);
-                    }
-                    y += spacing;
+                if let Ok(path) = grid.build() {
+                    window.paint_path(path, grid_color);
                 }
-                for (from, to) in edge_paths {
+                for (from, to, selected, branch_color) in edge_paths {
                     let from = point(bounds.origin.x + from.x, bounds.origin.y + from.y);
                     let to = point(bounds.origin.x + to.x, bounds.origin.y + to.y);
                     let control = ((f32::from(to.x - from.x) * 0.5).max(24.0)) as f32;
-                    let mut builder = PathBuilder::stroke(px(1.25));
+                    let mut builder = PathBuilder::stroke(px(if selected { 1.8 } else { 1.1 }));
                     builder.move_to(from);
                     builder.cubic_bezier_to(
                         to,
@@ -1009,7 +986,16 @@ impl DocumentHost {
                         point(to.x - px(control), to.y),
                     );
                     if let Ok(path) = builder.build() {
-                        window.paint_path(path, edge_color);
+                        window.paint_path(
+                            path,
+                            if selected {
+                                selected_edge_color
+                            } else if selected_node_index.is_some() {
+                                branch_color.opacity(0.28)
+                            } else {
+                                branch_color.opacity(0.62)
+                            },
+                        );
                     }
                 }
             },
@@ -1017,12 +1003,6 @@ impl DocumentHost {
         .absolute()
         .size_full();
 
-        let index_by_id = graph
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(index, node)| (node.id.as_str(), index))
-            .collect::<HashMap<_, _>>();
         let mut outgoing_by_parent = HashMap::<&str, Vec<&JsonGraphEdge>>::new();
         for edge in graph.edges.iter() {
             outgoing_by_parent
@@ -1030,45 +1010,67 @@ impl DocumentHost {
                 .or_default()
                 .push(edge);
         }
-        let node_elements = layout.nodes.iter().map(|position| {
-            let node = &graph.nodes[position.index];
-            let id = node.id.clone();
-            let source = node.source.range.clone();
-            let node_kind = node.kind;
-            let node_label = node.label.clone();
-            let node_edit_range = node.source.range.clone();
-            let collapsible = node.child_count > 0;
-            let collapsed = collapsed.contains(node.id.as_str());
-            let selected = selected_id == Some(node.id.as_str());
-            let matches_query = !query.is_empty() && json_graph_node_matches_query(node, &query);
-            let left = camera_x + position.x * zoom;
-            let top = camera_y + position.y * zoom;
-            let width = position.width * zoom;
-            let header_height = GRAPH_CARD_HEADER_HEIGHT * zoom;
-            let row_height = GRAPH_CARD_ROW_HEIGHT * zoom;
-            let toggle_id = id.clone();
-            let context_id = id.clone();
-            let context_bounds = graph_bounds.clone();
-            let toggle_anchor = point(
-                px(left + width * 0.5),
-                px(top + position.height * zoom * 0.5),
-            );
-            let row_elements = graph_card_rows(
-                node,
-                outgoing_by_parent
-                    .get(node.id.as_str())
+        let node_elements = layout
+            .nodes
+            .iter()
+            .filter(|position| {
+                node_intersects_viewport(
+                    position,
+                    camera_x,
+                    camera_y,
+                    zoom,
+                    viewport_width,
+                    viewport_height,
+                )
+            })
+            .map(|position| {
+                let node = &graph.nodes[position.index];
+                let id = node.id.clone();
+                let source = node.source.range.clone();
+                let node_kind = node.kind;
+                let node_label = node.label.clone();
+                let node_edit_range = node.source.range.clone();
+                let collapsible = node.child_count > 0;
+                let collapsed = collapsed.contains(node.id.as_str());
+                let selected = selected_id == Some(node.id.as_str());
+                let matches_query =
+                    !query.is_empty() && json_graph_node_matches_query(node, &query);
+                let branch_color = palette.branch(position.branch, colors.dialog_border);
+                let left = camera_x + position.x * zoom;
+                let top = camera_y + position.y * zoom;
+                let width = position.width * zoom;
+                let header_height = GRAPH_CARD_HEADER_HEIGHT * zoom;
+                let row_height = GRAPH_CARD_ROW_HEIGHT * zoom;
+                let toggle_id = id.clone();
+                let context_id = id.clone();
+                let context_bounds = graph_bounds.clone();
+                let toggle_anchor = point(
+                    px(left + width * 0.5),
+                    px(top + position.height * zoom * 0.5),
+                );
+                let all_rows = graph_card_rows(
+                    node,
+                    outgoing_by_parent
+                        .get(node.id.as_str())
+                        .into_iter()
+                        .flatten()
+                        .copied(),
+                );
+                let visible_limit = row_limit(&node.id, &self.graph_row_limits);
+                let hidden_rows = all_rows.len().saturating_sub(visible_limit);
+                let mut row_elements = all_rows
                     .into_iter()
-                    .flatten()
-                    .copied(),
-            )
-            .into_iter()
-            .map(|row| match row {
-                GraphCardRow::Field(field) => {
-                    let edit_target = field_edit_target(installed_snapshot, field);
-                    let field_id = field.id.clone();
-                    let field_source = field.source.range.clone();
-                    let row_selected = selected_id == Some(field.id.as_str());
-                    div()
+                    .take(visible_limit)
+                    .map(|row| match row {
+                        GraphCardRow::Field(field) => {
+                            let edit_target = field_edit_target(installed_snapshot, field);
+                            let field_id = field.id.clone();
+                            let field_source = field.source.range.clone();
+                            let row_selected = selected_id == Some(field.id.as_str());
+                            let field_value_color = palette.value(field.kind);
+                            let field_label: SharedString = field.label.to_string().into();
+                            let field_value: SharedString = field.display_value.to_string().into();
+                            div()
                         .id(SharedString::from(format!(
                             "json-graph-field-element-{}",
                             field.id.as_str()
@@ -1084,30 +1086,46 @@ impl DocumentHost {
                         .items_center()
                         .gap(px(6.0 * zoom))
                         .border_t(px(1.0))
-                        .border_color(colors.dialog_border.opacity(0.7))
+                        .border_color(colors.dialog_border.opacity(0.58))
                         .bg(if row_selected {
-                            colors.dialog_secondary_button_hover
+                            palette.accent.opacity(0.11)
                         } else {
-                            colors.dialog_surface
+                            palette.surface
                         })
                         .text_size(px((11.0 * zoom).clamp(8.5, 16.0)))
                         .cursor_pointer()
                         .child(
                             div()
+                                .id(SharedString::from(format!(
+                                    "json-graph-field-label-{}",
+                                    field.id.as_str()
+                                )))
                                 .max_w(relative(0.46))
                                 .overflow_hidden()
                                 .truncate()
-                                .text_color(colors.text_link)
-                                .child(field.label.to_string()),
+                                .text_color(palette.text)
+                                .tooltip({
+                                    let text = field_label.clone();
+                                    move |_window, cx| crate::ui::ui_tooltip(text.clone(), cx)
+                                })
+                                .child(field_label),
                         )
                         .child(
                             div()
+                                .id(SharedString::from(format!(
+                                    "json-graph-field-value-{}",
+                                    field.id.as_str()
+                                )))
                                 .min_w(px(0.0))
                                 .flex_1()
                                 .overflow_hidden()
                                 .truncate()
-                                .text_color(colors.dialog_muted)
-                                .child(field.display_value.to_string()),
+                                .text_color(field_value_color)
+                                .tooltip({
+                                    let text = field_value.clone();
+                                    move |_window, cx| crate::ui::ui_tooltip(text.clone(), cx)
+                                })
+                                .child(field_value),
                         )
                         .child(
                             div()
@@ -1147,30 +1165,36 @@ impl DocumentHost {
                                     ),
                                 ),
                         )
-                }
-                GraphCardRow::Child(edge) => {
-                    let child = index_by_id
-                        .get(edge.to.as_str())
-                        .and_then(|index| graph.nodes.get(*index));
-                    let child_summary = child
-                        .map(|child| {
-                            let marker = match child.kind {
-                                JsonValueKind::Array => "[…]",
-                                JsonValueKind::Object => "{…}",
-                                _ => "→",
-                            };
-                            format!("{marker} · {}", child.fields.len() + child.child_count)
-                        })
-                        .unwrap_or_else(|| "→".to_owned());
-                    let child_id = edge.to.clone();
-                    let child_source = edge.source.range.clone();
-                    let edit_target =
-                        child.map(|child| node_edit_target(installed_snapshot, child));
-                    let row_selected = selected_id == Some(edge.to.as_str());
-                    let row_selector =
-                        format!("json-graph-child-row-{}", edge.parent_port.as_str());
-                    let port_selector = format!("json-graph-port-{}", edge.parent_port.as_str());
-                    div()
+                        }
+                        GraphCardRow::Child(edge) => {
+                            let child = index_by_id
+                                .get(edge.to.as_str())
+                                .and_then(|index| graph.nodes.get(*index));
+                            let child_summary = child
+                                .map(|child| {
+                                    let marker = match child.kind {
+                                        JsonValueKind::Array => "[…]",
+                                        JsonValueKind::Object => "{…}",
+                                        _ => "→",
+                                    };
+                                    format!("{marker} · {}", child.fields.len() + child.child_count)
+                                })
+                                .unwrap_or_else(|| "→".to_owned());
+                            let child_id = edge.to.clone();
+                            let child_source = edge.source.range.clone();
+                            let edit_target =
+                                child.map(|child| node_edit_target(installed_snapshot, child));
+                            let row_selected = selected_id == Some(edge.to.as_str());
+                            let child_branch = child
+                                .and_then(|child| index_by_id.get(child.id.as_str()))
+                                .and_then(|index| branch_by_index.get(*index).copied().flatten());
+                            let child_color = palette.branch(child_branch, branch_color);
+                            let child_label: SharedString = edge.label.to_string().into();
+                            let row_selector =
+                                format!("json-graph-child-row-{}", edge.parent_port.as_str());
+                            let port_selector =
+                                format!("json-graph-port-{}", edge.parent_port.as_str());
+                            div()
                         .id(SharedString::from(row_selector.clone()))
                         .debug_selector(move || row_selector.clone())
                         .relative()
@@ -1181,22 +1205,30 @@ impl DocumentHost {
                         .items_center()
                         .gap(px(6.0 * zoom))
                         .border_t(px(1.0))
-                        .border_color(colors.dialog_border.opacity(0.7))
+                        .border_color(colors.dialog_border.opacity(0.58))
                         .bg(if row_selected {
-                            colors.dialog_secondary_button_hover
+                            palette.accent.opacity(0.11)
                         } else {
-                            colors.dialog_surface
+                            palette.surface
                         })
                         .text_size(px((11.0 * zoom).clamp(8.5, 16.0)))
                         .cursor_pointer()
                         .child(
                             div()
+                                .id(SharedString::from(format!(
+                                    "json-graph-child-label-{}",
+                                    edge.parent_port.as_str()
+                                )))
                                 .min_w(px(0.0))
                                 .flex_1()
                                 .overflow_hidden()
                                 .truncate()
-                                .text_color(colors.text_link)
-                                .child(edge.label.to_string()),
+                                .text_color(palette.text)
+                                .tooltip({
+                                    let text = child_label.clone();
+                                    move |_window, cx| crate::ui::ui_tooltip(text.clone(), cx)
+                                })
+                                .child(child_label),
                         )
                         .child(div().text_color(colors.dialog_muted).child(child_summary))
                         .child(
@@ -1208,8 +1240,8 @@ impl DocumentHost {
                                 .size(px((10.0 * zoom).max(7.0)))
                                 .rounded_full()
                                 .border(px(1.0))
-                                .border_color(colors.dialog_border)
-                                .bg(colors.dialog_surface),
+                                .border_color(child_color.opacity(0.72))
+                                .bg(child_color.opacity(0.2)),
                         )
                         .child(
                             div()
@@ -1243,163 +1275,232 @@ impl DocumentHost {
                                     ),
                                 ),
                         )
-                }
-            })
-            .collect::<Vec<_>>();
-            div()
-                .id(SharedString::from(format!(
-                    "json-graph-node-{}",
-                    node.id.as_str()
-                )))
-                .debug_selector({
-                    let id = node.id.as_str().to_owned();
-                    move || format!("json-graph-node-{id}")
-                })
-                .absolute()
-                .left(px(left))
-                .top(px(top))
-                .w(px(width))
-                .rounded(px(8.0 * zoom.max(0.75)))
-                .border(px(if selected || matches_query { 2.0 } else { 1.0 }))
-                .border_color(if selected || matches_query {
-                    colors.text_link
-                } else {
-                    colors.dialog_border
-                })
-                .bg(colors.dialog_surface)
-                .shadow_sm()
-                .cursor_pointer()
-                .child(
-                    div()
-                        .h(px(header_height))
-                        .px(px(10.0 * zoom))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .bg(colors.dialog_secondary_button_bg)
-                        .text_size(px((12.0 * zoom).clamp(9.0, 18.0)))
-                        .text_color(colors.text_default)
-                        .child(
-                            div()
-                                .min_w(px(0.0))
-                                .truncate()
-                                .child(node.label.to_string()),
-                        )
-                        .children(collapsible.then(|| {
-                            div()
-                                .id(SharedString::from(format!(
-                                    "json-graph-collapse-{}",
-                                    node.id.as_str()
-                                )))
-                                .size(px((20.0 * zoom).max(16.0)))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(4.0))
-                                .hover(|button| button.bg(colors.dialog_secondary_button_hover))
-                                .child(if collapsed { "+" } else { "−" })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.graph_recenter_anchor =
-                                        Some((toggle_id.clone(), toggle_anchor));
-                                    let state = document_view_state_mut(
-                                        &mut this.document,
-                                        &mut this.pending_view_state,
-                                    )
-                                    .derived
-                                    .entry(DocumentViewId::json_graph())
-                                    .or_default();
-                                    if let Some(index) = state
-                                        .collapsed_items
-                                        .iter()
-                                        .position(|item| item.as_ref() == toggle_id.as_str())
-                                    {
-                                        state.collapsed_items.remove(index);
-                                    } else {
-                                        state.collapsed_items.push(Arc::from(toggle_id.as_str()));
-                                    }
-                                    cx.notify();
-                                }))
-                        })),
-                )
-                .children(row_elements)
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                        let origin = context_bounds
-                            .lock()
-                            .ok()
-                            .and_then(|bounds| *bounds)
-                            .map(|bounds| bounds.origin)
-                            .unwrap_or_default();
-                        this.graph_context_menu = Some(JsonGraphContextMenu {
-                            node: context_id.clone(),
-                            position: point(
-                                event.position.x - origin.x,
-                                event.position.y - origin.y,
-                            ),
-                        });
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                )
-                .on_click(
-                    cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.graph_context_menu = None;
-                        this.select_json_graph_item(id.clone(), source.clone(), window, cx);
-                        if event.click_count() >= 2 {
-                            this.begin_json_graph_edit(
-                                JsonGraphEditTarget {
-                                    item_id: id.clone(),
-                                    range: node_edit_range.clone(),
-                                    document_epoch: projection_epoch,
-                                    base_revision: projection_revision,
-                                    label: node_label.clone(),
-                                    kind: node_kind,
-                                },
-                                window,
-                                cx,
-                            );
                         }
-                    }),
-                )
-        });
-
-        let control_button =
-            |id: &'static str, icon: &'static str, glyph_offset_y: f32, tooltip: SharedString| {
+                    })
+                    .collect::<Vec<_>>();
+                if hidden_rows > 0 {
+                    let reveal_id = id.clone();
+                    let reveal_anchor = toggle_anchor;
+                    let reveal_count = hidden_rows.min(ROW_LIMIT_STEP);
+                    row_elements.push(
+                        div()
+                            .id(SharedString::from(format!(
+                                "json-graph-show-more-{}",
+                                node.id.as_str()
+                            )))
+                            .debug_selector({
+                                let id = node.id.as_str().to_owned();
+                                move || format!("json-graph-show-more-{id}")
+                            })
+                            .h(px(row_height))
+                            .px(px(10.0 * zoom))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .border_t(px(1.0))
+                            .border_color(colors.dialog_border.opacity(0.58))
+                            .bg(palette.surface)
+                            .text_size(px((10.5 * zoom).clamp(8.5, 15.0)))
+                            .text_color(colors.text_link)
+                            .cursor_pointer()
+                            .hover(|row| row.bg(colors.dialog_secondary_button_hover))
+                            .child(
+                                strings
+                                    .json_graph_show_more_template
+                                    .replace("{count}", &reveal_count.to_string()),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.graph_recenter_anchor =
+                                    Some((reveal_id.clone(), reveal_anchor));
+                                let limit = this
+                                    .graph_row_limits
+                                    .entry(reveal_id.clone())
+                                    .or_insert(model::DEFAULT_ROW_LIMIT);
+                                *limit = limit.saturating_add(ROW_LIMIT_STEP);
+                                this.graph_layout_cache = None;
+                                cx.notify();
+                            })),
+                    );
+                }
                 div()
-                    .id(id)
-                    .debug_selector(move || id.to_owned())
-                    .size(px(28.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.0))
-                    .border(px(1.0))
-                    .border_color(colors.dialog_border)
-                    .bg(colors.dialog_surface)
-                    .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                    .id(SharedString::from(format!(
+                        "json-graph-node-{}",
+                        node.id.as_str()
+                    )))
+                    .debug_selector({
+                        let id = node.id.as_str().to_owned();
+                        move || format!("json-graph-node-{id}")
+                    })
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .w(px(width))
+                    .rounded(px(10.0 * zoom.max(0.75)))
+                    .border(px(if selected || matches_query { 2.0 } else { 1.0 }))
+                    .border_color(if selected {
+                        palette.accent
+                    } else if matches_query {
+                        palette.search
+                    } else {
+                        branch_color.opacity(0.52)
+                    })
+                    .bg(palette.surface)
+                    .when(selected, |card| card.shadow_md())
                     .cursor_pointer()
-                    .occlude()
-                    .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
                     .child(
-                        svg()
-                            .path(icon)
-                            .size(px(14.0))
-                            .relative()
-                            .top(px(glyph_offset_y))
-                            .text_color(colors.dialog_body),
+                        div()
+                            .h(px(header_height))
+                            .px(px(10.0 * zoom))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .rounded_t(px(9.0 * zoom.max(0.75)))
+                            .bg(if matches_query && !selected {
+                                palette.search.opacity(0.13)
+                            } else {
+                                branch_color.opacity(0.18)
+                            })
+                            .text_size(px((12.0 * zoom).clamp(9.0, 18.0)))
+                            .text_color(colors.text_default)
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "json-graph-node-label-{}",
+                                        node.id.as_str()
+                                    )))
+                                    .min_w(px(0.0))
+                                    .truncate()
+                                    .tooltip({
+                                        let text: SharedString = node.label.to_string().into();
+                                        move |_window, cx| crate::ui::ui_tooltip(text.clone(), cx)
+                                    })
+                                    .child(node.label.to_string()),
+                            )
+                            .children(collapsible.then(|| {
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "json-graph-collapse-{}",
+                                        node.id.as_str()
+                                    )))
+                                    .size(px((20.0 * zoom).max(16.0)))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.0))
+                                    .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                                    .child(if collapsed { "+" } else { "−" })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.graph_recenter_anchor =
+                                            Some((toggle_id.clone(), toggle_anchor));
+                                        let state = document_view_state_mut(
+                                            &mut this.document,
+                                            &mut this.tab_view_state,
+                                        )
+                                        .derived
+                                        .entry(DocumentViewId::json_graph())
+                                        .or_default();
+                                        if let Some(index) = state
+                                            .collapsed_items
+                                            .iter()
+                                            .position(|item| item.as_ref() == toggle_id.as_str())
+                                        {
+                                            state.collapsed_items.remove(index);
+                                        } else {
+                                            state
+                                                .collapsed_items
+                                                .push(Arc::from(toggle_id.as_str()));
+                                        }
+                                        cx.notify();
+                                    }))
+                            })),
                     )
-            };
+                    .children(row_elements)
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            let origin = context_bounds
+                                .lock()
+                                .ok()
+                                .and_then(|bounds| *bounds)
+                                .map(|bounds| bounds.origin)
+                                .unwrap_or_default();
+                            this.graph_context_menu = Some(JsonGraphContextMenu {
+                                node: context_id.clone(),
+                                position: point(
+                                    event.position.x - origin.x,
+                                    event.position.y - origin.y,
+                                ),
+                            });
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.graph_context_menu = None;
+                            this.select_json_graph_item(id.clone(), source.clone(), window, cx);
+                            if event.click_count() >= 2 {
+                                this.begin_json_graph_edit(
+                                    JsonGraphEditTarget {
+                                        item_id: id.clone(),
+                                        range: node_edit_range.clone(),
+                                        document_epoch: projection_epoch,
+                                        base_revision: projection_revision,
+                                        label: node_label.clone(),
+                                        kind: node_kind,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }),
+                    )
+            });
+
+        let control_button = |id: &'static str,
+                              icon: &'static str,
+                              glyph_size: f32,
+                              glyph_offset_x: f32,
+                              glyph_offset_y: f32,
+                              tooltip: SharedString| {
+            div()
+                .id(id)
+                .debug_selector(move || id.to_owned())
+                .size(px(28.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .border(px(1.0))
+                .border_color(colors.dialog_border)
+                .bg(colors.dialog_surface)
+                .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                .cursor_pointer()
+                .occlude()
+                .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(glyph_size))
+                        .relative()
+                        .left(px(glyph_offset_x))
+                        .top(px(glyph_offset_y))
+                        .text_color(colors.dialog_body),
+                )
+        };
         let zoom_out = control_button(
             "json-graph-zoom-out",
             "icon/ui/minus.svg",
+            14.0,
+            0.0,
             0.0,
             strings.json_graph_zoom_out.clone().into(),
         )
         .on_click(cx.listener(|this, _, _, cx| {
-            let state = document_view_state_mut(&mut this.document, &mut this.pending_view_state)
+            let state = document_view_state_mut(&mut this.document, &mut this.tab_view_state)
                 .derived
                 .entry(DocumentViewId::json_graph())
                 .or_default();
@@ -1409,23 +1510,58 @@ impl DocumentHost {
         let zoom_in = control_button(
             "json-graph-zoom-in",
             "icon/ui/plus.svg",
+            14.0,
+            0.0,
             0.0,
             strings.json_graph_zoom_in.clone().into(),
         )
         .on_click(cx.listener(|this, _, _, cx| {
-            let state = document_view_state_mut(&mut this.document, &mut this.pending_view_state)
+            let state = document_view_state_mut(&mut this.document, &mut this.tab_view_state)
                 .derived
                 .entry(DocumentViewId::json_graph())
                 .or_default();
             state.zoom = (state.zoom + 0.1).clamp(GRAPH_MIN_ZOOM, GRAPH_MAX_ZOOM);
             cx.notify();
         }));
+        let actual_size = div()
+            .id("json-graph-actual-size")
+            .debug_selector(|| "json-graph-actual-size".to_owned())
+            .h(px(28.0))
+            .min_w(px(48.0))
+            .px(px(8.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .text_size(px(11.0))
+            .text_color(colors.dialog_body)
+            .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+            .tooltip(|_window, cx| crate::ui::ui_tooltip("实际大小（100%）", cx))
+            .child(format!("{}%", (zoom * 100.0).round() as i32))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let state = document_view_state_mut(&mut this.document, &mut this.tab_view_state)
+                    .derived
+                    .entry(DocumentViewId::json_graph())
+                    .or_default();
+                let world_x =
+                    (viewport_width * 0.5 - state.camera_x) / state.zoom.max(f32::EPSILON);
+                let world_y =
+                    (viewport_height * 0.5 - state.camera_y) / state.zoom.max(f32::EPSILON);
+                state.zoom = 1.0;
+                state.camera_x = viewport_width * 0.5 - world_x;
+                state.camera_y = viewport_height * 0.5 - world_y;
+                cx.notify();
+            }));
         let fit_layout = layout.clone();
         let fit_bounds = graph_bounds.clone();
+        // refresh.svg 的右侧弧线靠近 viewBox 边缘；缩小后居中绘制，避免高 DPI 下被裁剪。
         let fit = control_button(
             "json-graph-fit",
             "icon/ui/refresh.svg",
-            -1.0,
+            12.0,
+            0.0,
+            0.0,
             strings.json_graph_fit.clone().into(),
         )
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -1435,8 +1571,8 @@ impl DocumentHost {
                 .and_then(|bounds| *bounds)
                 .map(|bounds| (f32::from(bounds.size.width), f32::from(bounds.size.height)))
                 .unwrap_or((viewport_width, viewport_height));
-            let (x, y, zoom) = fit_camera(&fit_layout, actual_width, actual_height);
-            let state = document_view_state_mut(&mut this.document, &mut this.pending_view_state)
+            let (x, y, zoom) = fit_camera(&fit_layout, actual_width, actual_height, GRAPH_MIN_ZOOM);
+            let state = document_view_state_mut(&mut this.document, &mut this.tab_view_state)
                 .derived
                 .entry(DocumentViewId::json_graph())
                 .or_default();
@@ -1488,6 +1624,8 @@ impl DocumentHost {
             control_button(
                 "json-graph-search-previous",
                 "icon/ui/chevron-up.svg",
+                14.0,
+                0.0,
                 0.0,
                 strings.json_graph_search_previous.clone().into(),
             )
@@ -1497,6 +1635,8 @@ impl DocumentHost {
             control_button(
                 "json-graph-search-next",
                 "icon/ui/chevron-down.svg",
+                14.0,
+                0.0,
                 0.0,
                 strings.json_graph_search_next.clone().into(),
             )
@@ -1574,37 +1714,39 @@ impl DocumentHost {
             .absolute()
             .top(px(10.0))
             .left(px(10.0))
-            .right(px(10.0))
             .h(px(32.0))
             .flex()
             .items_center()
-            .gap(px(8.0))
-            .justify_between()
+            .gap(px(5.0))
             .occlude()
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .items_center()
-                    .gap(px(5.0))
-                    .child(search)
-                    .children(search_count)
-                    .children(search_previous)
-                    .children(search_next),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(5.0))
-                    .children(reset_root)
-                    .children(focus_subtree)
-                    .child(fit)
-                    .child(zoom_out)
-                    .child(zoom_in),
-            );
+            .child(search)
+            .children(search_count)
+            .children(search_previous)
+            .children(search_next)
+            .children(reset_root)
+            .children(focus_subtree);
+        let zoom_toolbar = div()
+            .id("json-graph-zoom-toolbar")
+            .debug_selector(|| "json-graph-zoom-toolbar".to_owned())
+            .absolute()
+            .bottom(px(12.0))
+            .left(relative(0.5))
+            .ml(px(-77.0))
+            .h(px(36.0))
+            .px(px(4.0))
+            .flex()
+            .items_center()
+            .gap(px(3.0))
+            .rounded(px(9.0))
+            .border(px(1.0))
+            .border_color(colors.dialog_border)
+            .bg(colors.dialog_surface)
+            .shadow_md()
+            .occlude()
+            .child(zoom_out)
+            .child(actual_size)
+            .child(zoom_in)
+            .child(fit);
         let stale_banner = self.derived_projection_stale.then(|| {
             let detail = self
                 .derived_projection_error
@@ -1641,7 +1783,7 @@ impl DocumentHost {
         let truncated_banner = graph.truncated.then(|| {
             div()
                 .absolute()
-                .bottom(px(10.0))
+                .bottom(px(56.0))
                 .left(px(10.0))
                 .px(px(10.0))
                 .h(px(30.0))
@@ -1656,17 +1798,27 @@ impl DocumentHost {
                 .child(strings.json_graph_truncated.clone())
         });
         let detail_panel = selected_detail.map(|(json_path, content, edit_target)| {
-            let panel_width = viewport_width.min(440.0).max(280.0);
-            let panel_left = ((viewport_width - panel_width) * 0.5).max(12.0);
-            let panel_top = ((viewport_height - 360.0) * 0.42).max(72.0);
+            let json_path = jsonpath_for_display(&json_path);
+            let copy_path = json_path.clone();
+            let wide = viewport_width >= 820.0;
+            let panel_width = 360.0_f32.min((viewport_width - 24.0).max(280.0));
+            let panel_top = if wide {
+                54.0
+            } else {
+                (viewport_height - viewport_height.min(320.0) - 12.0).max(54.0)
+            };
             div()
                 .id("json-graph-node-details")
                 .debug_selector(|| "json-graph-node-details".to_owned())
                 .absolute()
-                .left(px(panel_left))
                 .top(px(panel_top))
-                .w(px(panel_width))
-                .max_h(px((viewport_height - 96.0).max(240.0)))
+                .when(wide, |panel| panel.right(px(12.0)).w(px(panel_width)))
+                .when(!wide, |panel| panel.left(px(12.0)).right(px(12.0)))
+                .max_h(px(if wide {
+                    (viewport_height - 66.0).max(240.0)
+                } else {
+                    viewport_height.min(320.0)
+                }))
                 .p(px(14.0))
                 .flex()
                 .flex_col()
@@ -1694,6 +1846,27 @@ impl DocumentHost {
                                 .flex()
                                 .items_center()
                                 .gap(px(5.0))
+                                .child(
+                                    div()
+                                        .id("json-graph-node-details-copy-path")
+                                        .h(px(26.0))
+                                        .px(px(8.0))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(5.0))
+                                        .cursor_pointer()
+                                        .text_size(px(11.0))
+                                        .text_color(colors.dialog_body)
+                                        .hover(|button| {
+                                            button.bg(colors.dialog_secondary_button_hover)
+                                        })
+                                        .child(strings.json_graph_copy_path.clone())
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy_path.clone(),
+                                            ));
+                                        })),
+                                )
                                 .child(
                                     div()
                                         .id("json-graph-node-details-edit")
@@ -1743,16 +1916,7 @@ impl DocumentHost {
                                                 .text_color(colors.dialog_muted),
                                         )
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.graph_selected_item = None;
-                                            if let Some(state) = document_view_state_mut(
-                                                &mut this.document,
-                                                &mut this.pending_view_state,
-                                            )
-                                            .derived
-                                            .get_mut(&DocumentViewId::json_graph())
-                                            {
-                                                state.selected_item = None;
-                                            }
+                                            this.dismiss_json_graph_details();
                                             cx.notify();
                                         })),
                                 ),
@@ -1796,6 +1960,8 @@ impl DocumentHost {
                         )
                         .child(
                             div()
+                                .id("json-graph-node-details-path")
+                                .debug_selector(|| "json-graph-node-details-path".to_owned())
                                 .p(px(9.0))
                                 .overflow_hidden()
                                 .truncate()
@@ -1804,14 +1970,14 @@ impl DocumentHost {
                                 .font_family(source_monospace_font_family())
                                 .text_size(px(11.0))
                                 .text_color(colors.text_link)
-                                .child(json_path.to_string()),
+                                .child(json_path),
                         ),
                 )
         });
         let context_menu = self.graph_context_menu.as_ref().and_then(|menu| {
             let node = graph.nodes.iter().find(|node| node.id == menu.node)?;
             let source = node.source.range.clone();
-            let json_path = node.json_path.to_string();
+            let json_path = jsonpath_for_display(&node.json_path);
             let content = bounded_node_content(self.document.as_ref(), node);
             let node_id = node.id.clone();
             let edit_target = node_edit_target(installed_snapshot, node);
@@ -1947,7 +2113,7 @@ impl DocumentHost {
                                         this.graph_context_menu = None;
                                         let state = document_view_state_mut(
                                             &mut this.document,
-                                            &mut this.pending_view_state,
+                                            &mut this.tab_view_state,
                                         )
                                         .derived
                                         .entry(DocumentViewId::json_graph())
@@ -1996,8 +2162,31 @@ impl DocumentHost {
                     ),
             )
         });
+        let graph_background = div()
+            .id("json-graph-background-hit-target")
+            .debug_selector(|| "json-graph-background-hit-target".to_owned())
+            .absolute()
+            .size_full()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.graph_selected_item.is_some() {
+                        cx.stop_propagation();
+                        this.dismiss_json_graph_details();
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.graph_selected_item.is_some() {
+                    cx.stop_propagation();
+                    this.dismiss_json_graph_details();
+                    cx.notify();
+                }
+            }));
 
         let graph_bounds_for_scroll = graph_bounds.clone();
+        let graph_bounds_for_capture = graph_bounds.clone();
         let split_canvas = self.view_mode == DocumentHostViewMode::Split;
         div()
             .id("json-graph-canvas")
@@ -2007,7 +2196,7 @@ impl DocumentHost {
             .overflow_hidden()
             .border(px(if split_canvas { 0.0 } else { 1.0 }))
             .border_color(hsla(0.0, 0.0, 0.0, 0.0))
-            .bg(colors.editor_background)
+            .bg(palette.canvas)
             .tab_index(0)
             .track_focus(&self.graph_focus_handle)
             .focus(move |canvas| {
@@ -2017,13 +2206,46 @@ impl DocumentHost {
                     colors.text_link
                 })
             })
+            .capture_any_mouse_down(cx.listener(
+                move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    if this.graph_selected_item.is_none() {
+                        return;
+                    }
+                    let origin = graph_bounds_for_capture
+                        .lock()
+                        .ok()
+                        .and_then(|bounds| *bounds)
+                        .map(|bounds| bounds.origin)
+                        .unwrap_or_default();
+                    let x = f32::from(event.position.x - origin.x);
+                    let y = f32::from(event.position.y - origin.y);
+                    let wide = viewport_width >= 820.0;
+                    let left = if wide {
+                        (viewport_width - 372.0).max(12.0)
+                    } else {
+                        12.0
+                    };
+                    let right = viewport_width - 12.0;
+                    let top = if wide {
+                        54.0
+                    } else {
+                        (viewport_height - viewport_height.min(320.0) - 12.0).max(54.0)
+                    };
+                    let bottom = viewport_height - 12.0;
+                    if x < left || x > right || y < top || y > bottom {
+                        this.dismiss_json_graph_details();
+                        cx.notify();
+                    }
+                },
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                     this.graph_focus_handle.focus(window);
                     this.graph_context_menu = None;
+                    this.dismiss_json_graph_details();
                     let state =
-                        document_view_state_mut(&mut this.document, &mut this.pending_view_state)
+                        document_view_state_mut(&mut this.document, &mut this.tab_view_state)
                             .derived
                             .entry(DocumentViewId::json_graph())
                             .or_default();
@@ -2038,11 +2260,10 @@ impl DocumentHost {
                 let Some((origin, camera_x, camera_y)) = this.graph_pan_session else {
                     return;
                 };
-                let state =
-                    document_view_state_mut(&mut this.document, &mut this.pending_view_state)
-                        .derived
-                        .entry(DocumentViewId::json_graph())
-                        .or_default();
+                let state = document_view_state_mut(&mut this.document, &mut this.tab_view_state)
+                    .derived
+                    .entry(DocumentViewId::json_graph())
+                    .or_default();
                 state.camera_x = camera_x + f32::from(event.position.x - origin.x);
                 state.camera_y = camera_y + f32::from(event.position.y - origin.y);
                 cx.notify();
@@ -2057,11 +2278,10 @@ impl DocumentHost {
             )
             .on_scroll_wheel(cx.listener(move |this, event: &ScrollWheelEvent, _, cx| {
                 let delta = event.delta.pixel_delta(px(28.0));
-                let state =
-                    document_view_state_mut(&mut this.document, &mut this.pending_view_state)
-                        .derived
-                        .entry(DocumentViewId::json_graph())
-                        .or_default();
+                let state = document_view_state_mut(&mut this.document, &mut this.tab_view_state)
+                    .derived
+                    .entry(DocumentViewId::json_graph())
+                    .or_default();
                 if event.modifiers.control || event.modifiers.platform {
                     let old_zoom = state.zoom.clamp(GRAPH_MIN_ZOOM, GRAPH_MAX_ZOOM);
                     let new_zoom = (old_zoom + (-f32::from(delta.y) / 700.0))
@@ -2089,23 +2309,95 @@ impl DocumentHost {
                 }
                 cx.notify();
             }))
-            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key != "enter" {
-                    return;
-                }
-                let Some(range) = selected_source_range.clone() else {
-                    return;
-                };
-                cx.stop_propagation();
-                let preserve_split = this.view_mode == DocumentHostViewMode::Split;
-                this.select_json_source_range(range, preserve_split, cx);
-                if !preserve_split {
-                    cx.emit(DocumentHostEvent::ViewModeChanged(DocumentHostMode::Source));
-                }
-            }))
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    if key == "escape" {
+                        if this.graph_selected_item.is_some() {
+                            this.dismiss_json_graph_details();
+                        } else if this.graph_context_menu.take().is_none() {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+
+                    let current = keyboard_selected_position.unwrap_or(0);
+                    let mut target = None;
+                    match key {
+                        "up" if !keyboard_nodes.is_empty() => {
+                            target = keyboard_nodes.get(current.saturating_sub(1)).cloned();
+                        }
+                        "down" if !keyboard_nodes.is_empty() => {
+                            target = keyboard_nodes
+                                .get((current + 1).min(keyboard_nodes.len() - 1))
+                                .cloned();
+                        }
+                        "left" | "right" | "space" if !keyboard_nodes.is_empty() => {
+                            let (id, _, parent, first_child) = &keyboard_nodes[current];
+                            let state = document_view_state_mut(
+                                &mut this.document,
+                                &mut this.tab_view_state,
+                            )
+                            .derived
+                            .entry(DocumentViewId::json_graph())
+                            .or_default();
+                            let collapsed = state
+                                .collapsed_items
+                                .iter()
+                                .any(|item| item.as_ref() == id.as_str());
+                            if key == "left" && first_child.is_some() && !collapsed {
+                                state.collapsed_items.push(Arc::from(id.as_str()));
+                            } else if key == "left" {
+                                target = parent.as_ref().and_then(|parent| {
+                                    keyboard_nodes
+                                        .iter()
+                                        .find(|(id, _, _, _)| id == parent)
+                                        .cloned()
+                                });
+                            } else if key == "right" && collapsed {
+                                state
+                                    .collapsed_items
+                                    .retain(|item| item.as_ref() != id.as_str());
+                            } else if key == "right" {
+                                target = first_child.as_ref().and_then(|child| {
+                                    keyboard_nodes
+                                        .iter()
+                                        .find(|(id, _, _, _)| id == child)
+                                        .cloned()
+                                });
+                            } else if first_child.is_some() {
+                                if collapsed {
+                                    state
+                                        .collapsed_items
+                                        .retain(|item| item.as_ref() != id.as_str());
+                                } else {
+                                    state.collapsed_items.push(Arc::from(id.as_str()));
+                                }
+                            }
+                        }
+                        "enter" if !keyboard_nodes.is_empty() => {
+                            // 选中即展示检查器；无内部游标时 Enter 从首节点开始。
+                            if keyboard_selected_position.is_none() {
+                                target = keyboard_nodes.first().cloned();
+                            }
+                        }
+                        _ => return,
+                    }
+                    if let Some((id, range, _, _)) = target {
+                        this.graph_pending_center = Some(id.clone());
+                        this.select_json_graph_item(id, range, window, cx);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
             .child(edges)
+            .child(graph_background)
             .children(node_elements)
             .child(toolbar)
+            .child(zoom_toolbar)
             .children(stale_banner)
             .children(truncated_banner)
             .children(detail_panel)
@@ -2135,7 +2427,7 @@ impl DocumentHost {
         self.scroll_source_line(line, ScrollStrategy::Center);
         if !preserve_split {
             self.view_mode = DocumentHostViewMode::Source;
-            self.sync_session_active_view();
+            self.sync_tab_active_view();
         }
         cx.notify();
     }
@@ -2200,22 +2492,22 @@ mod tests {
             .into(),
             truncated: false,
         };
-        let first = graph_layout(&graph, &HashSet::<&str>::new());
-        let second = graph_layout(&graph, &HashSet::<&str>::new());
+        let first = graph_layout(&graph, &HashSet::<Arc<str>>::new(), &HashMap::new());
+        let second = graph_layout(&graph, &HashSet::<Arc<str>>::new(), &HashMap::new());
         assert_eq!(first, second);
         let a = first.nodes.iter().find(|node| node.index == 1).unwrap();
         let b = first.nodes.iter().find(|node| node.index == 2).unwrap();
-        assert!(a.y + a.height + GRAPH_ROW_GAP <= b.y || b.y + b.height + GRAPH_ROW_GAP <= a.y);
+        assert!(a.y + a.height + model::ROW_GAP <= b.y || b.y + b.height + model::ROW_GAP <= a.y);
         assert_eq!(first.edges.len(), 2);
         let root = first.nodes.iter().find(|node| node.index == 0).unwrap();
         let edge = &first.edges[0];
-        assert_eq!(f32::from(edge.from.x), root.x + root.width);
+        assert_eq!(edge.from_x, root.x + root.width);
         assert_eq!(
-            f32::from(edge.from.y),
+            edge.from_y,
             root.y + GRAPH_CARD_HEADER_HEIGHT + 1.5 * GRAPH_CARD_ROW_HEIGHT
         );
-        assert_eq!(f32::from(edge.to.x), a.x);
-        assert_eq!(f32::from(edge.to.y), a.y + GRAPH_CARD_HEADER_HEIGHT * 0.5);
+        assert_eq!(edge.to_x, a.x);
+        assert_eq!(edge.to_y, a.y + GRAPH_CARD_HEADER_HEIGHT * 0.5);
     }
 
     #[test]
@@ -2236,11 +2528,11 @@ mod tests {
             .into(),
             truncated: false,
         };
-        let collapsed = HashSet::from(["root"]);
-        let layout = graph_layout(&graph, &collapsed);
+        let collapsed = HashSet::from([Arc::<str>::from("root")]);
+        let layout = graph_layout(&graph, &collapsed, &HashMap::new());
         assert_eq!(layout.nodes.len(), 1);
         assert!(layout.edges.is_empty());
-        let (_, _, zoom) = fit_camera(&layout, 320.0, 200.0);
+        let (_, _, zoom) = fit_camera(&layout, 320.0, 200.0, GRAPH_MIN_ZOOM);
         assert!((GRAPH_MIN_ZOOM..=1.0).contains(&zoom));
     }
 
@@ -2262,6 +2554,23 @@ mod tests {
         );
         assert!((world_before.0 - world_after.0).abs() < 0.001);
         assert!((world_before.1 - world_after.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn internal_graph_paths_are_presented_as_standard_jsonpath() {
+        assert_eq!(jsonpath_for_display("$"), "$");
+        assert_eq!(
+            jsonpath_for_display("$/paths#3/~1v1~1planning~1route#2/post#0"),
+            "$.paths['/v1/planning/route'].post"
+        );
+        assert_eq!(
+            jsonpath_for_display("$/items#0/2/name#1"),
+            "$.items[2].name"
+        );
+        assert_eq!(
+            jsonpath_for_display("$/owner~0name#0/it\u{27}s\\fine#1"),
+            "$['owner~name']['it\\\u{27}s\\\\fine']"
+        );
     }
 
     #[test]
@@ -2294,5 +2603,18 @@ mod tests {
         let mut collapsed = vec![Arc::from("root"), Arc::from("child")];
         expand_ancestors(&graph, &JsonGraphItemId::new("leaf"), &mut collapsed);
         assert!(collapsed.is_empty());
+    }
+
+    #[test]
+    fn search_reveals_a_hidden_dense_card_row() {
+        let graph = JsonGraphProjection {
+            nodes: vec![node("root", 37)].into(),
+            edges: Arc::from([]),
+            truncated: false,
+        };
+        let selected = JsonGraphItemId::new("root:36");
+        let (parent, limit) = search_reveal_row_limit(&graph, &selected).unwrap();
+        assert_eq!(parent.as_str(), "root");
+        assert_eq!(limit, 60);
     }
 }

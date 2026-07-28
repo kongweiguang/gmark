@@ -18,7 +18,7 @@ const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 use super::element::{BlockTextElement, CodeLanguageInputElement};
 use super::{
     Block, BlockDragPayload, BlockDropPlacement, BlockEvent, BlockKind, ImageResolvedSource,
-    ImageRuntime,
+    ImageRuntime, MermaidViewMode,
 };
 use crate::components::{
     HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript, MermaidThemeMode,
@@ -34,6 +34,7 @@ use crate::theme::{Theme, ThemeDimensions, ThemeManager};
 const CHEVRON_DOWN_ICON: &str = "icon/ui/chevron-down.svg";
 const COPY_ICON: &str = "icon/ui/copy.svg";
 const CHECK_ICON: &str = "icon/ui/check.svg";
+const EXPAND_ICON: &str = "icon/ui/expand.svg";
 const PLUS_ICON: &str = "icon/ui/plus.svg";
 const CALLOUT_NOTE_ICON: &str = "icon/ui/info.svg";
 const CALLOUT_TIP_ICON: &str = "icon/ui/lightbulb.svg";
@@ -207,27 +208,124 @@ fn render_math_svg_content(
 fn render_mermaid_svg_content(
     rendered: &crate::components::MermaidSvgRender,
     block_padding_y: f32,
+    content_height: f32,
 ) -> AnyElement {
     let display_width = rendered.display_width.max(1.0);
     let display_height = rendered.display_height.max(1.0);
+    let content_height = content_height.max(1.0);
+    let vertical_padding = block_padding_y.max(6.0);
+    let canvas_height =
+        mermaid_preview_canvas_height(display_height, vertical_padding, content_height);
     let image = img(rendered.path.clone())
-        .w(px(display_width))
+        // 失败态会保留上一次成功的 SVG；使用父级宽度并以缓存宽度为上限，
+        // 让旧视口生成的图片收缩而不反向撑宽当前工作台。
+        .w_full()
+        .max_w(px(display_width))
         .h(px(display_height))
-        .max_w(Length::Definite(relative(1.0)))
         .object_fit(ObjectFit::Contain);
 
     div()
         .id("mermaid-rendered-content")
         .debug_selector(|| "mermaid-rendered-content".to_owned())
         .w_full()
+        .h(px(canvas_height))
         .min_w(px(0.0))
         .max_w(Length::Definite(relative(1.0)))
         .overflow_hidden()
         .flex()
+        .items_center()
         .justify_center()
-        .py(px(block_padding_y.max(6.0)))
+        .py(px(vertical_padding))
         .child(image)
         .into_any_element()
+}
+
+fn mermaid_preview_canvas_height(
+    display_height: f32,
+    vertical_padding: f32,
+    viewport_height: f32,
+) -> f32 {
+    // 竖向长图必须保留可阅读尺寸，由外层预览窗滚动；不能为了塞进一屏再次缩成缩略图。
+    (display_height.max(1.0) + 2.0 * vertical_padding.max(0.0)).max(viewport_height.max(1.0))
+}
+
+const MERMAID_NARROW_BREAKPOINT: f32 = 640.0;
+const MERMAID_CONTENT_MIN_HEIGHT: f32 = 360.0;
+const MERMAID_SPLIT_WIDE_MIN_HEIGHT: f32 = 420.0;
+const MERMAID_SPLIT_NARROW_MIN_HEIGHT: f32 = 280.0;
+const MERMAID_SPLIT_NARROW_MAX_HEIGHT: f32 = 360.0;
+const MERMAID_WORKBENCH_MIN_MAX_HEIGHT: f32 = 420.0;
+const MERMAID_WORKBENCH_MAX_HEIGHT: f32 = 760.0;
+const MERMAID_PREVIEW_VERTICAL_INSET: f32 = 24.0;
+const MERMAID_SOURCE_VERTICAL_INSET: f32 = 24.0;
+const MERMAID_SPLIT_DIVIDER_HEIGHT: f32 = 1.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MermaidWorkbenchHeights {
+    body_height: f32,
+    source_height: f32,
+    preview_height: f32,
+}
+
+fn mermaid_workbench_body_height(
+    mode: MermaidViewMode,
+    viewport_width: f32,
+    viewport_height: f32,
+    successful_svg_display_height: Option<f32>,
+    source_line_count: usize,
+    source_line_height: f32,
+) -> MermaidWorkbenchHeights {
+    // 工作台不再凭模式固定高度：短内容维持紧凑，长图/长源码仅扩展到窗口可读上限，
+    // 再交给各自面板滚动。成功 SVG 即使正在重渲染或本次失败也会继续参与计算，避免闪烁。
+    let max_height = (viewport_height.max(1.0) * 0.70).clamp(
+        MERMAID_WORKBENCH_MIN_MAX_HEIGHT,
+        MERMAID_WORKBENCH_MAX_HEIGHT,
+    );
+    let source_desired = source_line_count.max(1) as f32 * source_line_height.max(1.0)
+        + MERMAID_SOURCE_VERTICAL_INSET;
+    let preview_desired = successful_svg_display_height
+        .map(|height| height.max(1.0) + MERMAID_PREVIEW_VERTICAL_INSET)
+        .unwrap_or(MERMAID_CONTENT_MIN_HEIGHT);
+    let source_height = source_desired.clamp(MERMAID_CONTENT_MIN_HEIGHT, max_height);
+    let preview_height = preview_desired.clamp(MERMAID_CONTENT_MIN_HEIGHT, max_height);
+
+    match mode {
+        MermaidViewMode::Preview => MermaidWorkbenchHeights {
+            body_height: preview_height,
+            source_height,
+            preview_height,
+        },
+        MermaidViewMode::Source => MermaidWorkbenchHeights {
+            body_height: source_height,
+            source_height,
+            preview_height,
+        },
+        MermaidViewMode::Split if viewport_width < MERMAID_NARROW_BREAKPOINT => {
+            let source_height = source_desired.clamp(
+                MERMAID_SPLIT_NARROW_MIN_HEIGHT,
+                MERMAID_SPLIT_NARROW_MAX_HEIGHT,
+            );
+            let preview_height = preview_desired.clamp(
+                MERMAID_SPLIT_NARROW_MIN_HEIGHT,
+                MERMAID_SPLIT_NARROW_MAX_HEIGHT,
+            );
+            MermaidWorkbenchHeights {
+                body_height: source_height + MERMAID_SPLIT_DIVIDER_HEIGHT + preview_height,
+                source_height,
+                preview_height,
+            }
+        }
+        MermaidViewMode::Split => {
+            let body_height = source_desired
+                .max(preview_desired)
+                .clamp(MERMAID_SPLIT_WIDE_MIN_HEIGHT, max_height);
+            MermaidWorkbenchHeights {
+                body_height,
+                source_height: body_height,
+                preview_height: body_height,
+            }
+        }
+    }
 }
 
 fn render_image_placeholder(
@@ -343,6 +441,20 @@ fn visible_quote_guides(block: &Block) -> usize {
 /// 代码、引用线等内容实体的边界。
 pub(crate) fn rendered_content_inset(d: &ThemeDimensions) -> f32 {
     d.block_padding_x + super::slash_command::BLOCK_GUTTER_TEXT_RESERVE
+}
+
+fn block_content_insets(
+    rendered_inset: f32,
+    nested_indent: f32,
+    render_depth: usize,
+    grouped_surface: bool,
+) -> (f32, f32) {
+    // Callout/脚注外壳已经提供水平留白，内部块只保留语义层级缩进，避免双重 padding。
+    let surface_inset = if grouped_surface { 0.0 } else { rendered_inset };
+    (
+        surface_inset + nested_indent * render_depth as f32,
+        surface_inset,
+    )
 }
 
 fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
@@ -584,6 +696,8 @@ impl Block {}
 mod html;
 #[path = "render_parts/inline_media.rs"]
 mod inline_media;
+#[path = "render_parts/mermaid.rs"]
+mod mermaid;
 
 impl Focusable for Block {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -599,6 +713,8 @@ mod code;
 mod footnote;
 #[path = "render_parts/heading.rs"]
 mod heading;
+#[path = "render_parts/resource.rs"]
+mod resource;
 #[path = "render_parts/table.rs"]
 mod table;
 #[path = "render_parts/task.rs"]

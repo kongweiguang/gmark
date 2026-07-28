@@ -433,6 +433,7 @@ impl Editor {
                 Ok(Ok(Some(path))) => path,
                 Ok(Ok(None)) | Err(_) => {
                     let _ = weak_editor_for_cancel.update(cx, |this, cx| {
+                        this.abort_pending_resource_insertion();
                         this.abort_pending_tab_close_after_save(cx);
                         this.abort_window_close_tab_sequence(cx);
                         if should_close_after_save {
@@ -443,6 +444,7 @@ impl Editor {
                 }
                 Ok(Err(err)) => {
                     let _ = weak_editor_for_error.update(cx, |this, cx| {
+                        this.abort_pending_resource_insertion();
                         this.abort_pending_tab_close_after_save(cx);
                         this.abort_window_close_tab_sequence(cx);
                         if should_close_after_save {
@@ -521,6 +523,7 @@ impl Editor {
                 Ok(saved) => saved,
                 Err((failed_path, detail, target_may_have_changed)) => {
                     let _ = weak_editor.update(cx, |this, cx| {
+                        this.abort_pending_resource_insertion();
                         this.abort_pending_tab_close_after_save(cx);
                         this.abort_window_close_tab_sequence(cx);
                         if should_close_after_save {
@@ -558,6 +561,7 @@ impl Editor {
                         cx,
                     );
                     if !saved_current {
+                        this.abort_pending_resource_insertion();
                         this.abort_pending_tab_close_after_save(cx);
                         this.abort_window_close_tab_sequence(cx);
                     }
@@ -583,6 +587,16 @@ impl Editor {
     }
 
     pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(document_host) = self.document_host.clone() {
+            if self.file_path.is_none() {
+                self.save_large_document_via_prompt(window, cx);
+            } else {
+                document_host.update(cx, |host, cx| {
+                    host.on_save_document(&crate::components::SaveDocument, window, cx)
+                });
+            }
+            return;
+        }
         if !self.source_encoding.is_utf8() {
             self.request_encoding_conversion(cx);
             return;
@@ -621,6 +635,7 @@ impl Editor {
                 Ok(Ok(Some(path))) => path,
                 Ok(Ok(None)) | Err(_) => {
                     let _ = weak_editor.update(cx, |editor, cx| {
+                        editor.abort_pending_resource_insertion();
                         editor.abort_pending_tab_close_after_save(cx);
                         editor.abort_window_close_tab_sequence(cx);
                         editor.abort_pending_close_after_save(cx);
@@ -628,6 +643,9 @@ impl Editor {
                     return;
                 }
                 Ok(Err(error)) => {
+                    let _ = weak_editor.update(cx, |editor, _cx| {
+                        editor.abort_pending_resource_insertion();
+                    });
                     let detail = error.to_string();
                     let _ = cx.update_window(
                         window_handle,

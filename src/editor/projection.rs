@@ -38,6 +38,7 @@ pub(super) enum ProjectionRegionKind {
     ReferenceDefinition,
     SetextHeading,
     StandaloneImage,
+    StandaloneResource,
     IndentedCode,
     List,
     Quote,

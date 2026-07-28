@@ -159,6 +159,7 @@ impl Editor {
         if !removed_workspace_session {
             self.schedule_workspace_session_save(cx);
         }
+        self.resume_pending_resource_insertion(cx);
         self.continue_window_close_after_save(cx);
         self.finish_pending_tab_close_after_save(cx);
         cx.notify();

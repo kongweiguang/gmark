@@ -2,12 +2,11 @@
 
 use super::{applescript_string_literal, build_menus};
 use crate::components::{
-    AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseTab, CloseWindow, CommandPalette,
-    ExportHtml, ExportImage, ExportPdf, FindInDocument, FindNext, FindPrevious, NewTab, NewWindow,
-    NoRecentFiles, NormalizeLineEndingsCr, NormalizeLineEndingsCrLf, NormalizeLineEndingsLf,
+    AddLanguageConfig, CheckForUpdates, CloseTab, CloseWindow, CommandPalette, CopyAsMarkdown,
+    ExportPdf, FindInDocument, FindNext, FindPrevious, NewTab, NewWindow, NoRecentFiles,
     OpenCrashReports, OpenFile, OpenPreferences, OpenPrivacyPolicy, OpenRecentFile, QuickOpen,
-    QuitApplication, ReopenClosedTab, ReplaceInDocument, SaveDocument, SelectLanguage, SelectTheme,
-    ShowAbout, ToggleWorkspace,
+    QuitApplication, ReopenClosedTab, ReplaceInDocument, SaveDocument, SelectLanguage, ShowAbout,
+    ToggleWorkspace,
 };
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;
@@ -189,10 +188,9 @@ fn build_menus_uses_english_fallback_by_default() {
         assert!(action_named_has_type::<QuitApplication>(&menus[0], "Quit"));
     }
 
-    let export_menu = submenu_named(file_menu, "Export");
-    assert_eq!(action_name(&export_menu.items[0]), "HTML");
-    assert_eq!(action_name(&export_menu.items[1]), "PNG Image");
-    assert_eq!(action_name(&export_menu.items[2]), "PDF");
+    assert!(file_menu.items.iter().all(
+        |item| !matches!(item, MenuItem::Submenu(submenu) if submenu.name.as_ref() == "Export" || submenu.name.as_ref() == "Line Endings")
+    ));
     let view_menu = &menus[VIEW_IDX];
     assert!(action_named_has_type::<ToggleWorkspace>(
         view_menu,
@@ -213,6 +211,10 @@ fn navigation_keeps_only_global_non_editor_capabilities() {
         .collect::<Vec<_>>();
 
     assert_eq!(menu_names, vec!["gmark", "File", "Edit", "View", "Help"]);
+    let edit_menu = &menus[EDIT_IDX];
+    assert!(edit_menu.items.iter().all(
+        |item| !matches!(item, MenuItem::Action { action, .. } if action.as_any().is::<CopyAsMarkdown>())
+    ));
     let view_menu = &menus[VIEW_IDX];
     assert!(view_menu.items.iter().all(
         |item| !matches!(item, MenuItem::Action { action, .. } if action.as_any().is::<QuickOpen>() || action.as_any().is::<CommandPalette>())
@@ -253,65 +255,13 @@ fn build_menus_uses_chinese_language_when_selected() {
     #[cfg(not(target_os = "macos"))]
     assert_eq!(action_name(&menus[1].items[0]), "新建标签页");
     let file_menu = &menus[FILE_IDX];
-    let export_menu = submenu_named(file_menu, "导出");
-    assert_eq!(action_name(&export_menu.items[0]), "HTML");
-    assert_eq!(action_name(&export_menu.items[1]), "PNG 图片");
-    assert_eq!(action_name(&export_menu.items[2]), "PDF");
+    assert!(file_menu.items.iter().all(
+        |item| !matches!(item, MenuItem::Submenu(submenu) if submenu.name.as_ref() == "导出" || submenu.name.as_ref() == "换行符")
+    ));
     let view_menu = &menus[VIEW_IDX];
     assert!(action_named_has_type::<ToggleWorkspace>(
         view_menu,
         "切换工作区"
-    ));
-}
-
-#[test]
-fn export_menu_items_dispatch_export_actions() {
-    let theme_manager = ThemeManager::default();
-    let i18n_manager = I18nManager::default();
-    let menus = build_menus(&theme_manager, &i18n_manager, &[]);
-
-    let export_menu = submenu_named(&menus[FILE_IDX], "Export");
-    match &export_menu.items[0] {
-        MenuItem::Action { action, .. } => {
-            assert!(action.as_any().is::<ExportHtml>());
-        }
-        _ => panic!("expected export html action item"),
-    }
-
-    match &export_menu.items[1] {
-        MenuItem::Action { action, .. } => {
-            assert!(action.as_any().is::<ExportImage>());
-        }
-        _ => panic!("expected export image action item"),
-    }
-
-    match &export_menu.items[2] {
-        MenuItem::Action { action, .. } => {
-            assert!(action.as_any().is::<ExportPdf>());
-        }
-        _ => panic!("expected export pdf action item"),
-    }
-}
-
-#[test]
-fn file_menu_routes_all_supported_line_endings() {
-    let theme_manager = ThemeManager::default();
-    let i18n_manager = I18nManager::default();
-    let menus = build_menus(&theme_manager, &i18n_manager, &[]);
-    let line_endings = submenu_named(&menus[FILE_IDX], "Line Endings");
-
-    assert_eq!(line_endings.name.as_ref(), "Line Endings");
-    assert!(matches!(
-        &line_endings.items[0],
-        MenuItem::Action { action, .. } if action.as_any().is::<NormalizeLineEndingsLf>()
-    ));
-    assert!(matches!(
-        &line_endings.items[1],
-        MenuItem::Action { action, .. } if action.as_any().is::<NormalizeLineEndingsCrLf>()
-    ));
-    assert!(matches!(
-        &line_endings.items[2],
-        MenuItem::Action { action, .. } if action.as_any().is::<NormalizeLineEndingsCr>()
     ));
 }
 
@@ -372,15 +322,11 @@ fn fallback_menu_routes_window_context_actions_without_app_defer() {
     }));
     assert!(super::is_window_context_menu_action(&NoRecentFiles));
     assert!(super::is_window_context_menu_action(&AddLanguageConfig));
-    assert!(super::is_window_context_menu_action(&AddThemeConfig));
     assert!(super::is_window_context_menu_action(&OpenCrashReports));
     assert!(super::is_window_context_menu_action(&OpenPrivacyPolicy));
     assert!(super::is_window_context_menu_action(&SaveDocument));
     assert!(super::is_window_context_menu_action(&QuitApplication));
     assert!(super::is_window_context_menu_action(&CloseWindow));
-    assert!(!super::is_window_context_menu_action(&SelectTheme {
-        theme_id: "gmark".into(),
-    }));
     assert!(!super::is_window_context_menu_action(&SelectLanguage {
         language_id: "en-US".into(),
     }));

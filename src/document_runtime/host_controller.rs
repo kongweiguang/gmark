@@ -9,26 +9,38 @@ impl DocumentHost {
         source: FileSource,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_source(path, probe, Some(source), cx)
+    }
+
+    fn new_with_source(
+        path: PathBuf,
+        probe: OpenProbe,
+        source: Option<FileSource>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let file_backed = source.is_some();
         let strings = cx
             .try_global::<I18nManager>()
             .map(I18nManager::strings_arc)
             .unwrap_or_else(|| Arc::new(I18nStrings::en_us()));
-        let preview_lines = source
-            .read_range(0, probe.len.min(PREFIX_PREVIEW_BYTES))
-            .map(|bytes| decode_provisional_bytes(&bytes, &probe.encoding, 0))
-            .map(|text| {
-                text.lines()
-                    .map(|line| SharedString::from(line.trim_end_matches('\r').to_owned()))
-                    .collect()
-            })
-            .unwrap_or_else(|error| {
-                vec![
-                    strings
-                        .large_document_text("decode_first_window")
-                        .replace("{error}", &error.to_string())
-                        .into(),
-                ]
-            });
+        let preview_lines = source.as_ref().map_or_else(Vec::new, |source| {
+            source
+                .read_range(0, probe.len.min(PREFIX_PREVIEW_BYTES))
+                .map(|bytes| decode_provisional_bytes(&bytes, &probe.encoding, 0))
+                .map(|text| {
+                    text.lines()
+                        .map(|line| SharedString::from(line.trim_end_matches('\r').to_owned()))
+                        .collect()
+                })
+                .unwrap_or_else(|error| {
+                    vec![
+                        strings
+                            .large_document_text("decode_first_window")
+                            .replace("{error}", &error.to_string())
+                            .into(),
+                    ]
+                })
+        });
         let search_placeholder = strings.large_document_text("find_placeholder").to_owned();
         let search_input = cx.new(move |cx| {
             let mut block = Block::with_record(
@@ -118,13 +130,14 @@ impl DocumentHost {
             let registered = view_registry.register(Arc::new(provider));
             debug_assert!(registered, "built-in derived view id must be unique");
         }
+        let source_language = SourceLanguageId::for_path(&path);
         let mut view = Self {
             path,
             probe,
             index: None,
             document: None,
             prepared_source: None,
-            provisional_source: Some(source),
+            provisional_source: source,
             structured_index: None,
             structured_rows: BTreeMap::new(),
             structured_pending: None,
@@ -153,7 +166,7 @@ impl DocumentHost {
             json_expand_generation: 0,
             json_expand_cancellation: None,
             view_registry,
-            pending_view_state: Some(DocumentViewState::default()),
+            tab_view_state: DocumentViewState::default(),
             selected_projection_view,
             document_epoch: 1,
             derived_projection_generation: 0,
@@ -175,12 +188,17 @@ impl DocumentHost {
             graph_edit_issue: None,
             graph_edit_original: None,
             graph_state_initialized: false,
+            graph_projection_identity: None,
+            graph_row_limits: HashMap::new(),
+            graph_layout_cache: None,
             graph_needs_fit: true,
+            graph_fit_all_requested: false,
             graph_last_viewport: None,
             graph_pan_session: None,
             graph_pending_center: None,
             graph_recenter_anchor: None,
             graph_focus_handle: cx.focus_handle(),
+            graph_focus_subscription: None,
             json_split_ratio: 0.5,
             json_split_drag: None,
             json_split_focus_handle: cx.focus_handle(),
@@ -199,6 +217,20 @@ impl DocumentHost {
             source_queued_visible: None,
             source_last_visible: None,
             source_list_origin: 0,
+            source_language,
+            fold_projection: FoldProjectionIndex::default(),
+            fold_parser: Arc::new(Mutex::new(ResidentFoldParser::default())),
+            fold_snapshot_revision: None,
+            fold_window: None,
+            fold_generation: 0,
+            fold_cancellation: None,
+            fold_task: Task::ready(()),
+            folding_enabled: crate::preferences::EditorSettings::code_folding(cx),
+            format_generation: 0,
+            format_cancellation: None,
+            format_task: Task::ready(()),
+            format_running: false,
+            save_after_format: None,
             source_cancel_in_flight: false,
             source_row_height: FALLBACK_SOURCE_ROW_HEIGHT,
             active_edit: None,
@@ -208,6 +240,7 @@ impl DocumentHost {
             source_drag_anchor: None,
             source_drag_autoscroll_direction: 0,
             source_drag_autoscroll_task: Task::ready(()),
+            document_host_bounds: Arc::new(Mutex::new(None)),
             source_context_menu: None,
             source_context_menu_focus_handle: cx.focus_handle(),
             search_input,
@@ -246,8 +279,83 @@ impl DocumentHost {
             selection_export_cancellation: None,
             selection_export_task: Task::ready(()),
         };
-        view.start_initial_index(cx);
-        view.start_external_monitor(cx);
+        view.fold_projection.set_real_line_count(view.line_count());
+        if file_backed {
+            view.start_initial_index(cx);
+            view.start_external_monitor(cx);
+        }
+        view
+    }
+
+    /// 新建格式标签直接安装内存 Resident session；逻辑路径只负责语言与格式能力，
+    /// 不创建用户看不见的临时文件，也不会在首次保存时绕过“另存为”。
+    pub(crate) fn new_untitled(
+        logical_path: PathBuf,
+        format: DocumentFormat,
+        initial_source: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let len = initial_source.len() as u64;
+        let estimated_lines = initial_source.lines().count().max(1) as u64;
+        let estimated_structural_units = initial_source
+            .bytes()
+            .filter(|byte| matches!(byte, b'|' | b',' | b'\t' | b'{' | b'}' | b'[' | b']'))
+            .count() as u64;
+        let source_identity = gmark_paged_document::FileIdentity {
+            path: logical_path.clone(),
+            len,
+            modified_nanos: None,
+            os_file_id: None,
+        };
+        let probe = OpenProbe {
+            len,
+            identity: source_identity.clone(),
+            options: gmark_paged_document::ProbeOptions::default(),
+            format: format.clone(),
+            encoding: TextEncoding::Utf8 { bom: false },
+            strategy: OpenStrategy::Resident,
+            force_safe_source: false,
+            estimated_lines,
+            estimated_structural_units,
+        };
+        let profile = probe.profile();
+        let plan = session_plan(&profile, &probe, OpenStrategy::Resident, true);
+        let store = gmark_document_runtime::DocumentStore::Resident(Box::new(
+            gmark_document_runtime::ResidentDocument::new(
+                initial_source,
+                probe.encoding.clone(),
+                source_identity.clone(),
+            ),
+        ));
+        let document = DocumentSession::new(
+            profile,
+            store,
+            plan,
+            gmark_document_runtime::FileIdentity::from(&source_identity),
+        )
+        .expect("untitled format document must resolve to a resident session");
+        let preview_lines = initial_source
+            .lines()
+            .map(|line| SharedString::from(line.to_owned()))
+            .collect();
+        let mut view = Self::new_with_source(logical_path, probe, None, cx);
+        view.preview_lines = preview_lines;
+        view.install_document_session(document);
+
+        if let DocumentFormat::Delimited { delimiter } = format {
+            let snapshot: Arc<[u8]> = initial_source.as_bytes().to_vec().into();
+            match DelimitedIndex::build_snapshot_cancellable(
+                snapshot,
+                DelimitedIndexOptions {
+                    delimiter,
+                    ..DelimitedIndexOptions::default()
+                },
+                &SearchCancellation::default(),
+            ) {
+                Ok(index) => view.structured_index = Some(StructuredIndex::Delimited(index)),
+                Err(error) => view.error = Some(localized_document_error(&error, cx)),
+            }
+        }
         view
     }
 
@@ -389,7 +497,7 @@ impl DocumentHost {
                         let format = view.probe.format.clone();
                         if view.probe.strategy == OpenStrategy::Paged {
                             view.view_mode = DocumentHostViewMode::Source;
-                            view.sync_session_active_view();
+                            view.sync_tab_active_view();
                         }
                         let anchor_line = view
                             .provisional_anchor
@@ -488,7 +596,7 @@ impl DocumentHost {
                                                 | DocumentHostViewMode::Structure
                                         ) {
                                             view.view_mode = DocumentHostViewMode::Source;
-                                            view.sync_session_active_view();
+                                            view.sync_tab_active_view();
                                         }
                                     }
                                     Err(error) => {
@@ -499,7 +607,7 @@ impl DocumentHost {
                                                 | DocumentHostViewMode::Structure
                                         ) {
                                             view.view_mode = DocumentHostViewMode::Source;
-                                            view.sync_session_active_view();
+                                            view.sync_tab_active_view();
                                         }
                                     }
                                 }
@@ -545,6 +653,12 @@ impl DocumentHost {
         self.coordinator.index_task = Task::ready(());
 
         self.invalidate_source_rows();
+        if let Some(cancellation) = self.fold_cancellation.take() {
+            cancellation.cancel();
+        }
+        self.fold_generation = self.fold_generation.wrapping_add(1);
+        self.fold_task = Task::ready(());
+        self.cancel_source_formatting();
         self.invalidate_structured_runtime();
 
         self.coordinator.search_generation = self.coordinator.search_generation.wrapping_add(1);

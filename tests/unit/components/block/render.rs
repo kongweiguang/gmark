@@ -1,7 +1,9 @@
 // @author kongweiguang
 
+use super::super::MermaidViewMode;
 use super::{
-    HtmlComputedStyle, column_axis_gutter_visible, html_node_visual_style, inline_word_chunks,
+    HtmlComputedStyle, block_content_insets, column_axis_gutter_visible, html_node_visual_style,
+    inline_word_chunks, mermaid_preview_canvas_height, mermaid_workbench_body_height,
     yaml_frontmatter_body,
 };
 use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
@@ -9,6 +11,126 @@ use crate::components::{TableAxisKind, TableAxisMarker};
 use crate::i18n::I18nManager;
 use crate::theme::{Theme, ThemeManager};
 use gpui::{Hsla, Rgba, TestAppContext, px};
+
+#[test]
+fn tall_mermaid_preview_preserves_readable_height_for_internal_scrolling() {
+    assert_eq!(mermaid_preview_canvas_height(2_400.0, 12.0, 360.0), 2_424.0);
+    assert_eq!(mermaid_preview_canvas_height(120.0, 12.0, 360.0), 360.0);
+}
+
+#[test]
+fn short_mermaid_preview_stays_compact() {
+    let heights = mermaid_workbench_body_height(
+        MermaidViewMode::Preview,
+        1_200.0,
+        900.0,
+        Some(180.0),
+        2,
+        20.0,
+    );
+
+    assert_eq!(heights.preview_height, 360.0);
+    assert_eq!(heights.body_height, 360.0);
+}
+
+#[test]
+fn tall_mermaid_preview_grows_with_the_successful_svg() {
+    let heights = mermaid_workbench_body_height(
+        MermaidViewMode::Preview,
+        1_200.0,
+        1_000.0,
+        Some(480.0),
+        2,
+        20.0,
+    );
+
+    assert_eq!(heights.preview_height, 504.0);
+    assert_eq!(heights.body_height, 504.0);
+}
+
+#[test]
+fn mermaid_workbench_height_respects_viewport_and_absolute_caps() {
+    let viewport_capped = mermaid_workbench_body_height(
+        MermaidViewMode::Preview,
+        1_200.0,
+        1_000.0,
+        Some(2_000.0),
+        2,
+        20.0,
+    );
+    let absolute_capped = mermaid_workbench_body_height(
+        MermaidViewMode::Preview,
+        1_200.0,
+        2_000.0,
+        Some(2_000.0),
+        2,
+        20.0,
+    );
+    let small_viewport_floor = mermaid_workbench_body_height(
+        MermaidViewMode::Preview,
+        1_200.0,
+        400.0,
+        Some(2_000.0),
+        2,
+        20.0,
+    );
+
+    assert_eq!(viewport_capped.body_height, 700.0);
+    assert_eq!(absolute_capped.body_height, 760.0);
+    assert_eq!(small_viewport_floor.body_height, 420.0);
+}
+
+#[test]
+fn mermaid_source_height_tracks_lines_and_caps_at_the_viewport_budget() {
+    let short_source =
+        mermaid_workbench_body_height(MermaidViewMode::Source, 1_200.0, 1_000.0, None, 4, 20.0);
+    let long_source =
+        mermaid_workbench_body_height(MermaidViewMode::Source, 1_200.0, 1_000.0, None, 100, 20.0);
+
+    assert_eq!(short_source.body_height, 360.0);
+    assert_eq!(long_source.source_height, 700.0);
+    assert_eq!(long_source.body_height, 700.0);
+}
+
+#[test]
+fn wide_mermaid_split_uses_the_taller_side() {
+    let preview_driven =
+        mermaid_workbench_body_height(MermaidViewMode::Split, 900.0, 1_200.0, Some(500.0), 2, 20.0);
+    let source_driven = mermaid_workbench_body_height(
+        MermaidViewMode::Split,
+        900.0,
+        1_200.0,
+        Some(100.0),
+        35,
+        20.0,
+    );
+
+    assert_eq!(preview_driven.body_height, 524.0);
+    assert_eq!(preview_driven.source_height, 524.0);
+    assert_eq!(source_driven.body_height, 724.0);
+    assert_eq!(source_driven.preview_height, 724.0);
+}
+
+#[test]
+fn narrow_mermaid_split_keeps_both_panes_readable() {
+    let compact =
+        mermaid_workbench_body_height(MermaidViewMode::Split, 600.0, 900.0, Some(100.0), 1, 20.0);
+    let tall = mermaid_workbench_body_height(
+        MermaidViewMode::Split,
+        600.0,
+        900.0,
+        Some(1_000.0),
+        100,
+        20.0,
+    );
+
+    assert_eq!(compact.source_height, 280.0);
+    assert_eq!(compact.preview_height, 280.0);
+    assert_eq!(compact.body_height, 561.0);
+    assert_eq!(tall.source_height, 360.0);
+    assert_eq!(tall.preview_height, 360.0);
+    assert_eq!(tall.body_height, 721.0);
+}
 
 #[test]
 fn frontmatter_style_requires_a_complete_yaml_document() {
@@ -49,6 +171,12 @@ fn top_gutter_only_appears_for_column_axis_state() {
             index: 0,
         }),
     ));
+}
+
+#[test]
+fn grouped_surfaces_own_their_horizontal_padding() {
+    assert_eq!(block_content_insets(36.0, 12.0, 2, false), (60.0, 36.0));
+    assert_eq!(block_content_insets(36.0, 12.0, 2, true), (24.0, 0.0));
 }
 
 fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {

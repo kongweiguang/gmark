@@ -2,7 +2,7 @@
 
 [package]
 name = "gmark"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.95"
 authors = ["kongweiguang"]
@@ -131,6 +131,9 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 rayon = "1"
 regex = "1"
 ignore = "0.4"
+flate2 = "1"
+tar = "0.4"
+sysinfo = "=0.31.4"
 encoding_rs = "0.8"
 chardetng = "0.1"
 sys-locale = "0.3"
@@ -255,12 +258,21 @@ harness = false
 name = "font_fallbacks_cache"
 harness = false
 
+[[bench]]
+name = "json_graph_layout"
+harness = false
+
 # Stop Cargo from also linking the libtest bench harness against the bin —
 # without this, Criterion-specific CLI flags (`--save-baseline`, etc.) trip
 # the libtest stub before Criterion's `main` runs (rust-lang/rust#47241).
 [[bin]]
 name = "gmark"
 path = "src/main.rs"
+bench = false
+
+[[bin]]
+name = "gmark-update-helper"
+path = "src/bin/gmark-update-helper.rs"
 bench = false
 
 [build-dependencies]

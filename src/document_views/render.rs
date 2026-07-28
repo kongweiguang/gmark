@@ -4,6 +4,16 @@ use super::*;
 
 impl Render for DocumentHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.graph_focus_subscription.is_none() {
+            let focus_handle = self.graph_focus_handle.clone();
+            self.graph_focus_subscription =
+                Some(cx.on_blur(&focus_handle, window, |this, _window, cx| {
+                    if this.graph_selected_item.is_some() {
+                        this.dismiss_json_graph_details();
+                        cx.notify();
+                    }
+                }));
+        }
         if !self.displayed_screen_lines.rows.is_empty()
             && let Some(started) = self.first_render_started.take()
         {
@@ -58,11 +68,40 @@ impl Render for DocumentHost {
         let gutter_separator_color = colors.dialog_border.opacity(0.7);
         let active_line_color = colors.source_mode_block_bg.opacity(0.55);
         let source_background = colors.editor_background;
+        let fold_placeholder_accent_color = colors.code_syntax_property;
+        let fold_placeholder_punctuation_color = colors.code_syntax_punctuation;
+        let fold_placeholder_background = fold_placeholder_accent_color.opacity(0.12);
+        let document_host_bounds = self.document_host_bounds.clone();
+        let document_host_bounds_tracker = canvas(
+            move |bounds, _, _| {
+                if let Ok(mut current) = document_host_bounds.lock() {
+                    *current = Some(bounds);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0();
+        self.maybe_schedule_fold_refresh(cx);
         window.set_window_edited(document_dirty_state(&self.document, &self.pending_dirty));
         let line_count = self.line_count();
-        self.source_list_origin = self
-            .source_list_origin
-            .min(line_count.saturating_sub(SOURCE_LIST_WINDOW_ROWS));
+        let folding_enabled = crate::preferences::EditorSettings::code_folding(cx);
+        if self.folding_enabled != folding_enabled {
+            self.folding_enabled = folding_enabled;
+            if !folding_enabled {
+                self.fold_projection.expand_all();
+                self.source_row_blocks.clear();
+            }
+        }
+        self.fold_projection.set_real_line_count(line_count);
+        self.source_list_origin = self.source_list_origin.min(
+            self.fold_projection
+                .visible_line_count()
+                .saturating_sub(SOURCE_LIST_WINDOW_ROWS),
+        );
         let observed_line_bytes = self
             .index
             .as_ref()
@@ -82,14 +121,22 @@ impl Render for DocumentHost {
             );
         let viewport_width = f32::from(window.viewport_size().width).max(1.0);
         let viewport_height = f32::from(window.viewport_size().height).max(1.0);
-        let source_content_width = (viewport_width - 2.0 * dimensions.editor_padding).max(1.0);
+        let source_horizontal_padding = crate::editor::source_editor_horizontal_padding(dimensions);
+        let source_content_width = (viewport_width - 2.0 * source_horizontal_padding).max(1.0);
         let source_row_height = (source_line_height * f32::from(window.rem_size())).max(1.0);
         self.source_row_height = source_row_height;
         let source_top_padding = crate::editor::source_editor_top_padding(dimensions);
-        let source_gutter_width = f32::from(source_line_number_gutter_width(
+        let source_number_width = f32::from(source_line_number_gutter_width(
             line_count,
             px(source_text_size),
         ));
+        let source_fold_lane_width =
+            if self.folding_enabled && self.source_language.supports_folding() {
+                20.0
+            } else {
+                0.0
+            };
+        let source_gutter_width = source_number_width + source_fold_lane_width;
         let source_list_len = self.source_list_len();
         let source_list = uniform_list(
             "document-host-lines",
@@ -99,21 +146,33 @@ impl Render for DocumentHost {
                     // keyed uniform_list 可跨 render 复用 processor；全局 origin 必须在
                     // 调用时读取，不能捕获创建该 element 时的旧窗口。
                     let source_list_origin = this.source_list_origin;
-                    let range = source_list_origin.saturating_add(local_range.start)
+                    let visible_range = source_list_origin.saturating_add(local_range.start)
                         ..source_list_origin.saturating_add(local_range.end);
-                    this.request_source_rows(range.clone(), _cx);
-                    let requested_visible = range.clone();
-                    let first_requested = range.start;
-                    let retain_previous_frame = this
-                        .displayed_screen_lines
-                        .should_retain_previous_frame(&requested_visible);
+                    let real_lines = visible_range
+                        .clone()
+                        .map(|line| this.fold_projection.real_line_for_visible(line))
+                        .collect::<Vec<_>>();
+                    let requested_visible = real_lines.first().copied().unwrap_or_default()
+                        ..real_lines
+                            .last()
+                            .copied()
+                            .unwrap_or_default()
+                            .saturating_add(1);
+                    this.request_source_rows(requested_visible.clone(), _cx);
+                    let first_requested = requested_visible.start;
+                    let retain_previous_frame = this.fold_projection.visible_line_count()
+                        == this.line_count()
+                        && this
+                            .displayed_screen_lines
+                            .should_retain_previous_frame(&requested_visible);
                     let retained_rows = retain_previous_frame
                         .then(|| {
                             this.displayed_screen_lines
                                 .retained_rows(this.show_line_endings)
                         })
                         .unwrap_or_default();
-                    range
+                    real_lines
+                        .into_iter()
                         .map(|line| {
                             let exact_row = this.displayed_screen_lines.row(line).map(|row| {
                                 (
@@ -143,6 +202,36 @@ impl Render for DocumentHost {
                                 .active_edit
                                 .as_ref()
                                 .is_some_and(|edit| edit.line == line);
+                            let fold_region =
+                                this.fold_projection.region_starting(line).map(|region| {
+                                    (
+                                        region.end_line,
+                                        this.fold_projection.is_collapsed(region.id),
+                                    )
+                                });
+                            let fold_placeholder = this.source_fold_placeholder(line);
+                            let gutter = DocumentHost::render_source_gutter(
+                                line,
+                                display_line,
+                                fold_region.map(|region| region.0),
+                                fold_region.is_some_and(|region| region.1),
+                                source_gutter_width,
+                                source_fold_lane_width,
+                                source_number_width,
+                                line_number_color,
+                                gutter_separator_color,
+                                active_line_color,
+                                _cx,
+                            );
+                            let fold_placeholder = fold_placeholder.map(|label| {
+                                DocumentHost::render_source_fold_placeholder(
+                                    label,
+                                    fold_placeholder_background,
+                                    fold_placeholder_accent_color,
+                                    fold_placeholder_punctuation_color,
+                                    line_number_color,
+                                )
+                            });
                             div()
                                 .id(("document-host-line", line))
                                 .h(px(source_row_height))
@@ -157,16 +246,7 @@ impl Render for DocumentHost {
                                 } else {
                                     source_background
                                 })
-                                .child(
-                                    div()
-                                        .w(px(source_gutter_width))
-                                        .pr(px(12.0))
-                                        .border_r(px(1.0))
-                                        .border_color(gutter_separator_color)
-                                        .text_align(gpui::TextAlign::Right)
-                                        .text_color(line_number_color)
-                                        .child((display_line + 1).to_string()),
-                                )
+                                .child(gutter)
                                 .child({
                                     let mut body = div()
                                         .debug_selector(move || {
@@ -202,7 +282,8 @@ impl Render for DocumentHost {
                                                         .child(block),
                                                 )
                                                 .children((*trailing_truncated).then_some(" …"))
-                                                .children(*ending_marker),
+                                                .children(*ending_marker)
+                                                .children(fold_placeholder),
                                         );
                                     } else {
                                         let display = retained_row
@@ -247,6 +328,7 @@ impl Render for DocumentHost {
                                         }),
                                     )
                                 })
+                                .into_any_element()
                         })
                         .collect::<Vec<_>>()
                 },
@@ -267,13 +349,14 @@ impl Render for DocumentHost {
         let source_local_top = (-f32::from(source_scroll.offset().y) / source_row_height)
             .max(0.0)
             .floor() as usize;
+        let visible_line_count = self.fold_projection.visible_line_count().max(1);
         let source_global_top = self
             .source_list_origin
             .saturating_add(source_local_top)
-            .min(line_count.saturating_sub(1));
-        let source_max_top_line = line_count.saturating_sub(source_visible_rows);
+            .min(visible_line_count.saturating_sub(1));
+        let source_max_top_line = visible_line_count.saturating_sub(source_visible_rows);
         let source_thumb_height = if source_max_top_line > 0 {
-            (source_viewport_height * source_visible_rows as f32 / line_count.max(1) as f32)
+            (source_viewport_height * source_visible_rows as f32 / visible_line_count as f32)
                 .clamp(28.0_f32.min(source_viewport_height), source_viewport_height)
         } else {
             source_viewport_height
@@ -298,13 +381,14 @@ impl Render for DocumentHost {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, window, _cx| {
-                        let line = source_line_from_scrollbar_pointer(
+                        let visible_line = source_line_from_scrollbar_pointer(
                             event.position.y,
                             track_top,
                             source_viewport_height,
                             source_thumb_height,
                             source_max_top_line,
                         );
+                        let line = this.fold_projection.real_line_for_visible(visible_line);
                         this.scroll_source_line_strict(line, ScrollStrategy::Top);
                         window.refresh();
                     }),
@@ -312,13 +396,14 @@ impl Render for DocumentHost {
                 .on_mouse_move(cx.listener(
                     move |this, event: &gpui::MouseMoveEvent, window, _cx| {
                         if event.dragging() {
-                            let line = source_line_from_scrollbar_pointer(
+                            let visible_line = source_line_from_scrollbar_pointer(
                                 event.position.y,
                                 track_top,
                                 source_viewport_height,
                                 source_thumb_height,
                                 source_max_top_line,
                             );
+                            let line = this.fold_projection.real_line_for_visible(visible_line);
                             this.scroll_source_line_strict(line, ScrollStrategy::Top);
                             window.refresh();
                         }
@@ -408,6 +493,7 @@ impl Render for DocumentHost {
         let json_graph = self.probe.format == DocumentFormat::Json;
         let body = if self.view_mode == DocumentHostViewMode::Split && json_graph {
             let split_ratio = self.json_split_ratio.clamp(0.3, 0.7);
+            let narrow_split = viewport_width < 820.0;
             let split_divider_active =
                 self.json_split_drag.is_some() || self.json_split_focus_handle.is_focused(window);
             div()
@@ -415,18 +501,28 @@ impl Render for DocumentHost {
                 .flex_1()
                 .min_h(px(0.0))
                 .flex()
+                .when(narrow_split, |split| split.flex_col())
                 .relative()
                 .on_mouse_move(
                     cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
                         if !event.dragging() {
                             return;
                         }
-                        let Some((origin_x, origin_ratio)) = this.json_split_drag else {
+                        let Some((origin, origin_ratio)) = this.json_split_drag else {
                             return;
                         };
-                        let delta = f32::from(event.position.x) - origin_x;
-                        let ratio =
-                            (origin_ratio + delta / viewport_width.max(1.0)).clamp(0.3, 0.7);
+                        let pointer = if narrow_split {
+                            f32::from(event.position.y)
+                        } else {
+                            f32::from(event.position.x)
+                        };
+                        let extent = if narrow_split {
+                            viewport_height
+                        } else {
+                            viewport_width
+                        };
+                        let delta = pointer - origin;
+                        let ratio = (origin_ratio + delta / extent.max(1.0)).clamp(0.3, 0.7);
                         if (this.json_split_ratio - ratio).abs() >= f32::EPSILON {
                             this.json_split_ratio = ratio;
                             cx.emit(DocumentHostEvent::SplitRatioChanged(ratio));
@@ -447,8 +543,12 @@ impl Render for DocumentHost {
                         .id("json-graph-split-source")
                         .debug_selector(|| "json-graph-split-source".to_owned())
                         .relative()
-                        .w(relative(split_ratio))
-                        .h_full()
+                        .when(narrow_split, |panel| {
+                            panel.w_full().h(relative(split_ratio)).min_h(px(220.0))
+                        })
+                        .when(!narrow_split, |panel| {
+                            panel.w(relative(split_ratio)).h_full()
+                        })
                         .min_w(px(0.0))
                         .overflow_hidden()
                         .child(
@@ -457,7 +557,7 @@ impl Render for DocumentHost {
                                 .flex()
                                 .justify_center()
                                 .bg(colors.editor_background)
-                                .px(px(dimensions.editor_padding))
+                                .px(px(source_horizontal_padding))
                                 .pt(px(source_top_padding))
                                 .overflow_hidden()
                                 .capture_any_mouse_down(
@@ -474,11 +574,12 @@ impl Render for DocumentHost {
                     div()
                         .id("json-graph-split-divider")
                         .debug_selector(|| "json-graph-split-divider".to_owned())
-                        .w(px(7.0))
-                        .h_full()
+                        .when(narrow_split, |divider| divider.w_full().h(px(7.0)))
+                        .when(!narrow_split, |divider| divider.w(px(7.0)).h_full())
                         .flex_shrink_0()
                         .relative()
-                        .cursor_col_resize()
+                        .when(narrow_split, |divider| divider.cursor_row_resize())
+                        .when(!narrow_split, |divider| divider.cursor_col_resize())
                         .tab_index(0)
                         .track_focus(&self.json_split_focus_handle)
                         .hover(|divider| divider.bg(colors.text_link.opacity(0.08)))
@@ -486,10 +587,12 @@ impl Render for DocumentHost {
                         .child(
                             div()
                                 .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .left(px(3.0))
-                                .w(px(1.0))
+                                .when(narrow_split, |line| {
+                                    line.left_0().right_0().top(px(3.0)).h(px(1.0))
+                                })
+                                .when(!narrow_split, |line| {
+                                    line.top_0().bottom_0().left(px(3.0)).w(px(1.0))
+                                })
                                 .bg(if split_divider_active {
                                     colors.text_link.opacity(0.72)
                                 } else {
@@ -499,45 +602,62 @@ impl Render for DocumentHost {
                         )
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                                this.json_split_drag =
-                                    Some((f32::from(event.position.x), this.json_split_ratio));
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                let origin = if narrow_split {
+                                    f32::from(event.position.y)
+                                } else {
+                                    f32::from(event.position.x)
+                                };
+                                this.json_split_drag = Some((origin, this.json_split_ratio));
                                 cx.notify();
                             }),
                         )
-                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                            let step = if event.keystroke.modifiers.shift {
-                                0.05
-                            } else {
-                                0.01
-                            };
-                            let next = match event.keystroke.key.as_str() {
-                                "left" => Some(this.json_split_ratio - step),
-                                "right" => Some(this.json_split_ratio + step),
-                                "home" => Some(0.3),
-                                "end" => Some(0.7),
-                                _ => None,
-                            };
-                            if let Some(next) = next {
-                                this.json_split_ratio = next.clamp(0.3, 0.7);
-                                cx.emit(DocumentHostEvent::SplitRatioChanged(
-                                    this.json_split_ratio,
-                                ));
-                                cx.notify();
-                                cx.stop_propagation();
-                            }
-                        })),
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                let step = if event.keystroke.modifiers.shift {
+                                    0.05
+                                } else {
+                                    0.01
+                                };
+                                let next = match event.keystroke.key.as_str() {
+                                    "up" if narrow_split => Some(this.json_split_ratio - step),
+                                    "down" if narrow_split => Some(this.json_split_ratio + step),
+                                    "left" if !narrow_split => Some(this.json_split_ratio - step),
+                                    "right" if !narrow_split => Some(this.json_split_ratio + step),
+                                    "home" => Some(0.3),
+                                    "end" => Some(0.7),
+                                    _ => None,
+                                };
+                                if let Some(next) = next {
+                                    this.json_split_ratio = next.clamp(0.3, 0.7);
+                                    cx.emit(DocumentHostEvent::SplitRatioChanged(
+                                        this.json_split_ratio,
+                                    ));
+                                    cx.notify();
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
                 )
                 .child(
                     div()
                         .id("json-graph-split-preview")
                         .debug_selector(|| "json-graph-split-preview".to_owned())
                         .flex_1()
-                        .h_full()
+                        .when(narrow_split, |panel| panel.w_full().min_h(px(220.0)))
+                        .when(!narrow_split, |panel| panel.h_full())
                         .min_w(px(0.0))
                         .child(self.render_json_graph_panel(
-                            (viewport_width * (1.0 - split_ratio) - 7.0).max(1.0),
-                            viewport_height,
+                            if narrow_split {
+                                viewport_width
+                            } else {
+                                (viewport_width * (1.0 - split_ratio) - 7.0).max(1.0)
+                            },
+                            if narrow_split {
+                                (viewport_height * (1.0 - split_ratio) - 7.0).max(220.0)
+                            } else {
+                                viewport_height
+                            },
                             cx,
                         )),
                 )
@@ -569,7 +689,7 @@ impl Render for DocumentHost {
                                 .flex()
                                 .justify_center()
                                 .bg(colors.editor_background)
-                                .px(px(dimensions.editor_padding))
+                                .px(px(source_horizontal_padding))
                                 .pt(px(source_top_padding))
                                 .overflow_hidden()
                                 .capture_any_mouse_down(
@@ -621,7 +741,7 @@ impl Render for DocumentHost {
                         .flex()
                         .justify_center()
                         .bg(colors.editor_background)
-                        .px(px(dimensions.editor_padding))
+                        .px(px(source_horizontal_padding))
                         .pt(px(source_top_padding))
                         .overflow_hidden()
                         .capture_any_mouse_down(
@@ -1027,7 +1147,7 @@ impl Render for DocumentHost {
                 selection_transfer_for_len(bytes) == SelectionTransfer::Clipboard
             });
             let menu_width = 190.0;
-            let menu_height = 195.0;
+            let menu_height = 259.0;
             let left =
                 f32::from(position.x).clamp(8.0, (viewport_width - menu_width - 8.0).max(8.0));
             let top =
@@ -1064,6 +1184,7 @@ impl Render for DocumentHost {
                 .track_focus(&self.source_context_menu_focus_handle)
                 .capture_key_down(cx.listener(Self::on_source_surface_key_down))
                 .on_action(cx.listener(Self::on_dismiss_transient_ui))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .absolute()
                 .left(px(left))
                 .top(px(top))
@@ -1115,6 +1236,18 @@ impl Render for DocumentHost {
                     SourceContextCommand::ExportSelectionUtf8,
                     has_selection,
                 ))
+                .child(item(
+                    "large-source-context-format-document",
+                    "格式化文档".to_owned(),
+                    SourceContextCommand::FormatDocument,
+                    self.probe.strategy != OpenStrategy::Paged,
+                ))
+                .child(item(
+                    "large-source-context-format-selection",
+                    "格式化选区".to_owned(),
+                    SourceContextCommand::FormatSelection,
+                    has_selection && self.probe.strategy != OpenStrategy::Paged,
+                ))
         });
 
         let graph_edit_overlay = json_graph
@@ -1149,6 +1282,13 @@ impl Render for DocumentHost {
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_jump_to_top))
             .on_action(cx.listener(Self::on_jump_to_bottom))
+            .on_action(cx.listener(Self::on_collapse_fold))
+            .on_action(cx.listener(Self::on_expand_fold))
+            .on_action(cx.listener(Self::on_collapse_all_folds))
+            .on_action(cx.listener(Self::on_expand_all_folds))
+            .on_action(cx.listener(Self::on_format_document))
+            .on_action(cx.listener(Self::on_format_selection))
+            .on_action(cx.listener(Self::on_cancel_formatting))
             .bg(colors.editor_background)
             .children(external_banner)
             .children(oversized_selection_banner)
@@ -1161,6 +1301,11 @@ impl Render for DocumentHost {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_dismiss_transient_ui))
             .capture_key_down(cx.listener(Self::on_source_surface_key_down))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(Self::dismiss_source_context_menu_on_mouse_down),
+            )
+            .child(document_host_bounds_tracker)
             .child(content)
             .children(source_context_menu)
             .children(search_panel)

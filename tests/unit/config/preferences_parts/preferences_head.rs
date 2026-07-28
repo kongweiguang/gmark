@@ -1,52 +1,27 @@
 // @author kongweiguang
 
 use super::{
-    AppPreferences, AutoSavePreference, DocumentLoadingPreferences, DocumentLoadingPreset,
-    EditorSettings, ImagePasteBehavior, PreferencesDropdown, PreferencesNav, PreferencesSwitch,
-    StartupOpenPreference, StatusBarButton,
-    StatusBarPreferences, WorkspaceSidebarPosition,
+    AppPreferences, AutoSavePreference, DocumentLoadingPreferences, EditorSettings,
+    ImagePasteBehavior, PreferencesDropdown, PreferencesNav, PreferencesNumericInput,
+    PreferencesStepperControl, PreferencesSwitch, ResourceInsertBehavior,
+    StartupOpenPreference, StatusBarButton, StatusBarPreferences,
     load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
-    read_app_preferences_with_dirs, save_app_preferences_with_dirs,
-    save_preferences_from_window_with_dirs, theme_option_icon,
+    parse_numeric_input, read_app_preferences_with_dirs, save_app_preferences_with_dirs,
+    save_preferences_from_window_with_dirs,
 };
 use crate::config::GmarkConfigDirs;
 use crate::i18n::I18nManager;
-use crate::theme::{ThemeCatalogEntry, ThemeManager};
+use crate::theme::{ThemeAppearance, ThemeManager, ThemePalette};
 use gpui::{KeyDownEvent, Keystroke, Modifiers, TestAppContext, VisualTestContext, px, size};
 use std::collections::BTreeMap;
 
 fn init_preferences_test_app(cx: &mut TestAppContext) {
     cx.update(|cx| {
         I18nManager::init_with_language_id(cx, "en-US");
-        ThemeManager::init_with_theme_id(cx, "gmark");
+        ThemeManager::init_with_preference(cx, ThemeAppearance::System, ThemePalette::Xcode);
         crate::components::init(cx);
         EditorSettings::init(cx, true, AutoSavePreference::Off, true);
     });
-}
-
-fn default_theme_options() -> Vec<ThemeCatalogEntry> {
-    vec![
-        ThemeCatalogEntry {
-            id: "system".into(),
-            name: "Follow System".into(),
-        },
-        ThemeCatalogEntry {
-            id: "gmark".into(),
-            name: "gmark".into(),
-        },
-        ThemeCatalogEntry {
-            id: "gmark-light".into(),
-            name: "gmark Light".into(),
-        },
-    ]
-}
-
-#[test]
-fn theme_options_use_semantic_local_icons() {
-    assert_eq!(theme_option_icon("system"), "icon/ui/monitor.svg");
-    assert_eq!(theme_option_icon("gmark"), "icon/ui/moon.svg");
-    assert_eq!(theme_option_icon("gmark-light"), "icon/ui/sun.svg");
-    assert_eq!(theme_option_icon("custom:paper"), "icon/ui/palette.svg");
 }
 
 #[test]
@@ -59,11 +34,11 @@ fn editor_preferences_match_product_defaults() {
     assert_eq!(preferences.editor_content_width, 1200);
     assert!(preferences.auto_pair_brackets);
     assert!(preferences.auto_pair_markdown);
-    assert_eq!(
-        preferences.workspace_sidebar_position,
-        WorkspaceSidebarPosition::Left
-    );
     assert!(!preferences.show_tab_bar_actions);
+    assert_eq!(
+        preferences.resource_insert_behavior(),
+        ResourceInsertBehavior::None
+    );
 }
 
 #[test]
@@ -103,10 +78,58 @@ fn partial_or_invalid_preferences_fall_back_by_field() {
         read_app_preferences_with_dirs(&dirs).expect("partial preferences should load");
     assert_eq!(preferences.startup_open, StartupOpenPreference::NewFile);
     assert_eq!(preferences.default_language_id, "en-US");
-    assert_eq!(preferences.default_theme_id, "gmark-light");
+    assert_eq!(preferences.theme_appearance, ThemeAppearance::System);
+    assert_eq!(preferences.theme_palette, ThemePalette::Xcode);
     assert_eq!(preferences.image_paste_behavior, ImagePasteBehavior::None);
     assert!(preferences.auto_pair_brackets);
     assert!(preferences.auto_pair_markdown);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn legacy_workspace_sidebar_position_is_ignored_and_not_written_back() {
+    let root = std::env::temp_dir().join(format!(
+        "gmark-preferences-sidebar-legacy-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).expect("temp root should exist");
+    let dirs = GmarkConfigDirs::from_root(&root);
+    std::fs::write(
+        dirs.app_config_file(),
+        "[editor]\nworkspace_sidebar_position = \"right\"\n",
+    )
+    .expect("legacy preference should be written");
+
+    let loaded = read_app_preferences_with_dirs(&dirs).expect("legacy preferences should load");
+    assert_eq!(loaded, AppPreferences::default());
+    save_app_preferences_with_dirs(&loaded, &dirs).expect("normalized preferences should save");
+    let saved = std::fs::read_to_string(dirs.app_config_file()).expect("config should exist");
+    assert!(!saved.contains("workspace_sidebar_position"));
+    std::fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn invalid_theme_pair_falls_back_to_system_xcode() {
+    let root = std::env::temp_dir().join(format!(
+        "gmark-preferences-invalid-theme-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).expect("temp root should exist");
+    let dirs = GmarkConfigDirs::from_root(&root);
+    std::fs::write(
+        dirs.app_config_file(),
+        r#"
+                [theme]
+                appearance = "dark"
+                palette = "not-a-palette"
+            "#,
+    )
+    .expect("invalid theme preferences should be written");
+
+    let preferences =
+        read_app_preferences_with_dirs(&dirs).expect("invalid theme preferences should load");
+    assert_eq!(preferences.theme_appearance, ThemeAppearance::System);
+    assert_eq!(preferences.theme_palette, ThemePalette::Xcode);
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -129,6 +152,97 @@ fn invalid_image_paste_behavior_falls_back_to_none() {
 
     let preferences = read_app_preferences_with_dirs(&dirs).expect("preferences should load");
     assert_eq!(preferences.image_paste_behavior, ImagePasteBehavior::None);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn resource_insert_behavior_migrates_legacy_key_and_new_key_wins() {
+    let root = std::env::temp_dir().join(format!(
+        "gmark-preferences-resource-migration-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).expect("temp root should exist");
+    let dirs = GmarkConfigDirs::from_root(&root);
+
+    std::fs::write(
+        dirs.app_config_file(),
+        r#"
+                [editor]
+                image_paste_behavior = "copy_to_named_assets_folder"
+            "#,
+    )
+    .expect("legacy preferences should be written");
+    let migrated = load_or_create_app_preferences_with_dirs_and_locales(&dirs, ["en-US"])
+        .expect("legacy preferences should migrate");
+    assert_eq!(
+        migrated.resource_insert_behavior(),
+        ResourceInsertBehavior::CopyToNamedAssetsFolder
+    );
+    let normalized =
+        std::fs::read_to_string(dirs.app_config_file()).expect("migrated config should exist");
+    assert!(normalized.contains(
+        "resource_insert_behavior = \"copy_to_named_assets_folder\""
+    ));
+    assert!(normalized.contains(
+        "image_paste_behavior = \"copy_to_named_assets_folder\""
+    ));
+
+    std::fs::write(
+        dirs.app_config_file(),
+        r#"
+                [editor]
+                resource_insert_behavior = "copy_to_document_folder"
+                image_paste_behavior = "copy_to_assets_folder"
+            "#,
+    )
+    .expect("mixed-version preferences should be written");
+    let preferred =
+        read_app_preferences_with_dirs(&dirs).expect("mixed-version preferences should load");
+    assert_eq!(
+        preferred.resource_insert_behavior(),
+        ResourceInsertBehavior::CopyToDocumentFolder
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn resource_insert_behavior_round_trips_all_modes_and_dual_writes() {
+    let root = std::env::temp_dir().join(format!(
+        "gmark-preferences-resource-round-trip-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let dirs = GmarkConfigDirs::from_root(&root);
+
+    for behavior in [
+        ResourceInsertBehavior::None,
+        ResourceInsertBehavior::CopyToDocumentFolder,
+        ResourceInsertBehavior::CopyToAssetsFolder,
+        ResourceInsertBehavior::CopyToNamedAssetsFolder,
+    ] {
+        let preferences = AppPreferences {
+            image_paste_behavior: behavior,
+            ..AppPreferences::default()
+        };
+        save_app_preferences_with_dirs(&preferences, &dirs)
+            .expect("resource preferences should save");
+
+        let loaded =
+            read_app_preferences_with_dirs(&dirs).expect("resource preferences should reload");
+        assert_eq!(loaded.resource_insert_behavior(), behavior);
+
+        let text =
+            std::fs::read_to_string(dirs.app_config_file()).expect("config should exist");
+        assert!(text.contains(&format!(
+            "resource_insert_behavior = \"{}\"",
+            behavior.as_str()
+        )));
+        assert!(text.contains(&format!(
+            "image_paste_behavior = \"{}\"",
+            behavior.as_str()
+        )));
+    }
+
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -205,24 +319,29 @@ fn saves_and_reads_preferences() {
     let dirs = GmarkConfigDirs::from_root(&root);
     let preferences = AppPreferences {
         startup_open: StartupOpenPreference::LastOpenedFile,
+        auto_check_updates: false,
         default_language_id: "zh-CN".into(),
-        default_theme_id: "gmark-light".into(),
+        theme_appearance: ThemeAppearance::Light,
+        theme_palette: ThemePalette::Xcode,
         show_table_headers: false,
         image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
         auto_save: AutoSavePreference::AfterDelay,
         spell_check: false,
         auto_pair_brackets: false,
         auto_pair_markdown: true,
+        code_folding: true,
+        format_on_save: false,
         editor_font_size: 19,
         editor_line_height_percent: 170,
         editor_content_width: 920,
         editor_font_family: "Georgia".into(),
-        workspace_sidebar_position: WorkspaceSidebarPosition::Right,
         show_tab_bar_actions: true,
         recent_editing_commands: Vec::new(),
         keybindings: BTreeMap::new(),
         status_bar: StatusBarPreferences::default(),
-        document_loading: DocumentLoadingPreferences::default(),
+        document_loading: DocumentLoadingPreferences {
+            max_resident_mib: Some(32),
+        },
     };
 
     save_app_preferences_with_dirs(&preferences, &dirs)
@@ -232,9 +351,13 @@ fn saves_and_reads_preferences() {
 
     let text = std::fs::read_to_string(dirs.app_config_file()).expect("config.toml should exist");
     assert!(text.contains("open = \"last_opened_file\""));
+    assert!(text.contains("auto_check = false"));
     assert!(text.contains("default_language_id = \"zh-CN\""));
-    assert!(text.contains("default_theme_id = \"gmark-light\""));
+    assert!(text.contains("appearance = \"light\""));
+    assert!(text.contains("palette = \"xcode\""));
+    assert!(!text.contains("default_theme_id"));
     assert!(text.contains("show_table_headers = false"));
+    assert!(text.contains("resource_insert_behavior = \"copy_to_assets_folder\""));
     assert!(text.contains("image_paste_behavior = \"copy_to_assets_folder\""));
     assert!(text.contains("auto_save = \"after_delay\""));
     assert!(text.contains("auto_pair_brackets = false"));
@@ -243,48 +366,40 @@ fn saves_and_reads_preferences() {
     assert!(text.contains("line_height_percent = 170"));
     assert!(text.contains("content_width = 920"));
     assert!(text.contains("font_family = \"Georgia\""));
-    assert!(text.contains("workspace_sidebar_position = \"right\""));
+    assert!(!text.contains("workspace_sidebar_position"));
+    assert!(text.contains("max_resident_mib = 32"));
+    assert!(!text.contains("preset ="));
+    assert!(!text.contains("max_resident_lines"));
+    assert!(!text.contains("max_structural_units"));
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
 fn loading_preferences_apply_valid_overrides_and_ignore_invalid_values() {
     let valid = DocumentLoadingPreferences {
-        preset: DocumentLoadingPreset::LowMemory,
         max_resident_mib: Some(32),
-        max_resident_lines: Some(250_000),
-        max_structural_units: Some(2_000_000),
     }
     .policy()
     .effective_limits();
     assert_eq!(valid.max_resident_bytes, 32 * 1024 * 1024);
-    assert_eq!(valid.max_resident_lines, 250_000);
-    assert_eq!(valid.max_structural_units, 2_000_000);
 
     let fallback = DocumentLoadingPreferences {
-        preset: DocumentLoadingPreset::HighPerformance,
         max_resident_mib: Some(0),
-        max_resident_lines: Some(999),
-        max_structural_units: Some(9_999),
     }
     .policy()
     .effective_limits();
-    assert_eq!(fallback, gmark_document_core::HIGH_PERFORMANCE_LIMITS);
+    assert_eq!(fallback, gmark_document_core::DEFAULT_LOADING_LIMITS);
 
-    let mixed_preferences = DocumentLoadingPreferences {
-        preset: DocumentLoadingPreset::LowMemory,
+    let valid_preferences = DocumentLoadingPreferences {
         max_resident_mib: Some(24),
-        max_resident_lines: Some(999),
-        max_structural_units: Some(750_000),
     };
-    let mixed = mixed_preferences.policy().effective_limits();
-    assert_eq!(mixed.max_resident_bytes, 24 * 1024 * 1024);
-    assert_eq!(
-        mixed.max_resident_lines,
-        gmark_document_core::LOW_MEMORY_LIMITS.max_resident_lines
+    assert!(!valid_preferences.has_invalid_override());
+    assert!(
+        DocumentLoadingPreferences {
+            max_resident_mib: Some(1_025),
+        }
+        .has_invalid_override()
     );
-    assert_eq!(mixed.max_structural_units, 750_000);
-    assert!(mixed_preferences.has_invalid_override());
 }
 
 #[test]
@@ -327,9 +442,13 @@ fn legacy_preferences_are_normalized_with_language() {
         StartupOpenPreference::LastOpenedFile
     );
     assert_eq!(preferences.default_language_id, "en-US");
-    assert_eq!(preferences.default_theme_id, "gmark-light");
+    assert_eq!(preferences.theme_appearance, ThemeAppearance::System);
+    assert_eq!(preferences.theme_palette, ThemePalette::Xcode);
     let text = std::fs::read_to_string(dirs.app_config_file()).expect("config.toml should exist");
     assert!(text.contains("[language]"));
+    assert!(text.contains("appearance = \"system\""));
+    assert!(text.contains("palette = \"xcode\""));
+    assert!(!text.contains("default_theme_id"));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -340,19 +459,22 @@ fn saving_preferences_window_persists_selected_language() {
     let dirs = GmarkConfigDirs::from_root(&root);
     let preferences = AppPreferences {
         startup_open: StartupOpenPreference::NewFile,
+        auto_check_updates: true,
         default_language_id: "zh-CN".into(),
-        default_theme_id: "gmark".into(),
+        theme_appearance: ThemeAppearance::System,
+        theme_palette: ThemePalette::Xcode,
         show_table_headers: true,
         image_paste_behavior: ImagePasteBehavior::None,
         auto_save: AutoSavePreference::Off,
         spell_check: true,
         auto_pair_brackets: true,
         auto_pair_markdown: true,
+        code_folding: true,
+        format_on_save: false,
         editor_font_size: 17,
         editor_line_height_percent: 160,
         editor_content_width: 880,
         editor_font_family: String::new(),
-        workspace_sidebar_position: WorkspaceSidebarPosition::Left,
         show_tab_bar_actions: false,
         recent_editing_commands: Vec::new(),
         keybindings: BTreeMap::new(),
@@ -371,24 +493,24 @@ fn saving_preferences_window_persists_selected_language() {
         ..StatusBarPreferences::default()
     };
     let document_loading = DocumentLoadingPreferences {
-        preset: DocumentLoadingPreset::HighPerformance,
         max_resident_mib: Some(96),
-        max_resident_lines: Some(300_000),
-        max_structural_units: Some(1_500_000),
     };
     let saved = save_preferences_from_window_with_dirs(
         StartupOpenPreference::LastOpenedFile,
+        false,
         AutoSavePreference::AfterDelay,
         false,
         false,
+        false,
+        true,
         false,
         18,
         175,
         960,
         "Georgia",
-        WorkspaceSidebarPosition::Right,
         true,
-        "gmark-light",
+        ThemeAppearance::Light,
+        ThemePalette::JetBrains,
         "en-US",
         ImagePasteBehavior::CopyToNamedAssetsFolder,
         BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
@@ -399,7 +521,9 @@ fn saving_preferences_window_persists_selected_language() {
     .expect("window preferences should save");
     assert_eq!(saved.default_language_id, "en-US");
     assert_eq!(saved.startup_open, StartupOpenPreference::LastOpenedFile);
-    assert_eq!(saved.default_theme_id, "gmark-light");
+    assert!(!saved.auto_check_updates);
+    assert_eq!(saved.theme_appearance, ThemeAppearance::Light);
+    assert_eq!(saved.theme_palette, ThemePalette::JetBrains);
     assert_eq!(saved.auto_save, AutoSavePreference::AfterDelay);
     assert!(!saved.spell_check);
     assert!(!saved.auto_pair_brackets);
@@ -408,10 +532,6 @@ fn saving_preferences_window_persists_selected_language() {
     assert_eq!(saved.editor_line_height_percent, 175);
     assert_eq!(saved.editor_content_width, 960);
     assert_eq!(saved.editor_font_family, "Georgia");
-    assert_eq!(
-        saved.workspace_sidebar_position,
-        WorkspaceSidebarPosition::Right
-    );
     assert!(saved.show_tab_bar_actions);
     assert_eq!(saved.document_loading, document_loading);
     assert_eq!(
@@ -431,12 +551,7 @@ async fn preferences_window_activates_and_focuses_on_open(cx: &mut TestAppContex
     init_preferences_test_app(cx);
 
     let handle = cx.update(|cx| {
-        open_preferences_window_with_state(
-            cx,
-            AppPreferences::default(),
-            default_theme_options(),
-            "Preferences".into(),
-        )
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
     });
     cx.run_until_parked();
 
@@ -461,12 +576,7 @@ async fn preferences_window_activates_and_focuses_on_open(cx: &mut TestAppContex
 async fn preferences_pages_keep_actions_visible_at_two_x_scale(cx: &mut TestAppContext) {
     init_preferences_test_app(cx);
     let handle = cx.update(|cx| {
-        open_preferences_window_with_state(
-            cx,
-            AppPreferences::default(),
-            default_theme_options(),
-            "Preferences".into(),
-        )
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
     });
     cx.run_until_parked();
     let mut visual = VisualTestContext::from_window(handle.into(), cx);
@@ -564,7 +674,7 @@ async fn preferences_pages_keep_actions_visible_at_two_x_scale(cx: &mut TestAppC
             let page_control_selector = match nav {
                 PreferencesNav::File => "preferences-startup-dropdown",
                 PreferencesNav::Editor => "preferences-editor-font-size",
-                PreferencesNav::Theme => "preferences-theme-dropdown",
+                PreferencesNav::Theme => "preferences-theme-appearance-system",
                 PreferencesNav::Image => "preferences-image-dropdown",
                 PreferencesNav::Shortcuts => "preferences-shortcuts-scroll",
                 PreferencesNav::StatusBar => "preferences-status-bar-options",
@@ -596,12 +706,7 @@ async fn preferences_pages_keep_actions_visible_at_two_x_scale(cx: &mut TestAppC
 async fn language_preference_is_editable_from_the_theme_page(cx: &mut TestAppContext) {
     init_preferences_test_app(cx);
     let handle = cx.update(|cx| {
-        open_preferences_window_with_state(
-            cx,
-            AppPreferences::default(),
-            default_theme_options(),
-            "Preferences".into(),
-        )
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
     });
     cx.run_until_parked();
 
@@ -620,12 +725,7 @@ async fn language_preference_is_editable_from_the_theme_page(cx: &mut TestAppCon
 async fn preferences_navigation_supports_directional_and_activation_keys(cx: &mut TestAppContext) {
     init_preferences_test_app(cx);
     let handle = cx.update(|cx| {
-        open_preferences_window_with_state(
-            cx,
-            AppPreferences::default(),
-            default_theme_options(),
-            "Preferences".into(),
-        )
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
     });
     cx.run_until_parked();
     let mut visual = VisualTestContext::from_window(handle.into(), cx);
@@ -708,12 +808,7 @@ async fn preferences_navigation_supports_directional_and_activation_keys(cx: &mu
 async fn preferences_dropdowns_support_keyboard_navigation_and_commit(cx: &mut TestAppContext) {
     init_preferences_test_app(cx);
     let handle = cx.update(|cx| {
-        open_preferences_window_with_state(
-            cx,
-            AppPreferences::default(),
-            default_theme_options(),
-            "Preferences".into(),
-        )
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
     });
     cx.run_until_parked();
     let mut visual = VisualTestContext::from_window(handle.into(), cx);
@@ -742,36 +837,9 @@ async fn preferences_dropdowns_support_keyboard_navigation_and_commit(cx: &mut T
     visual.simulate_keystrokes("space end enter");
     visual.run_until_parked();
     handle
-        .update(&mut visual, |preferences, window, _cx| {
+        .update(&mut visual, |preferences, window, cx| {
             assert_eq!(preferences.auto_save, AutoSavePreference::AfterDelay);
             assert!(!preferences.auto_save_dropdown_open);
-            preferences.select_nav(PreferencesNav::Theme, _cx);
-            preferences.dropdown_focus_handles[PreferencesDropdown::Theme.index()].focus(window);
-        })
-        .unwrap();
-    visual.update(|window, cx| window.draw(cx).clear());
-
-    visual.simulate_keystrokes("enter down escape");
-    visual.run_until_parked();
-    handle
-        .update(&mut visual, |preferences, window, cx| {
-            assert_eq!(preferences.selected_theme_id, "gmark");
-            assert!(!preferences.theme_dropdown_open);
-            assert_eq!(cx.global::<ThemeManager>().current_theme_id(), "gmark");
-            assert!(preferences.dropdown_focus_handles[PreferencesDropdown::Theme.index()]
-                .is_focused(window));
-        })
-        .unwrap();
-
-    visual.simulate_keystrokes("enter down enter");
-    visual.run_until_parked();
-    handle
-        .update(&mut visual, |preferences, window, cx| {
-            assert_eq!(preferences.selected_theme_id, "gmark-light");
-            assert_eq!(
-                cx.global::<ThemeManager>().current_theme_id(),
-                "gmark-light"
-            );
             preferences.select_nav(PreferencesNav::Image, cx);
             preferences.dropdown_focus_handles[PreferencesDropdown::Image.index()].focus(window);
         })

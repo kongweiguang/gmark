@@ -410,3 +410,37 @@ fn recovery_path_removal_preserves_other_tabs_and_repairs_active_index() {
     assert_eq!(restored[0].active_index, 0);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn document_sidebar_session_fields_round_trip_with_bounds() {
+    let root = temp_root("document-sidebar");
+    let dirs = GmarkConfigDirs::from_root(&root);
+    let mut value = session(uuid::Uuid::new_v4(), "notes.md", false);
+    value.document_sidebar_width = Some(480.0);
+    value.document_sidebar_docked_open = Some(true);
+    upsert_workspace_session_with_dirs(&value, &dirs).unwrap();
+
+    let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
+    assert_eq!(restored[0].document_sidebar_width, Some(360.0));
+    assert_eq!(restored[0].document_sidebar_docked_open, Some(true));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_session_without_document_sidebar_restores_collapsed_defaults() {
+    let root = temp_root("document-sidebar-legacy");
+    let dirs = GmarkConfigDirs::from_root(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let id = uuid::Uuid::new_v4();
+    std::fs::write(
+        dirs.workspace_session_file(),
+        format!(
+            r#"{{"version":7,"windows":[{{"id":"{id}","tabs":[{{"path":"a.md","pinned":false}}],"active_index":0}}]}}"#
+        ),
+    )
+    .unwrap();
+    let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
+    assert_eq!(restored[0].document_sidebar_width, None);
+    assert_eq!(restored[0].document_sidebar_docked_open, None);
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -132,6 +132,45 @@ async fn new_tab_button_keeps_layout_stable_and_isolates_document_state(
 }
 
 #[gpui::test]
+async fn new_json_and_csv_tabs_use_format_document_hosts(cx: &mut gpui::TestAppContext) {
+    init_test_app(cx);
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| super::Editor::from_markdown(cx, String::new(), None));
+
+    editor.update(visual, |editor, cx| {
+        assert!(editor.new_document_tab(DocumentKind::Json, cx));
+        assert_eq!(editor.view_mode, ViewMode::Source);
+        let json_host = editor
+            .document_host
+            .clone()
+            .expect("new JSON tab must use the format document host");
+        assert!(json_host.read(cx).is_json_document());
+        assert!(json_host.read(cx).has_registered_structure_view());
+        assert!(json_host.read(cx).source_view_for_test());
+        assert_eq!(json_host.read(cx).source_text_for_test(), "{\n}\n");
+
+        assert!(editor.new_document_tab(DocumentKind::Csv, cx));
+        assert_eq!(editor.view_mode, ViewMode::Source);
+        let csv_host = editor
+            .document_host
+            .clone()
+            .expect("new CSV tab must use the format document host");
+        assert!(csv_host.read(cx).is_delimited_document());
+        assert!(csv_host.read(cx).has_registered_structure_view());
+        assert!(csv_host.read(cx).source_view_for_test());
+        assert_eq!(
+            csv_host.read(cx).source_text_for_test(),
+            "Column 1,Column 2\n"
+        );
+
+        assert!(editor.switch_to_tab_index(1, cx));
+        assert_eq!(editor.document_host.as_ref(), Some(&json_host));
+        assert!(json_host.read(cx).is_json_document());
+        assert!(json_host.read(cx).has_registered_structure_view());
+    });
+}
+
+#[gpui::test]
 async fn switching_tabs_restores_document_history_view_and_selection(
     cx: &mut gpui::TestAppContext,
 ) {

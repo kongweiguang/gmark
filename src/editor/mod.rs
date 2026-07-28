@@ -42,6 +42,7 @@ mod file_drop;
 mod file_watch;
 mod find_replace;
 mod focus_modes;
+mod format_menu;
 mod history;
 mod link_completion;
 pub(crate) use crate::perf;
@@ -49,11 +50,12 @@ mod persistence;
 mod projection;
 mod recovery;
 mod render;
-pub(crate) use render::source_editor_top_padding;
+pub(crate) use render::{source_editor_horizontal_padding, source_editor_top_padding};
 mod runtime_context;
 mod selection;
 mod source_format;
 mod source_mapping;
+mod source_tools;
 mod spellcheck;
 mod status_bar;
 mod table_edit;
@@ -72,6 +74,7 @@ mod workspace;
 mod workspace_file_ops;
 
 use self::document_session::EditorDocumentSession;
+pub(crate) use self::format_menu::DocumentMenuFormat;
 use self::projection::PreparedSplitProjection;
 use self::status_bar::StatusBarState;
 use self::virtual_surface::VirtualSurfaceState;
@@ -82,6 +85,47 @@ use self::workspace::WorkspaceState;
 pub(crate) struct PendingOpenLink {
     pub(crate) prompt_target: String,
     pub(crate) open_target: String,
+}
+
+/// A resource picked before an untitled document enters Save As. The source
+/// path is kept outside the Markdown transaction so cancelling Save As cannot
+/// leave a copied file or a partial insertion behind.
+#[derive(Clone)]
+enum PendingResourceInsertion {
+    /// Picker/slash-command insertion keeps its structural destination until
+    /// Save As succeeds; no file is copied before this state is resumed.
+    Prompted {
+        block: Entity<Block>,
+        parent: Option<Entity<Block>>,
+        index: usize,
+        original_kind: BlockKind,
+        cleaned_title: InlineTextTree,
+        cursor: usize,
+        query_only: bool,
+        source: PathBuf,
+    },
+    /// Drag/drop and single-path paste preserve the exact inline split. The
+    /// source path is materialized only after the document has a path.
+    Pasted {
+        block: Entity<Block>,
+        leading: InlineTextTree,
+        trailing: InlineTextTree,
+        source: PathBuf,
+    },
+    /// Resource replacement retains the author-facing label and explicit kind.
+    /// The target entity is re-resolved after materialization so a disappeared
+    /// block cannot leave behind a copy created by this attempt.
+    Replace {
+        entity_id: EntityId,
+        previous: crate::components::ResourceRecord,
+        source: PathBuf,
+    },
+}
+
+struct ResourceTitleDialogState {
+    entity_id: EntityId,
+    previous: crate::components::ResourceRecord,
+    input: Entity<Block>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,7 +154,8 @@ struct DiagramOverlayState {
     block_id: EntityId,
     preview_key: u64,
     rendered: crate::components::MermaidSvgRender,
-    actual_size: bool,
+    /// `None` 时随视口适配；用户滚轮缩放或请求原始尺寸后保留显式比例。
+    manual_scale: Option<f32>,
     close_focus_handle: FocusHandle,
     focus_close_on_render: bool,
 }
@@ -170,6 +215,9 @@ pub struct Editor {
     /// 主画布工具栏按钮跨 render 保持焦点身份，避免文档投影刷新打断键盘导航。
     document_toolbar_focus_handles: [FocusHandle; 3],
     file_open_failure_focus_handles: [FocusHandle; 2],
+    /// 更新面板是应用级浮层，但焦点身份属于当前窗口，跨进度刷新必须保持稳定。
+    update_primary_focus_handle: FocusHandle,
+    update_secondary_focus_handle: FocusHandle,
     table_cells: HashMap<EntityId, TableCellBinding>,
     /// Which view the editor is currently presenting.
     pub(crate) view_mode: ViewMode,
@@ -181,6 +229,7 @@ pub struct Editor {
     pending_scroll_recheck_after_layout: bool,
     pending_save: bool,
     pending_save_as: bool,
+    pending_resource_insertion: Option<PendingResourceInsertion>,
     /// 已有路径保存的后台任务；同时只允许一个 writer，后续请求合并到完成后的下一帧。
     save_task: Option<Task<()>>,
     save_queued: bool,
@@ -190,6 +239,7 @@ pub struct Editor {
     spellcheck_task: Option<Task<()>>,
     export_task: Option<Task<()>>,
     export_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    export_progress: Option<Arc<export::ExportProgress>>,
     export_in_progress: bool,
     export_cancel_requested: bool,
     pending_open_link: Option<PendingOpenLink>,
@@ -238,13 +288,13 @@ pub struct Editor {
     /// Optional informational dialog shown from the Help menu.
     info_dialog: Option<InfoDialogKind>,
     /// True while an online update check is running in the background.
-    update_check_in_progress: bool,
     workspace: WorkspaceState,
     tabs: tabs::TabState,
     focus_mode: bool,
     typewriter_mode: bool,
     status_bar: StatusBarState,
     context_menu: Option<ContextMenuState>,
+    resource_title_dialog: Option<ResourceTitleDialogState>,
     /// Logical selection for editor, workspace, and tab context menus. It is
     /// independent from GPUI focus so dismissing a menu preserves the caret.
     context_menu_keyboard_item: Option<usize>,
@@ -576,6 +626,25 @@ impl DocumentKind {
         }
     }
 
+    /// JSON/CSV 标签共享通用格式宿主；Markdown 与未指定文本继续走轻量 Block 编辑器。
+    fn document_host_format(self) -> Option<gmark_document_core::DocumentFormat> {
+        match self {
+            Self::Json => Some(gmark_document_core::DocumentFormat::Json),
+            Self::Csv => Some(gmark_document_core::DocumentFormat::Delimited { delimiter: b',' }),
+            Self::Unspecified | Self::Markdown => None,
+        }
+    }
+
+    /// 无路径标签也必须使用与同扩展名文件一致的 Source 语法；CSV 和普通文本
+    /// 保持无语法投影，避免被 Markdown 标记规则改变输入呈现。
+    fn source_syntax_language(self) -> Option<&'static str> {
+        match self {
+            Self::Markdown => Some("markdown"),
+            Self::Json => Some("json"),
+            Self::Unspecified | Self::Csv => None,
+        }
+    }
+
     fn untitled_name(self) -> &'static str {
         match self {
             Self::Unspecified => "Untitled",
@@ -615,10 +684,10 @@ impl DocumentKind {
 /// The informational dialogs that can be shown from the Help menu.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InfoDialogKind {
-    /// Dialog describing update-check availability.
-    CheckForUpdates,
     /// Dialog with app name and version information.
     About,
+    /// Read-only facts about the active document and its current view.
+    Document,
 }
 
 #[path = "core_parts/editor_construction.rs"]

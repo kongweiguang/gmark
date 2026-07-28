@@ -231,8 +231,6 @@ fn open_reason_name(reason: OpenReason) -> &'static str {
         OpenReason::WithinResidentLimits => "within_resident_limits",
         OpenReason::ForcedSafeSource => "forced_safe_source",
         OpenReason::ByteLimitExceeded => "byte_limit_exceeded",
-        OpenReason::LineLimitExceeded => "line_limit_exceeded",
-        OpenReason::StructuralLimitExceeded => "structural_limit_exceeded",
     }
 }
 

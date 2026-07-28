@@ -12,6 +12,37 @@ use gpui::*;
 use super::Editor;
 
 impl Editor {
+    pub(in crate::editor) fn discard_current_document_changes(&mut self, cx: &mut Context<Self>) {
+        self.checkpoint_recovery_journal();
+        if let Some(document_host) = self.document_host.clone() {
+            document_host.update(cx, |host, cx| host.discard_unsaved_changes(cx));
+        } else {
+            // Resident 文档以 session dirty 为真值；只清 UI 缓存会让关闭序列立即重新弹框。
+            self.source_document.mark_persisted();
+        }
+        self.document_dirty = false;
+    }
+
+    /// 窗口级“放弃并关闭”承诺丢弃整个窗口的编辑，不能逐标签重复同一弹窗。
+    pub(in crate::editor) fn discard_all_document_changes_for_window_close(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let tab_count = self.window_tab_count();
+        for _ in 0..tab_count {
+            self.discard_current_document_changes(cx);
+            if !self.activate_dirty_tab_for_window_close(cx) {
+                return true;
+            }
+        }
+
+        debug_assert!(
+            false,
+            "discarding every tab must clear the window dirty state"
+        );
+        false
+    }
+
     pub(crate) fn request_close_current_window(
         &mut self,
         window: &mut Window,
@@ -110,6 +141,7 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        crate::updater::UpdateCoordinator::cancel_pending_install(cx);
         self.pending_close_after_save = false;
         self.cancel_explicit_window_close();
         self.abort_window_close_tab_sequence(cx);
@@ -128,17 +160,15 @@ impl Editor {
         self.close_dialog_restore_focus = None;
         self.close_menu_bar(cx);
         self.hide_unsaved_changes_dialog(cx);
-        self.checkpoint_recovery_journal();
-        self.document_dirty = false;
         self.pending_window_edited = false;
-        if self.activate_dirty_tab_for_window_close(cx) {
+        if self.discard_all_document_changes_for_window_close(cx) {
+            self.remove_workspace_session_for_explicit_close(cx);
+            window.remove_window();
+        } else {
             self.show_unsaved_changes_dialog = true;
             self.close_dialog_restore_focus = None;
             window.blur();
             cx.notify();
-        } else {
-            self.remove_workspace_session_for_explicit_close(cx);
-            window.remove_window();
         }
     }
 

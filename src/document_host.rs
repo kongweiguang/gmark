@@ -40,19 +40,22 @@ use gmark_paged_document::{
 };
 use gpui::prelude::*;
 use gpui::{
-    AnyView, App, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable, KeyDownEvent,
-    MouseButton, MouseDownEvent, Pixels, Point, ScrollHandle, ScrollStrategy, ScrollWheelEvent,
-    SharedString, Stateful, Task, UniformListScrollHandle, Window, div, hsla, point, px, relative,
-    rems, svg, uniform_list,
+    AnyView, App, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
+    KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, ScrollHandle, ScrollStrategy,
+    ScrollWheelEvent, SharedString, Stateful, Subscription, Task, UniformListScrollHandle, Window,
+    canvas, div, hsla, point, px, relative, rems, svg, uniform_list,
 };
 
 use crate::components::{
-    Block, BlockEvent, BlockHostAction, BlockKind, BlockRecord, Copy, Cut, Delete, DeleteBack,
-    DismissTransientUi, ExportSelection, FindInDocument, FindNext, FindPrevious, GoToLine,
-    JumpToBottom, JumpToTop, PageDown, PageUp, Paste, Redo, SaveDocument, SelectAll,
+    Block, BlockEvent, BlockHostAction, BlockKind, BlockRecord, CancelFormatting, CollapseAllFolds,
+    CollapseFold, Copy, Cut, Delete, DeleteBack, DismissTransientUi, ExpandAllFolds, ExpandFold,
+    ExportSelection, FindInDocument, FindNext, FindPrevious, FormatDocument, FormatSelection,
+    GoToLine, JumpToBottom, JumpToTop, PageDown, PageUp, Paste, Redo, SaveDocument, SelectAll,
     SourceLayoutIdentity, Undo, source_line_number_gutter_width,
 };
 use crate::document_runtime::DocumentCoordinator;
+use crate::editor::DocumentMenuFormat;
+use crate::source_tools::{FoldProjectionIndex, ResidentFoldParser, SourceLanguageId};
 
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::theme::ThemeManager;
@@ -89,10 +92,7 @@ fn session_plan(
 ) -> gmark_document_core::OpenPlan {
     let mut policy = gmark_document_core::LoadingPolicy {
         max_resident_bytes: Some(probe.options.max_resident_bytes),
-        max_resident_lines: Some(probe.options.max_resident_lines),
-        max_structural_units: Some(probe.options.max_structural_units),
         force_safe_source: probe.force_safe_source,
-        ..gmark_document_core::LoadingPolicy::default()
     };
     // 恢复日志可能显式要求 Paged，即使当前文件已缩小；仍沿用打开时阈值，
     // 只把本次会话强制为安全 Source，不污染偏好设置。
@@ -112,8 +112,6 @@ fn session_plan(
         let mut resident = gmark_document_core::OpenPolicyResolver.resolve(
             gmark_document_core::LoadingPolicy {
                 max_resident_bytes: Some(u64::MAX),
-                max_resident_lines: Some(u64::MAX),
-                max_structural_units: Some(u64::MAX),
                 ..gmark_document_core::LoadingPolicy::default()
             },
             profile,
@@ -169,7 +167,13 @@ fn build_paged_session(
     identity: gmark_paged_document::FileIdentity,
 ) -> Result<DocumentSession, PagedDocumentError> {
     let profile = probe.profile();
-    let plan = session_plan(&profile, probe, OpenStrategy::Paged, false);
+    let mut plan = session_plan(&profile, probe, OpenStrategy::Paged, false);
+    if derived_views_enabled(probe.strategy) {
+        // 恢复正文用 PieceDocument 保留 undo/redo，所以后端仍是 Paged；但原文件在
+        // Resident 阈值内时，结构索引由恢复快照构建，必须继承其表格/图视图白名单。
+        let resident_plan = session_plan(&profile, probe, OpenStrategy::Resident, false);
+        plan.allowed_views = resident_plan.allowed_views;
+    }
     DocumentSession::new(
         profile,
         gmark_document_runtime::DocumentStore::Paged(Box::new(PagedDocumentAdapter::new(document))),
@@ -317,6 +321,8 @@ enum SourceContextCommand {
     SelectAll,
     ExportSelection,
     ExportSelectionUtf8,
+    FormatDocument,
+    FormatSelection,
 }
 
 #[derive(Clone, Debug)]
@@ -888,10 +894,10 @@ pub(crate) struct DocumentHost {
     json_expand_generation: u64,
     json_expand_cancellation: Option<SearchCancellation>,
     view_registry: DocumentViewRegistry,
-    /// 仅在 session 尚未安装或被保存任务暂时移出时存在；Ready 状态的唯一视图真值
-    /// 位于 `DocumentSession.view_state`，禁止 Host 再保留第二份副本。
-    pending_view_state: Option<DocumentViewState>,
-    /// 用户最近选择的投影 Provider；切回 Source 后仍保留偏好，但当前 active view 只在 session 中。
+    /// 此 Tab 的选择、滚动、投影展开状态和活动模式。它始终留在 Host，即使保存任务
+    /// 暂时移出共享 Session，也不能把一个窗口的 UI 状态塞回正文会话。
+    tab_view_state: DocumentViewState,
+    /// 用户最近选择的投影 Provider；切回 Source 后仍保留偏好，活动模式属于 Tab。
     selected_projection_view: Option<DocumentViewId>,
     document_epoch: u64,
     derived_projection_generation: u64,
@@ -914,12 +920,17 @@ pub(crate) struct DocumentHost {
     graph_edit_issue: Option<JsonGraphEditIssue>,
     graph_edit_original: Option<Arc<str>>,
     graph_state_initialized: bool,
+    graph_projection_identity: Option<(u64, u64, u64)>,
+    graph_row_limits: HashMap<JsonGraphItemId, usize>,
+    graph_layout_cache: Option<json_graph::GraphLayoutCache>,
     graph_needs_fit: bool,
+    graph_fit_all_requested: bool,
     graph_last_viewport: Option<(f32, f32)>,
     graph_pan_session: Option<(gpui::Point<gpui::Pixels>, f32, f32)>,
     graph_pending_center: Option<JsonGraphItemId>,
     graph_recenter_anchor: Option<(JsonGraphItemId, gpui::Point<gpui::Pixels>)>,
     graph_focus_handle: FocusHandle,
+    graph_focus_subscription: Option<Subscription>,
     json_split_ratio: f32,
     json_split_drag: Option<(f32, f32)>,
     json_split_focus_handle: FocusHandle,
@@ -939,6 +950,20 @@ pub(crate) struct DocumentHost {
     source_queued_visible: Option<Range<usize>>,
     source_last_visible: Option<Range<usize>>,
     source_list_origin: usize,
+    source_language: SourceLanguageId,
+    fold_projection: FoldProjectionIndex,
+    fold_parser: Arc<Mutex<ResidentFoldParser>>,
+    fold_snapshot_revision: Option<u64>,
+    fold_window: Option<Range<usize>>,
+    fold_generation: u64,
+    fold_cancellation: Option<SearchCancellation>,
+    fold_task: Task<()>,
+    folding_enabled: bool,
+    format_generation: u64,
+    format_cancellation: Option<SearchCancellation>,
+    format_task: Task<()>,
+    format_running: bool,
+    save_after_format: Option<gpui::AnyWindowHandle>,
     source_cancel_in_flight: bool,
     source_row_height: f32,
     active_edit: Option<SourceLineEdit>,
@@ -948,6 +973,8 @@ pub(crate) struct DocumentHost {
     source_drag_anchor: Option<SourceAnchor>,
     source_drag_autoscroll_direction: i8,
     source_drag_autoscroll_task: Task<()>,
+    /// 右键事件使用窗口坐标；菜单位于宿主局部层，必须用最近一帧边界消除外壳偏移。
+    document_host_bounds: Arc<Mutex<Option<Bounds<Pixels>>>>,
     source_context_menu: Option<gpui::Point<gpui::Pixels>>,
     source_context_menu_focus_handle: FocusHandle,
     search_input: Entity<Block>,
@@ -1535,16 +1562,10 @@ fn source_line_from_scrollbar_pointer(
 }
 
 fn document_view_state_mut<'a>(
-    document: &'a mut Option<DocumentSession>,
-    pending: &'a mut Option<DocumentViewState>,
+    _: &mut Option<DocumentSession>,
+    tab_view_state: &'a mut DocumentViewState,
 ) -> &'a mut DocumentViewState {
-    if let Some(document) = document.as_mut() {
-        &mut document.view_state
-    } else {
-        pending
-            .as_mut()
-            .expect("DocumentHost without a session must own pending view state")
-    }
+    tab_view_state
 }
 
 fn document_dirty_state(document: &Option<DocumentSession>, pending: &Option<bool>) -> bool {
@@ -1568,51 +1589,41 @@ fn set_document_dirty_state(
 }
 
 impl DocumentHost {
-    fn sync_session_active_view(&mut self) {
-        let active_view = if self.view_mode == DocumentHostViewMode::Source {
+    fn sync_tab_active_view(&mut self) {
+        let mut active_view = if self.view_mode == DocumentHostViewMode::Source {
             DocumentViewId::source()
         } else {
             self.selected_projection_view
                 .clone()
                 .unwrap_or_else(DocumentViewId::source)
         };
-        if let Some(document) = self.document.as_mut() {
-            let _ = document.set_active_view(active_view);
-        } else if let Some(pending) = self.pending_view_state.as_mut() {
-            pending.active_view = Some(active_view);
+        // Session 与 Tab 必须公开同一个活动视图；只更新 Tab 会让 Source/Live 往返后
+        // 持久会话仍声称自己停留在旧表格，保存、恢复和测试都会读到错误状态。
+        if let Some(document) = self.document.as_mut()
+            && document.set_active_view(active_view.clone()).is_err()
+        {
+            self.view_mode = DocumentHostViewMode::Source;
+            active_view = DocumentViewId::source();
+            // Source 是所有文本会话的必备视图；若这里仍失败，说明构造契约已损坏。
+            debug_assert!(document.set_active_view(active_view.clone()).is_ok());
         }
+        self.tab_view_state.active_view = Some(active_view);
     }
 
-    /// 后台保存需要独占并移走 session；视图状态先转交 pending 槽，避免后台副本
-    /// 与仍在渲染的 Host 同时成为权威状态。
+    /// 后台保存需要独占并移走 session；Tab 视图状态始终留在 Host，避免后台副本
+    /// 与仍在渲染的窗口同时成为权威状态。
     fn take_document_session(&mut self) -> Option<DocumentSession> {
         let mut document = self.document.take()?;
-        debug_assert!(self.pending_view_state.is_none());
         debug_assert!(self.pending_dirty.is_none());
-        self.pending_view_state = Some(std::mem::take(&mut document.view_state));
         self.pending_dirty = Some(std::mem::replace(&mut document.dirty, false));
         Some(document)
     }
 
-    /// 安装 session 时原子接回 pending 状态。初次打开保留 OpenPlan 的 active view；
-    /// 恢复/保存期间已有 active view 仅在新计划仍允许时提交。
+    /// 安装或接回共享 Session 时只恢复正文状态；Tab 视图状态已经由 Host 持有。
     fn install_document_session(&mut self, mut document: DocumentSession) {
         if let Some(dirty) = self.pending_dirty.take() {
             document.dirty = dirty;
         }
-        let Some(mut pending) = self.pending_view_state.take() else {
-            // 同步编辑生成的 next session 已携带当前 view_state，可直接替换旧 session。
-            self.document = Some(document);
-            return;
-        };
-        if let Some(active_view) = pending.active_view.clone() {
-            if document.set_active_view(active_view).is_err() {
-                pending.active_view = Some(document.active_view.clone());
-            }
-        } else {
-            pending.active_view = Some(document.active_view.clone());
-        }
-        document.view_state = pending;
         self.document = Some(document);
     }
 }
@@ -1638,6 +1649,12 @@ impl Drop for DocumentHost {
         if let Some(cancellation) = self.derived_projection_cancellation.take() {
             cancellation.cancel();
         }
+        if let Some(cancellation) = self.fold_cancellation.take() {
+            cancellation.cancel();
+        }
+        if let Some(cancellation) = self.format_cancellation.take() {
+            cancellation.cancel();
+        }
         // 未编辑的预建日志只有身份帧，不应在下次启动伪装成恢复文档。
         if !document_dirty_state(&self.document, &self.pending_dirty)
             && let Some(journal) = self.coordinator.recovery_journal.take()
@@ -1657,6 +1674,10 @@ impl Focusable for DocumentHost {
 mod json_graph;
 #[path = "document_views/render.rs"]
 mod render;
+#[path = "document_views/source_folding.rs"]
+mod source_folding;
+#[path = "document_views/source_formatting.rs"]
+mod source_formatting;
 #[path = "document_views/source_surface.rs"]
 mod source_surface;
 #[path = "document_views/structured_view.rs"]

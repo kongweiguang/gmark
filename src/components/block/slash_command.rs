@@ -21,8 +21,6 @@ const SLASH_MENU_VIEWPORT_INSET: f32 = 8.0;
 // 单一块入口固定占用内容列内部的左侧预留区，因此普通块、引用和窄窗口共享同一 X 轴。
 pub(super) const BLOCK_GUTTER_TEXT_RESERVE: f32 = 20.0;
 
-type BlockGutterAction = dyn Fn(&mut Block, &mut Window, &mut Context<Block>);
-
 struct BlockDragPreview;
 
 impl Render for BlockDragPreview {
@@ -135,7 +133,10 @@ fn filter_slash_commands(query: &str) -> Vec<SlashCommand> {
 #[path = "slash_command_parts/resolver.rs"]
 mod resolver;
 #[cfg(test)]
-use resolver::{boundary_available_index, selected_available_index, slash_menu_child_index};
+use resolver::{
+    block_gutter_container_inset, block_gutter_represents_semantic_block, boundary_available_index,
+    selected_available_index, slash_menu_child_index, slash_menu_surface_bounds,
+};
 #[cfg(test)]
 #[path = "../../../tests/unit/components/block/slash_command.rs"]
 mod tests;

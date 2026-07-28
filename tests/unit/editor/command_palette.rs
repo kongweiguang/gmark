@@ -18,7 +18,40 @@ fn editor_actions_map_to_the_shared_editing_command_registry() {
         editing_command_for_action(&crate::components::SetHeading2),
         Some(crate::components::EditingCommandId::Heading2)
     );
+    assert_eq!(
+        editing_command_for_action(&crate::components::InsertResource),
+        Some(crate::components::EditingCommandId::Resource)
+    );
     assert!(editing_command_for_action(&crate::components::SaveDocument).is_none());
+}
+
+#[gpui::test]
+async fn markdown_document_menu_exposes_the_shared_resource_action(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        crate::i18n::I18nManager::init_with_language_id(cx, "en-US");
+        crate::theme::ThemeManager::init(cx);
+        crate::components::init(cx);
+    });
+    let (editor, visual) = cx.add_window_view(|_window, cx| {
+        super::Editor::from_markdown(cx, "# test\n".to_owned(), None)
+    });
+
+    visual.update(|_window, cx| {
+        let menu = editor.read(cx).build_document_menu(cx);
+        let resource = menu
+            .items
+            .iter()
+            .find(|item| {
+                matches!(item, gpui::MenuItem::Action { name, .. } if name.as_ref() == "Insert Resource")
+            })
+            .expect("Markdown menu must expose Insert Resource");
+        match resource {
+            gpui::MenuItem::Action { action, .. } => {
+                assert!(action.as_any().is::<crate::components::InsertResource>());
+            }
+            _ => unreachable!("filtered to an action item"),
+        }
+    });
 }
 
 #[test]
@@ -40,10 +73,6 @@ async fn command_labels_follow_the_selected_chinese_language(cx: &mut gpui::Test
             "关闭标签页"
         );
         assert_eq!(
-            localized_action_label(&crate::components::AddThemeConfig, strings, "zh-CN"),
-            "添加主题配置"
-        );
-        assert_eq!(
             localized_action_label(&crate::components::CheckForUpdates, strings, "zh-CN"),
             "检查更新"
         );
@@ -63,6 +92,14 @@ async fn command_labels_follow_the_selected_chinese_language(cx: &mut gpui::Test
             localized_action_label(&crate::components::ExportPdf, strings, "zh-CN"),
             "导出为 PDF"
         );
+        let resource = crate::components::InsertResource;
+        let resource_label = localized_action_label(&resource, strings, "zh-CN");
+        assert_eq!(resource_label, "资源");
+        assert_eq!(
+            localized_action_description(&resource, &resource_label, "zh-CN"),
+            "选择文件并插入资源卡片"
+        );
+        assert_eq!(command_icon(&resource), "icon/ui/file.svg");
     });
 }
 

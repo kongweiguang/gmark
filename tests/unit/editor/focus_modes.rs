@@ -51,14 +51,7 @@ async fn focus_and_typewriter_toggles_are_independent_and_non_mutating(
             assert!(editor.workspace.is_open);
             assert!(
                 editor
-                    .render_workspace_panel(
-                        &theme,
-                        &strings,
-                        280.0,
-                        false,
-                        crate::config::WorkspaceSidebarPosition::Left,
-                        cx,
-                    )
+                    .render_workspace_panel(&theme, &strings, 280.0, false, cx)
                     .is_none()
             );
             assert!(

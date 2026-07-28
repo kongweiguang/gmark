@@ -20,7 +20,6 @@ use super::{
     workspace_file_ops,
 };
 use crate::components::BlockEvent;
-use crate::config::WorkspaceSidebarPosition;
 use crate::i18n::I18nStrings;
 use crate::theme::Theme;
 use crate::window_chrome::middle_ellipsis;
@@ -43,6 +42,10 @@ const WORKSPACE_PANEL_MIN_WIDTH: f32 = 200.0;
 const WORKSPACE_PANEL_MAX_WIDTH: f32 = 360.0;
 pub(super) const WORKSPACE_COMPACT_BREAKPOINT: f32 = 900.0;
 const WORKSPACE_COMPACT_OVERLAY_WIDTH: f32 = 280.0;
+pub(super) const DOCUMENT_SIDEBAR_PANEL_AUTO_MIN_WIDTH: f32 = 240.0;
+pub(super) const DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH: f32 = 200.0;
+pub(super) const DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH: f32 = 360.0;
+pub(super) const DOCUMENT_SIDEBAR_COMPACT_OVERLAY_WIDTH: f32 = 280.0;
 const WORKSPACE_RESIZE_HIT_WIDTH: f32 = 7.0;
 const WORKSPACE_RESIZE_KEYBOARD_STEP: f32 = 4.0;
 const WORKSPACE_RESIZE_KEYBOARD_LARGE_STEP: f32 = 16.0;
@@ -106,6 +109,8 @@ fn workspace_status_row(
 pub(super) enum WorkspaceTab {
     #[default]
     Files,
+    /// 旧工作区大纲已迁移到右侧文档导航；保留内部状态仅用于兼容既有会话测试。
+    #[allow(dead_code)]
     Outline,
     Search,
 }
@@ -296,6 +301,15 @@ pub(super) struct WorkspaceState {
     panel_width: Option<f32>,
     resize_session: Option<WorkspaceResizeSession>,
     resize_focus_handle: Option<FocusHandle>,
+    /// 文档导航是独立于工作区文件树的右侧上下文面板。
+    pub(super) document_sidebar_open: bool,
+    document_sidebar_docked_open_preference: Option<bool>,
+    document_sidebar_compact_layout: Option<bool>,
+    document_sidebar_panel_width: Option<f32>,
+    pub(super) document_sidebar_scroll: ScrollHandle,
+    pub(super) document_sidebar_focus_handle: Option<FocusHandle>,
+    document_sidebar_resize_session: Option<WorkspaceResizeSession>,
+    document_sidebar_resize_focus_handle: Option<FocusHandle>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -693,6 +707,25 @@ pub(super) fn workspace_panel_width_for_viewport(
     }
     let target = viewport_width * WORKSPACE_PANEL_TARGET_RATIO;
     target.clamp(WORKSPACE_PANEL_AUTO_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH)
+}
+
+pub(super) fn document_sidebar_panel_width_for_viewport(
+    viewport_width: f32,
+    preferred_width: Option<f32>,
+) -> f32 {
+    if workspace_uses_overlay(viewport_width) {
+        return DOCUMENT_SIDEBAR_COMPACT_OVERLAY_WIDTH.min(viewport_width.max(0.0));
+    }
+    if let Some(width) = preferred_width.filter(|width| width.is_finite()) {
+        return width.clamp(
+            DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH,
+            DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
+        );
+    }
+    (viewport_width * WORKSPACE_PANEL_TARGET_RATIO).clamp(
+        DOCUMENT_SIDEBAR_PANEL_AUTO_MIN_WIDTH,
+        DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
+    )
 }
 
 pub(super) fn workspace_uses_overlay(viewport_width: f32) -> bool {

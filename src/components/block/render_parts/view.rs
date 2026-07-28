@@ -68,8 +68,13 @@ impl Render for Block {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
-        let content_inset = rendered_content_inset(d);
-        let depth_padding = content_inset + d.nested_block_indent * self.render_depth as f32;
+        let grouped_surface = self.callout_anchor.is_some() || self.footnote_anchor.is_some();
+        let (depth_padding, content_inset) = block_content_insets(
+            rendered_content_inset(d),
+            d.nested_block_indent,
+            self.render_depth,
+            grouped_surface,
+        );
 
         if self.is_table_cell() {
             let is_header = self
@@ -193,6 +198,8 @@ impl Render for Block {
         if self.is_source_raw_mode()
             && !rendered_frontmatter
             && !rendered_comment
+            // Mermaid 的局部工作台始终由下方专用分支渲染；焦点不再隐式决定源码/预览。
+            && self.kind() != BlockKind::MermaidBlock
             && (focused
                 || !matches!(
                     self.kind(),
@@ -245,12 +252,8 @@ impl Render for Block {
                 None => BlockTextElement::new(cx.entity(), is_placeholder),
             };
             let source_editor = source_base.child(text);
-            if focused && matches!(self.kind(), BlockKind::MathBlock | BlockKind::MermaidBlock) {
-                let preview = match self.kind() {
-                    BlockKind::MathBlock => self.render_math_content(&theme, cx),
-                    BlockKind::MermaidBlock => self.render_mermaid_content(&theme, window, cx),
-                    _ => unreachable!("guarded complex preview kind"),
-                };
+            if focused && self.kind() == BlockKind::MathBlock {
+                let preview = self.render_math_content(&theme, cx);
                 return div()
                     .debug_selector(|| "complex-source-live-preview".to_owned())
                     .w_full()
@@ -272,19 +275,25 @@ impl Render for Block {
             return source_editor.into_any_element();
         }
 
-        let focused_base = self.render_shell(
-            block_id.clone(),
-            false,
-            if showing_rendered_image {
-                CursorStyle::PointingHand
-            } else {
-                CursorStyle::IBeam
-            },
-            depth_padding,
-            content_inset,
-            d,
-            cx,
-        );
+        let focused_base = self
+            .render_shell(
+                block_id.clone(),
+                false,
+                if showing_rendered_image {
+                    CursorStyle::PointingHand
+                } else {
+                    CursorStyle::IBeam
+                },
+                depth_padding,
+                content_inset,
+                d,
+                cx,
+            )
+            // 分组外壳已经承担纵向留白，内部行保持编辑命中面积但不再撑出大块空白。
+            .when(grouped_surface, |base| {
+                base.min_h(px(t.text_size * t.text_line_height + 2.0))
+                    .py(px(1.0))
+            });
 
         if self.kind() == BlockKind::Paragraph
             && crate::components::is_toc_marker(self.display_text())
@@ -343,6 +352,19 @@ impl Render for Block {
             }
         }
 
+        // A card owns focus after a single click so it can expose selection,
+        // Enter/Space and double-click actions. Keep the card rendered while
+        // selected; the context-menu "编辑标题" action clears this flag to
+        // intentionally enter the normal Markdown editor for that block.
+        if self.record.resource.is_some()
+            && self.kind() == BlockKind::Paragraph
+            && (!focused || self.resource_selected)
+        {
+            return focused_base
+                .child(self.render_resource_content(&theme, cx))
+                .into_any_element();
+        }
+
         let content = match self.kind() {
             BlockKind::Separator => focused_base
                 .debug_selector(|| "separator-shell".to_owned())
@@ -393,7 +415,12 @@ impl Render for Block {
                             .items_center()
                             .justify_center()
                             .child(bulleted_list_marker(render_depth, c.text_default)),
-                        if showing_rendered_image {
+                        if self.record.resource.is_some() && (!focused || self.resource_selected) {
+                            div()
+                                .min_w(px(0.0))
+                                .flex_grow()
+                                .child(self.render_resource_content(&theme, cx))
+                        } else if showing_rendered_image {
                             let viewport_width =
                                 f32::from(window.viewport_size().width.max(px(1.0)));
                             let resize_basis_width =
@@ -477,7 +504,12 @@ impl Render for Block {
                             self.render_depth,
                             self.list_ordinal.unwrap_or(1),
                         ))),
-                    if showing_rendered_image {
+                    if self.record.resource.is_some() && (!focused || self.resource_selected) {
+                        div()
+                            .min_w(px(0.0))
+                            .flex_grow()
+                            .child(self.render_resource_content(&theme, cx))
+                    } else if showing_rendered_image {
                         let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
                         let resize_basis_width =
                             effective_list_item_image_width(self, viewport_width, d);
@@ -531,22 +563,30 @@ impl Render for Block {
                     },
                 ])
                 .into_any_element(),
-            BlockKind::Quote => focused_base
-                .text_size(px(t.text_size))
-                .text_color(c.text_quote)
-                .line_height(rems(t.text_line_height))
-                .child(self.render_text_or_mixed_inline_visuals(
-                    &theme,
-                    focused,
-                    is_placeholder,
-                    None,
-                    None,
-                    c.text_quote,
-                    t.text_size,
-                    FontWeight::NORMAL,
-                    cx,
-                ))
-                .into_any_element(),
+            BlockKind::Quote => {
+                let content =
+                    if self.record.resource.is_some() && (!focused || self.resource_selected) {
+                        self.render_resource_content(&theme, cx)
+                    } else {
+                        self.render_text_or_mixed_inline_visuals(
+                            &theme,
+                            focused,
+                            is_placeholder,
+                            None,
+                            None,
+                            c.text_quote,
+                            t.text_size,
+                            FontWeight::NORMAL,
+                            cx,
+                        )
+                    };
+                focused_base
+                    .text_size(px(t.text_size))
+                    .text_color(c.text_quote)
+                    .line_height(rems(t.text_line_height))
+                    .child(content)
+                    .into_any_element()
+            }
             BlockKind::Callout(variant) => self.render_callout_content(
                 focused_base,
                 focused,
@@ -606,18 +646,16 @@ impl Render for Block {
                 };
                 focused_base.w_full().child(child).into_any_element()
             }
-            BlockKind::MermaidBlock => {
-                if !focused {
-                    self.last_layout = None;
-                    self.last_bounds = None;
-                }
-                let child = if focused {
-                    BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
-                } else {
-                    self.render_mermaid_content(&theme, window, cx)
-                };
-                focused_base.w_full().child(child).into_any_element()
-            }
+            BlockKind::MermaidBlock => self.render_mermaid_workbench(
+                block_id.clone(),
+                depth_padding,
+                content_inset,
+                is_placeholder,
+                &theme,
+                &strings,
+                window,
+                cx,
+            ),
             BlockKind::RawMarkdown if rendered_frontmatter => {
                 let body = yaml_frontmatter_body(self.display_text()).unwrap_or_default();
                 let lines = body

@@ -2,7 +2,10 @@
 
 use gpui::{AppContext, Bounds, KeyDownEvent, Keystroke, TestAppContext, point, px, size};
 
-use super::{Block, TOOLBAR_HEIGHT, ToolbarCommand, ToolbarPosition, toolbar_window_position};
+use super::{
+    Block, TOOLBAR_HEIGHT, ToolbarCommand, ToolbarPosition, attached_surface_placement,
+    expanded_block_type_width, selection_toolbar_width, toolbar_window_position,
+};
 use crate::components::{
     BlockHostAction, BlockKind, BlockRecord, InlineTextTree, TableCellPosition,
     TableColumnAlignment,
@@ -15,6 +18,7 @@ fn position_prefers_above_and_clamps_to_viewport_edges() {
         Bounds::new(point(px(0.0), px(0.0)), size(px(320.0), px(200.0))),
         size(px(320.0), px(200.0)),
         0.0,
+        Some(106.0),
     );
     assert_eq!(left.left, 8.0);
     assert_eq!(left.top, 100.0 - TOOLBAR_HEIGHT - 6.0);
@@ -25,11 +29,12 @@ fn position_prefers_above_and_clamps_to_viewport_edges() {
         Bounds::new(point(px(0.0), px(0.0)), size(px(320.0), px(200.0))),
         size(px(320.0), px(200.0)),
         0.0,
+        Some(106.0),
     );
     assert_eq!(
         below,
         ToolbarPosition {
-            left: 56.0,
+            left: 22.0,
             top: 28.0,
             above: false
         }
@@ -40,9 +45,49 @@ fn position_prefers_above_and_clamps_to_viewport_edges() {
         Bounds::new(point(px(0.0), px(0.0)), size(px(480.0), px(400.0))),
         size(px(480.0), px(400.0)),
         312.0,
+        Some(106.0),
     );
     assert!(attached_menu.above);
     assert!(attached_menu.top >= 8.0);
+}
+
+#[test]
+fn toolbar_width_tracks_visible_buttons_without_trailing_space() {
+    let roomy_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(400.0), px(200.0)));
+    let compact_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(280.0), px(200.0)));
+
+    assert_eq!(
+        selection_toolbar_width(roomy_bounds, size(px(400.0), px(200.0)), Some(106.0)),
+        290.0
+    );
+    assert_eq!(
+        selection_toolbar_width(compact_bounds, size(px(280.0), px(200.0)), Some(106.0)),
+        226.0
+    );
+    assert_eq!(
+        selection_toolbar_width(roomy_bounds, size(px(400.0), px(200.0)), Some(82.0)),
+        266.0
+    );
+    assert_eq!(
+        selection_toolbar_width(roomy_bounds, size(px(400.0), px(200.0)), None),
+        182.0
+    );
+    assert_eq!(expanded_block_type_width("zh-CN"), 82.0);
+    assert_eq!(expanded_block_type_width("en-US"), 106.0);
+}
+
+#[test]
+fn overflow_menu_uses_safe_content_space_instead_of_toolbar_side() {
+    let toolbar_above_selection = ToolbarPosition {
+        left: 80.0,
+        top: 48.0,
+        above: true,
+    };
+    let (opens_above, available_height) =
+        attached_surface_placement(toolbar_above_selection, 174.0, 600.0, 24.0, 24.0);
+
+    assert!(!opens_above);
+    assert!(available_height >= 174.0);
 }
 
 #[gpui::test]

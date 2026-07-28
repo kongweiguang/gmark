@@ -13,6 +13,27 @@ impl Editor {
         let d = &theme.dimensions;
         let t = &theme.typography;
         let s = cx.global::<I18nManager>().strings().clone();
+        let dialog_min_height = (
+            // GPUI 的自动高度不会稳定计入横向操作行中的定高按钮，因此由组成 token
+            // 明确给出单行文案下的固有高度；较长本地化文案仍可继续撑高面板。
+            (d.table_insert_stepper_gap + 4.0) * 2.0
+                + 22.0
+                + t.dialog_body_size * t.text_line_height
+                + d.table_insert_stepper_button_size * 2.0
+                + d.table_insert_stepper_gap * 3.0
+                + d.table_insert_stepper_gap * 0.5
+                + d.table_insert_stepper_gap
+                + d.dialog_button_height
+                // 按钮下方与分隔线上方使用同一档紧凑间距，保持操作区垂直居中。
+                + d.table_insert_stepper_gap
+                // 为文字行高和 1px 边框的设备像素取整保留半个紧凑间距。
+                + d.table_insert_stepper_gap * 0.5
+                // GPUI 会把定高操作行放到面板固有高度之外；补足上下动作区留白。
+                + d.table_insert_stepper_gap * 2.5
+                // 边框设备像素取整会压缩底部空隙，补齐后与操作区顶部间距对称。
+                + d.dialog_border_width * 6.0
+        )
+        .ceil();
 
         let stepper =
             |id_prefix: &'static str,
@@ -21,11 +42,16 @@ impl Editor {
              on_dec: fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>),
              on_inc: fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>)| {
                 div()
+                    .w_full()
+                    .flex_none()
                     .flex()
-                    .flex_col()
-                    .gap(px(d.table_insert_stepper_gap))
+                    .items_center()
+                    .justify_between()
                     .child(
                         div()
+                            .min_w(px(0.0))
+                            .flex_grow()
+                            .pr(px(d.table_insert_stepper_gap))
                             .text_size(px(t.dialog_body_size))
                             .font_weight(t.dialog_button_weight.to_font_weight())
                             .text_color(c.dialog_body)
@@ -33,6 +59,7 @@ impl Editor {
                     )
                     .child(
                         div()
+                            .flex_none()
                             .flex()
                             .items_center()
                             .gap(px(d.table_insert_stepper_gap))
@@ -51,7 +78,13 @@ impl Editor {
                                     .cursor_pointer()
                                     .text_color(c.dialog_secondary_button_text)
                                     .on_click(cx.listener(on_dec))
-                                    .child(svg().path(MINUS_ICON).size(px(14.0))),
+                                    // GPUI 的 SVG 不继承父容器文本色，必须直接着色以保证深浅主题可见。
+                                    .child(
+                                        svg()
+                                            .path(MINUS_ICON)
+                                            .size(px(14.0))
+                                            .text_color(c.dialog_secondary_button_text),
+                                    ),
                             )
                             .child(
                                 div()
@@ -84,7 +117,12 @@ impl Editor {
                                     .cursor_pointer()
                                     .text_color(c.dialog_secondary_button_text)
                                     .on_click(cx.listener(on_inc))
-                                    .child(svg().path(PLUS_ICON).size(px(14.0))),
+                                    .child(
+                                        svg()
+                                            .path(PLUS_ICON)
+                                            .size(px(14.0))
+                                            .text_color(c.dialog_secondary_button_text),
+                                    ),
                             ),
                     )
             };
@@ -107,11 +145,23 @@ impl Editor {
                                 d.dialog_width.min(d.table_insert_dialog_width),
                                 theme,
                             )
+                            .min_h(px(dialog_min_height))
+                            // 紧凑弹窗在低高度窗口中仍需为操作按钮保留完整底部内边距。
+                            .py(px(d.table_insert_stepper_gap + 4.0))
+                            .gap(px(d.table_insert_stepper_gap * 0.5))
                             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                                 cx.stop_propagation()
                             })
                             .child(
-                                dialog_content("table-insert-dialog-content", theme)
+                                // 短表单必须参与弹窗固有高度计算；共享滚动容器的 flex 布局会裁掉末行。
+                                div()
+                                    .id("table-insert-dialog-content")
+                                    .debug_selector(|| "table-insert-dialog-content".to_owned())
+                                    .w_full()
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(d.table_insert_stepper_gap))
                                     .child(dialog_title_with_icon(
                                         "table-insert-title",
                                         s.table_insert_title.clone(),
@@ -136,6 +186,9 @@ impl Editor {
                             )
                             .child(
                                 dialog_actions(theme)
+                                    .id("table-insert-dialog-actions")
+                                    .debug_selector(|| "table-insert-dialog-actions".to_owned())
+                                    .pt(px(d.table_insert_stepper_gap))
                                     .child(
                                         dialog_button(
                                             "cancel-table-insert-dialog",

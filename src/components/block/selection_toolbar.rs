@@ -15,10 +15,14 @@ use crate::components::markdown::inline::StyleFlag;
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::theme::Theme;
 
-const TOOLBAR_COMPACT_WIDTH: f32 = 256.0;
-const TOOLBAR_EXPANDED_WIDTH: f32 = 320.0;
+// 宽度与按钮、间距和 2px 面板内边距严格对应，避免尾部留下额外空白。
+const TOOLBAR_WITHOUT_BLOCK_TYPE_WIDTH: f32 = 182.0;
+const TOOLBAR_COMPACT_WIDTH: f32 = 226.0;
+const TOOLBAR_BLOCK_TYPE_CHINESE_WIDTH: f32 = 82.0;
+const TOOLBAR_BLOCK_TYPE_DEFAULT_WIDTH: f32 = 106.0;
 const TOOLBAR_HEIGHT: f32 = 32.0;
 const TOOLBAR_GAP: f32 = 6.0;
+const OVERFLOW_MENU_HEIGHT: f32 = 174.0;
 const VIEWPORT_INSET: f32 = 8.0;
 // Windows 的菜单标题栏与文档标签栏都在 GPUI client viewport 内；附着浮层
 // 必须为标签栏预留这一层高度，不能只按整个窗口的 y=0 做碰撞判断。
@@ -162,14 +166,30 @@ struct ToolbarPosition {
     above: bool,
 }
 
-fn selection_toolbar_width(horizontal_bounds: Bounds<Pixels>, viewport: Size<Pixels>) -> f32 {
+fn selection_toolbar_width(
+    horizontal_bounds: Bounds<Pixels>,
+    viewport: Size<Pixels>,
+    expanded_block_type_width: Option<f32>,
+) -> f32 {
+    let Some(expanded_block_type_width) = expanded_block_type_width else {
+        return TOOLBAR_WITHOUT_BLOCK_TYPE_WIDTH;
+    };
     let viewport_width = f32::from(viewport.width);
     let left_edge = (f32::from(horizontal_bounds.left()) + VIEWPORT_INSET).max(VIEWPORT_INSET);
     let right_edge = f32::from(horizontal_bounds.right()).min(viewport_width) - VIEWPORT_INSET;
-    if right_edge - left_edge >= TOOLBAR_EXPANDED_WIDTH {
-        TOOLBAR_EXPANDED_WIDTH
+    let expanded_width = TOOLBAR_WITHOUT_BLOCK_TYPE_WIDTH + 2.0 + expanded_block_type_width;
+    if right_edge - left_edge >= expanded_width {
+        expanded_width
     } else {
         TOOLBAR_COMPACT_WIDTH
+    }
+}
+
+fn expanded_block_type_width(language_id: &str) -> f32 {
+    if language_id.starts_with("zh") {
+        TOOLBAR_BLOCK_TYPE_CHINESE_WIDTH
+    } else {
+        TOOLBAR_BLOCK_TYPE_DEFAULT_WIDTH
     }
 }
 
@@ -178,10 +198,12 @@ fn toolbar_window_position(
     horizontal_bounds: Bounds<Pixels>,
     viewport: Size<Pixels>,
     attached_surface_height: f32,
+    expanded_block_type_width: Option<f32>,
 ) -> ToolbarPosition {
     let viewport_width = f32::from(viewport.width);
     let viewport_height = f32::from(viewport.height);
-    let toolbar_width = selection_toolbar_width(horizontal_bounds, viewport);
+    let toolbar_width =
+        selection_toolbar_width(horizontal_bounds, viewport, expanded_block_type_width);
     let min_left = (f32::from(horizontal_bounds.left()) + VIEWPORT_INSET).max(VIEWPORT_INSET);
     let right_edge = f32::from(horizontal_bounds.right()).min(viewport_width);
     let max_left = (right_edge - toolbar_width - VIEWPORT_INSET).max(min_left);

@@ -18,6 +18,9 @@ pub struct BlockRecord {
     pub parent: Option<Uuid>,
     pub content: Vec<Uuid>,
     pub raw_fallback: Option<String>,
+    /// Parsed standalone resource metadata. The source text remains in the
+    /// title so focusing the block still exposes editable Markdown.
+    pub resource: Option<ResourceRecord>,
 }
 
 impl BlockRecord {
@@ -31,8 +34,13 @@ impl BlockRecord {
             parent: None,
             content: Vec::new(),
             raw_fallback: None,
+            resource: None,
         };
         record.sync_raw_fallback();
+        if resource_capable_kind(&record.kind) {
+            let markdown = record.title.serialize_markdown();
+            record.resource = ResourceRecord::parse(&markdown, None);
+        }
         record
     }
 
@@ -42,6 +50,13 @@ impl BlockRecord {
 
     pub fn paragraph(text: impl Into<String>) -> Self {
         Self::with_plain_text(BlockKind::Paragraph, text)
+    }
+
+    pub fn resource(resource: ResourceRecord) -> Self {
+        let source = resource.source_or_canonical_markdown();
+        let mut record = Self::with_plain_text(BlockKind::Paragraph, source);
+        record.resource = Some(resource);
+        record
     }
 
     pub fn raw_markdown(markdown: impl Into<String>) -> Self {
@@ -107,6 +122,14 @@ impl BlockRecord {
     }
 
     pub fn set_title(&mut self, title: InlineTextTree) {
+        // Keep the domain attachment synchronized with the source tree. A
+        // paste or a normal text edit can create a complete standalone resource
+        // before the next projection rebuild; parsing it here keeps the card
+        // visible without making the runtime tree a second source of truth.
+        let serialized = title.serialize_markdown();
+        self.resource = resource_capable_kind(&self.kind)
+            .then(|| ResourceRecord::parse(&serialized, None))
+            .flatten();
         self.title = title;
         self.sync_raw_fallback();
     }
@@ -135,6 +158,36 @@ impl BlockRecord {
     /// Raw-preserved blocks produce their fallback text when at depth 0.
     pub fn markdown_line(&self, depth: usize, list_ordinal: Option<usize>) -> String {
         let indentation = "  ".repeat(depth);
+        if let Some(resource) = &self.resource {
+            let markdown = resource.source_or_canonical_markdown();
+            return match self.kind {
+                BlockKind::Paragraph => indent_multiline(&markdown, &indentation),
+                BlockKind::BulletedListItem => prefixed_multiline(
+                    &markdown,
+                    &format!("{indentation}- "),
+                    &format!("{indentation}  "),
+                ),
+                BlockKind::TaskListItem { checked } => prefixed_multiline(
+                    &markdown,
+                    &format!("{indentation}- [{}] ", if checked { "x" } else { " " }),
+                    &format!("{indentation}      "),
+                ),
+                BlockKind::NumberedListItem => prefixed_multiline(
+                    &markdown,
+                    &format!("{indentation}{}. ", list_ordinal.unwrap_or(1)),
+                    &format!("{indentation}   "),
+                ),
+                BlockKind::Quote => prefixed_multiline(
+                    &markdown,
+                    &format!("{indentation}> "),
+                    &format!("{indentation}> "),
+                ),
+                BlockKind::Callout(variant) => {
+                    format!("{indentation}> {}", variant.header_markdown(&markdown))
+                }
+                _ => indent_multiline(&markdown, &indentation),
+            };
+        }
         let title_markdown = self.title_markdown_for_output();
         match self.kind {
             BlockKind::Paragraph => indent_multiline(&title_markdown, &indentation),
@@ -231,6 +284,18 @@ impl BlockRecord {
     }
 }
 
+fn resource_capable_kind(kind: &BlockKind) -> bool {
+    matches!(
+        kind,
+        BlockKind::Paragraph
+            | BlockKind::BulletedListItem
+            | BlockKind::NumberedListItem
+            | BlockKind::TaskListItem { .. }
+            | BlockKind::Quote
+            | BlockKind::Callout(_)
+    )
+}
+
 fn indent_multiline(content: &str, indentation: &str) -> String {
     content
         .split('\n')
@@ -264,6 +329,11 @@ fn prefixed_multiline(content: &str, first_prefix: &str, continuation_prefix: &s
 pub enum PastedImageSource {
     ClipboardImage(Image),
     LocalPath(PathBuf),
+    /// A local file pasted from the file manager or a single-path clipboard
+    /// item. It shares the image insertion transaction but serializes as a
+    /// resource card (or a normal image when the adapter identifies it as an
+    /// image file).
+    LocalResource(PathBuf),
 }
 
 /// Events emitted by a block to its parent editor when structural
@@ -299,6 +369,24 @@ pub(crate) struct BlockDragPayload {
 pub(crate) enum BlockDropPlacement {
     Before,
     After,
+}
+
+/// Window-bound file export request emitted from a Mermaid block.
+/// `AnyWindowHandle` intentionally has no `Debug` implementation, so this
+/// wrapper exposes only safe diagnostics while preserving the live window route.
+#[derive(Clone)]
+pub(crate) struct MermaidSvgExportRequest {
+    pub(crate) svg: String,
+    pub(crate) window: AnyWindowHandle,
+}
+
+impl std::fmt::Debug for MermaidSvgExportRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MermaidSvgExportRequest")
+            .field("svg_bytes", &self.svg.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -393,6 +481,8 @@ pub enum BlockEvent {
         preview_key: u64,
         rendered: crate::components::MermaidSvgRender,
     },
+    /// 将当前主题下、与源码一致的 Mermaid SVG 交给编辑器执行保存对话框与原子写入。
+    RequestExportMermaidSvg(MermaidSvgExportRequest),
     /// Jump from a rendered footnote reference to the corresponding
     /// in-place footnote definition block.
     RequestJumpToFootnoteDefinition { id: String },

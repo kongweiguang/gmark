@@ -10,6 +10,7 @@ fn local_ui_icons_are_registered_with_gpui() {
     for path in [
         "icon/gmark-icon.svg",
         "icon/ui/file.svg",
+        "icon/ui/panel-right.svg",
         "icon/ui/plus.svg",
         "icon/ui/minus.svg",
         "icon/ui/type.svg",
@@ -39,6 +40,7 @@ fn local_ui_icons_are_registered_with_gpui() {
         "icon/ui/quote.svg",
         "icon/ui/sigma.svg",
         "icon/ui/corner-up-left.svg",
+        "icon/ui/expand.svg",
         "icon/ui/align-left.svg",
         "icon/ui/align-center.svg",
         "icon/ui/align-right.svg",

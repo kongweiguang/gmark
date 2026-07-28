@@ -59,14 +59,14 @@ impl Editor {
     ) -> bool {
         let index = match self.workspace.active_tab {
             WorkspaceTab::Files => 0usize,
-            WorkspaceTab::Outline => 1,
-            WorkspaceTab::Search => 2,
+            WorkspaceTab::Outline => 0,
+            WorkspaceTab::Search => 1,
         };
         let next = match key {
             "left" => Some(index.saturating_sub(1)),
-            "right" => Some((index + 1).min(2)),
+            "right" => Some((index + 1).min(1)),
             "home" => Some(0),
-            "end" => Some(2),
+            "end" => Some(1),
             "tab" if shift => {
                 self.enter_workspace_body(window, cx, true);
                 return true;
@@ -84,7 +84,6 @@ impl Editor {
         };
         let tab = match next.expect("tab navigation must produce an index") {
             0 => WorkspaceTab::Files,
-            1 => WorkspaceTab::Outline,
             _ => WorkspaceTab::Search,
         };
         self.set_workspace_tab(tab, cx);
@@ -508,7 +507,7 @@ impl Editor {
         }));
     }
 
-    pub(super) fn sync_workspace_outline(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::editor) fn sync_workspace_outline(&mut self, cx: &mut Context<Self>) {
         let revision = (self.document_epoch, self.source_document.revision());
         if self.workspace.outline_revision == Some(revision)
             || self.workspace.outline_requested_revision == Some(revision)

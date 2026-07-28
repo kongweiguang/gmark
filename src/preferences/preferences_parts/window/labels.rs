@@ -165,6 +165,13 @@ impl PreferencesWindow {
             ShortcutCommand::SaveDocumentAs => {
                 strings.preferences_shortcut_save_document_as.clone()
             }
+            ShortcutCommand::CollapseFold => "Collapse Fold".to_owned(),
+            ShortcutCommand::ExpandFold => "Expand Fold".to_owned(),
+            ShortcutCommand::CollapseAllFolds => "Collapse All Folds".to_owned(),
+            ShortcutCommand::ExpandAllFolds => "Expand All Folds".to_owned(),
+            ShortcutCommand::FormatDocument => "Format Document".to_owned(),
+            ShortcutCommand::FormatSelection => "Format Selection".to_owned(),
+            ShortcutCommand::CancelFormatting => "Cancel Formatting".to_owned(),
             ShortcutCommand::NewWindow => strings.preferences_shortcut_new_window.clone(),
             ShortcutCommand::NewTab => strings.preferences_shortcut_new_tab.clone(),
             ShortcutCommand::OpenFile => strings.preferences_shortcut_open_file.clone(),
@@ -189,6 +196,7 @@ impl PreferencesWindow {
             ShortcutCommand::ToggleWorkspace => {
                 strings.preferences_shortcut_toggle_workspace.clone()
             }
+            ShortcutCommand::ToggleDocumentSidebar => strings.menu_toggle_document_sidebar.clone(),
             ShortcutCommand::QuickOpen => strings.preferences_shortcut_quick_open.clone(),
             ShortcutCommand::CommandPalette => strings.preferences_shortcut_command_palette.clone(),
             ShortcutCommand::GoToLine => strings.preferences_shortcut_go_to_line.clone(),

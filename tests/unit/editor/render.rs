@@ -1,19 +1,18 @@
 // @author kongweiguang
 
 use super::{
-    INTEGRATED_MENU_LEFT, MENU_ICON_SLOT, MENU_SHORTCUT_GAP, MENU_SHORTCUT_SLOT, NoRecentFiles,
-    RenderedRowSpacingInfo, callout_row_top_gap, clamped_floating_panel_origin,
-    clamped_split_pane_ratio, compact_menu_panel_height, editor_tab_strip_insets,
-    editor_text_font_for_family, floating_submenu_x, import_menu_split_index,
-    in_window_menu_chrome_layout, menu_bar_button_width, menu_icon_slot,
+    INTEGRATED_MENU_LEFT, MENU_ICON_SLOT, MENU_SHORTCUT_GAP, MENU_SHORTCUT_MAX_WIDTH,
+    MENU_SHORTCUT_SLOT, NoRecentFiles, RenderedRowSpacingInfo, callout_row_top_gap,
+    clamped_floating_panel_origin, clamped_split_pane_ratio, compact_menu_panel_height,
+    editor_tab_strip_insets, editor_text_font_for_family, floating_submenu_x,
+    import_menu_split_index, in_window_menu_chrome_layout, menu_bar_button_width, menu_icon_slot,
     menu_items_visual_height_with_gaps, menu_panel_left, menu_panel_width_for_labels,
     menu_shortcut_slot, menu_shortcut_text, owned_menu_item_labels, rendered_row_top_gap,
-    scrollable_import_menu_scroll_height, submenu_bridge_geometry,
-    supports_in_window_menu_for_target_os, tibetan_font_fallbacks_for_target_os,
-    top_level_menu_button_width, visible_menu_button_count,
+    scrollable_import_menu_scroll_height, source_editor_horizontal_padding,
+    submenu_bridge_geometry, supports_in_window_menu_for_target_os,
+    tibetan_font_fallbacks_for_target_os, top_level_menu_button_width, visible_menu_button_count,
 };
-use crate::components::{AddLanguageConfig, AddThemeConfig, SaveDocument, Undo};
-use crate::config::WorkspaceSidebarPosition;
+use crate::components::{AddLanguageConfig, SaveDocument, Undo};
 use crate::theme::Theme;
 use gpui::{
     Context, InteractiveElement, IntoElement, KeyBinding, OwnedMenu, OwnedMenuItem, ParentElement,
@@ -31,19 +30,17 @@ fn split_pane_ratio_keeps_both_panes_above_minimum_width() {
 }
 
 #[test]
+fn source_surface_uses_compact_horizontal_padding() {
+    let theme = Theme::default_theme();
+
+    assert_eq!(theme.dimensions.editor_padding, 24.0);
+    assert_eq!(source_editor_horizontal_padding(&theme.dimensions), 12.0);
+}
+
+#[test]
 fn docked_workspace_only_insets_the_editor_tab_strip() {
-    assert_eq!(
-        editor_tab_strip_insets(WorkspaceSidebarPosition::Left, 248.0),
-        (248.0, 0.0)
-    );
-    assert_eq!(
-        editor_tab_strip_insets(WorkspaceSidebarPosition::Right, 248.0),
-        (0.0, 248.0)
-    );
-    assert_eq!(
-        editor_tab_strip_insets(WorkspaceSidebarPosition::Left, 0.0),
-        (0.0, 0.0)
-    );
+    assert_eq!(editor_tab_strip_insets(248.0), (248.0, 0.0));
+    assert_eq!(editor_tab_strip_insets(0.0), (0.0, 0.0));
 }
 
 #[test]
@@ -117,14 +114,6 @@ fn disabled_menu_action(name: &str) -> OwnedMenuItem {
     OwnedMenuItem::Action {
         name: name.into(),
         action: Box::new(NoRecentFiles),
-        os_action: None,
-    }
-}
-
-fn add_theme_menu_action() -> OwnedMenuItem {
-    OwnedMenuItem::Action {
-        name: "Add Theme Config".into(),
-        action: Box::new(AddThemeConfig),
         os_action: None,
     }
 }
@@ -303,8 +292,9 @@ fn menu_button_width_expands_for_long_ascii_labels() {
     assert!(menu_bar_button_width("Language", dimensions) > dimensions.menu_bar_button_width);
     assert_eq!(
         top_level_menu_button_width(0, "gmark", dimensions),
-        dimensions.status_bar_height
+        menu_bar_button_width("gmark", dimensions)
     );
+    assert!(top_level_menu_button_width(0, "gmark", dimensions) > dimensions.status_bar_height);
 }
 
 #[test]
@@ -418,6 +408,22 @@ fn menu_panel_width_expands_for_long_recent_paths() {
 }
 
 #[test]
+fn menu_panel_width_reserves_leading_and_shortcut_slots_for_long_commands() {
+    let theme = Theme::default_theme();
+    let dimensions = &theme.dimensions;
+    let labels = ["在文档中查找"];
+
+    let width = menu_panel_width_for_labels(&labels, dimensions);
+    let required = labels[0].chars().count() as f32 * dimensions.menu_text_size
+        + MENU_ICON_SLOT
+        + dimensions.menu_item_padding_x * 2.0
+        + MENU_SHORTCUT_MAX_WIDTH
+        + MENU_SHORTCUT_GAP;
+
+    assert!(width >= required.ceil());
+}
+
+#[test]
 fn floating_context_menu_clamps_and_flips_submenu_inside_minimum_viewport() {
     let theme = Theme::default_theme();
     let dimensions = &theme.dimensions;
@@ -439,12 +445,7 @@ fn floating_context_menu_clamps_and_flips_submenu_inside_minimum_viewport() {
 }
 
 #[test]
-fn import_menu_split_detects_theme_and_language_import_tails() {
-    let theme_items = vec![
-        disabled_menu_action("gmark"),
-        OwnedMenuItem::Separator,
-        add_theme_menu_action(),
-    ];
+fn import_menu_split_detects_language_import_tails() {
     let language_items = vec![
         disabled_menu_action("English"),
         OwnedMenuItem::Separator,
@@ -455,12 +456,8 @@ fn import_menu_split_detects_theme_and_language_import_tails() {
         OwnedMenuItem::Separator,
         disabled_menu_action("Save"),
     ];
-    let malformed_import_items = vec![disabled_menu_action("gmark"), add_theme_menu_action()];
-
-    assert_eq!(import_menu_split_index(&theme_items), Some(1));
     assert_eq!(import_menu_split_index(&language_items), Some(1));
     assert_eq!(import_menu_split_index(&regular_items), None);
-    assert_eq!(import_menu_split_index(&malformed_import_items), None);
 }
 
 #[test]
@@ -470,7 +467,14 @@ fn scrollable_import_menu_height_caps_visible_items_and_clamps_to_viewport() {
     let scroll_items = (0..20)
         .map(|index| disabled_menu_action(&format!("Custom Theme {index}")))
         .collect::<Vec<_>>();
-    let footer_items = vec![OwnedMenuItem::Separator, add_theme_menu_action()];
+    let footer_items = vec![
+        OwnedMenuItem::Separator,
+        OwnedMenuItem::Action {
+            name: "Add Language Config".into(),
+            action: Box::new(AddLanguageConfig),
+            os_action: None,
+        },
+    ];
     let expected_large_height = menu_items_visual_height_with_gaps(&scroll_items[..12], dimensions);
     let full_scroll_content_height = menu_items_visual_height_with_gaps(&scroll_items, dimensions);
     let footer_height = menu_items_visual_height_with_gaps(&footer_items, dimensions);
@@ -512,10 +516,8 @@ fn submenu_bridge_spans_parent_child_menu_gap() {
         .expect("submenu bridge geometry should be available");
     let submenu_width = menu_panel_width_for_labels(&submenu_labels, dimensions);
 
-    assert_eq!(
-        bridge.left,
-        dimensions.menu_bar_padding_x + dimensions.menu_panel_width
-    );
+    let main_width = menu_panel_width_for_labels(&owned_menu_item_labels(&items), dimensions);
+    assert_eq!(bridge.left, dimensions.menu_bar_padding_x + main_width);
     assert_eq!(bridge.width, dimensions.menu_panel_gap + submenu_width);
     assert!(bridge.height > dimensions.menu_item_height);
     let item_top = dimensions.menu_panel_top

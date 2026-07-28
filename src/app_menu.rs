@@ -11,24 +11,25 @@ use std::path::{Path, PathBuf};
 use gpui::*;
 
 use crate::components::{
-    AddLanguageConfig, AddThemeConfig, BlockKind, BoldSelection, CheckForUpdates, CloseTab,
-    CloseWindow, CodeSelection, CommandPalette, Copy, CopyAsMarkdown, Cut, EditingCommandHistory,
-    ExportHtml, ExportImage, ExportPdf, FindInDocument, FindNext, FindPrevious, HighlightSelection,
-    InlineMathSelection, InstallCliTool, ItalicSelection, LinkSelection, NewTab, NewWindow,
-    NextTab, NoRecentFiles, NormalizeLineEndingsCr, NormalizeLineEndingsCrLf,
-    NormalizeLineEndingsLf, OpenCrashReports, OpenFile, OpenFolder, OpenPreferences,
-    OpenPrivacyPolicy, OpenRecentFile, OpenSafeSource, Paste, PasteAsPlainText, PreviousTab,
-    QuickOpen, QuitApplication, Redo, ReopenClosedTab, ReplaceInDocument, SaveDocument,
-    SaveDocumentAs, SelectAll, SelectLanguage, SelectTheme, SetBulletedList, SetCodeBlock,
-    SetHeading1, SetHeading2, SetHeading3, SetHeading4, SetHeading5, SetHeading6, SetNumberedList,
-    SetParagraph, SetQuote, SetTaskList, ShowAbout, StrikethroughSelection, SubscriptSelection,
-    SuperscriptSelection, ToggleFocusMode, ToggleTypewriterMode, ToggleViewMode, ToggleWorkspace,
-    UnderlineSelection, Undo, UninstallCliTool,
+    AddLanguageConfig, BlockKind, BoldSelection, CheckForUpdates, CloseTab, CloseWindow,
+    CodeSelection, CommandPalette, Copy, CopyAsMarkdown, Cut, EditingCommandHistory, ExportHtml,
+    ExportImage, ExportPdf, ExportSelection, FindInDocument, FindNext, FindPrevious,
+    FocusStructuredColumns, FocusStructuredFilter, HighlightSelection, InlineMathSelection,
+    InsertResource, InstallCliTool, ItalicSelection, LinkSelection, NewTab, NewWindow, NextTab,
+    NoRecentFiles, NormalizeLineEndingsCr, NormalizeLineEndingsCrLf, NormalizeLineEndingsLf,
+    OpenCrashReports, OpenFile, OpenFolder, OpenPreferences, OpenPrivacyPolicy, OpenRecentFile,
+    OpenSafeSource, Paste, PasteAsPlainText, PreviousTab, QuickOpen, QuitApplication, Redo,
+    ReopenClosedTab, ReplaceInDocument, SaveDocument, SaveDocumentAs, SelectAll, SelectLanguage,
+    SetBulletedList, SetCodeBlock, SetHeading1, SetHeading2, SetHeading3, SetHeading4, SetHeading5,
+    SetHeading6, SetNumberedList, SetParagraph, SetQuote, SetTaskList, ShowAbout, ShowDocumentInfo,
+    ShowDocumentOutline, ShowStructureView, ShowStructuredInspector, StrikethroughSelection,
+    SubscriptSelection, SuperscriptSelection, ToggleDocumentSidebar, ToggleFocusMode,
+    ToggleTypewriterMode, ToggleViewMode, ToggleWorkspace, UnderlineSelection, Undo,
+    UninstallCliTool,
 };
 use crate::config::{
-    apply_configured_language, apply_configured_theme, import_language_config_and_select,
-    import_theme_config_and_select, open_preferences_window, read_recent_files, record_recent_file,
-    remove_recent_file,
+    apply_configured_language, import_language_config_and_select, open_preferences_window,
+    read_recent_files, record_recent_file, remove_recent_file,
 };
 use crate::editor::{Editor, InfoDialogKind};
 use crate::export::ExportFormat;
@@ -104,8 +105,6 @@ pub(crate) fn menu_action_icon(action: &dyn Action) -> Option<&'static str> {
         || action.is::<UninstallCliTool>()
     {
         Some("icon/ui/keyboard.svg")
-    } else if action.is::<SelectTheme>() || action.is::<AddThemeConfig>() {
-        Some("icon/ui/palette.svg")
     } else if action.is::<ToggleWorkspace>() {
         Some("icon/ui/panel-left.svg")
     } else if action.is::<ToggleFocusMode>() || action.is::<ToggleTypewriterMode>() {
@@ -473,13 +472,15 @@ pub(crate) fn open_workspace_session_window(
     };
     handle
         .update(cx, |editor, _window, cx| {
-            editor.restore_tab_session(
+            editor.restore_tab_session_with_sidebars(
                 session.id,
                 restored,
                 active_index,
                 session.workspace_root,
                 session.workspace_panel_width,
                 session.workspace_docked_open,
+                session.document_sidebar_width,
+                session.document_sidebar_docked_open,
                 session.split_pane_ratio,
                 cx,
             );
@@ -581,7 +582,6 @@ use menus::build_menus;
 pub(crate) use menus::{init, install_menus};
 use menus::{
     prompt_and_import_language_config, prompt_and_import_language_config_with_error_window,
-    prompt_and_import_theme_config, prompt_and_import_theme_config_with_error_window,
     prompt_and_open_files, prompt_and_open_files_with_error_window, prompt_and_open_safe_source,
     prompt_and_open_safe_source_with_error_window,
 };

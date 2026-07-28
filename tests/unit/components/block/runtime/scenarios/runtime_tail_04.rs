@@ -792,3 +792,49 @@ async fn typing_closing_italic_marker_places_caret_after_marker(cx: &mut TestApp
         );
     });
 }
+
+#[gpui::test]
+async fn mermaid_workbench_mode_is_runtime_only_and_respects_read_only(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let source = "```mermaid\nflowchart LR\nA --> B\n```";
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::mermaid(source)));
+    let markdown_before = block.read_with(cx, |block, _cx| block.record.markdown_line(0, None));
+
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.mermaid_view_mode()),
+        MermaidViewMode::Preview
+    );
+    cx.update(|window, cx| {
+        block.update(cx, |block, cx| {
+            block.set_mermaid_view_mode(MermaidViewMode::Source, window, cx);
+            assert_eq!(block.mermaid_view_mode(), MermaidViewMode::Source);
+            assert!(block.focus_handle.is_focused(window));
+            block.set_mermaid_view_mode(MermaidViewMode::Split, window, cx);
+            assert_eq!(block.mermaid_view_mode(), MermaidViewMode::Split);
+        });
+    });
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.record.markdown_line(0, None)),
+        markdown_before,
+        "view mode must not mutate the fenced Markdown source"
+    );
+
+    block.update(cx, |block, cx| {
+        block.copy_mermaid_source(cx);
+        assert!(block.mermaid_copy_feedback);
+        block.set_read_only(true);
+        assert_eq!(block.mermaid_view_mode(), MermaidViewMode::Preview);
+    });
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(source)
+    );
+    cx.update(|window, cx| {
+        block.update(cx, |block, cx| {
+            block.set_mermaid_view_mode(MermaidViewMode::Source, window, cx);
+            assert_eq!(block.mermaid_view_mode(), MermaidViewMode::Preview);
+        });
+    });
+}

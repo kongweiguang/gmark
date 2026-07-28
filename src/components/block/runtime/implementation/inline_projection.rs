@@ -141,6 +141,11 @@ impl Block {
         if self.kind() != BlockKind::MermaidBlock {
             self.last_successful_mermaid_render = None;
             self.mermaid_render_error = None;
+            self.mermaid_successful_preview_key = None;
+        } else {
+            // 原始 fenced Markdown 是图表渲染与导出的唯一真值。文本变更后保留旧预览
+            // 仅用于视觉回退，但不得再把它当作“当前”SVG 导出。
+            self.mermaid_successful_preview_key = None;
         }
         self.projection = None;
         self.projection_cache_key = None;

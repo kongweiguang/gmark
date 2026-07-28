@@ -16,6 +16,7 @@ fn semantic_tree_is_bounded_and_exposes_source_contract() {
         lines: (0..2_000)
             .map(|line| (line, format!("row {line}")))
             .collect(),
+        folds: Vec::new(),
     }
     .bounded();
     let tree = build_tree(snapshot);

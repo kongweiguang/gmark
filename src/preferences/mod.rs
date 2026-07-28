@@ -17,10 +17,9 @@ use crate::components::{
 };
 use crate::config::{GmarkConfigDirs, read_recent_files};
 use crate::i18n::{I18nManager, LanguageCatalogEntry, language_id_for_locale_preferences};
-use crate::theme::{SYSTEM_THEME_ID, Theme, ThemeCatalogEntry, ThemeManager};
+use crate::theme::{Theme, ThemeAppearance, ThemeManager, ThemePalette};
 use crate::window_chrome::{custom_titlebar_height, gmark_window_options, render_custom_titlebar};
 
-const DEFAULT_THEME_ID: &str = "gmark";
 const DEFAULT_LANGUAGE_ID: &str = "en-US";
 const DEFAULT_EDITOR_FONT_SIZE: u8 = 16;
 const DEFAULT_EDITOR_LINE_HEIGHT_PERCENT: u16 = 160;
@@ -70,19 +69,6 @@ const SEARCH_ICON: &str = "icon/ui/search.svg";
 const CLOSE_ICON: &str = "icon/ui/close.svg";
 const MINUS_ICON: &str = "icon/ui/minus.svg";
 const PLUS_ICON: &str = "icon/ui/plus.svg";
-const SUN_ICON: &str = "icon/ui/sun.svg";
-const MOON_ICON: &str = "icon/ui/moon.svg";
-const MONITOR_ICON: &str = "icon/ui/monitor.svg";
-const PALETTE_ICON: &str = "icon/ui/palette.svg";
-
-fn theme_option_icon(theme_id: &str) -> &'static str {
-    match theme_id {
-        SYSTEM_THEME_ID => MONITOR_ICON,
-        "gmark" => MOON_ICON,
-        "gmark-light" => SUN_ICON,
-        _ => PALETTE_ICON,
-    }
-}
 
 /// A user-configurable button shown in the status bar.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,9 +125,9 @@ impl StartupOpenPreference {
     }
 }
 
-/// Where pasted clipboard images should be stored before inserting Markdown.
+/// 图片、附件与视频共用的资源插入存储策略。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ImagePasteBehavior {
+pub(crate) enum ResourceInsertBehavior {
     None,
     CopyToDocumentFolder,
     CopyToAssetsFolder,
@@ -174,31 +160,7 @@ impl AutoSavePreference {
     }
 }
 
-/// Docking edge for the optional workspace panel.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum WorkspaceSidebarPosition {
-    #[default]
-    Left,
-    Right,
-}
-
-impl WorkspaceSidebarPosition {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Left => "left",
-            Self::Right => "right",
-        }
-    }
-
-    fn from_str(value: &str) -> Self {
-        match value {
-            "right" => Self::Right,
-            _ => Self::Left,
-        }
-    }
-}
-
-impl ImagePasteBehavior {
+impl ResourceInsertBehavior {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -218,23 +180,29 @@ impl ImagePasteBehavior {
     }
 }
 
+/// 首个兼容版本保留旧类型名，配合持久化的 `image_paste_behavior` 双写支持降级。
+pub(crate) type ImagePasteBehavior = ResourceInsertBehavior;
+
 /// User preferences persisted under the app config directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AppPreferences {
     pub(crate) startup_open: StartupOpenPreference,
+    pub(crate) auto_check_updates: bool,
     pub(crate) default_language_id: String,
-    pub(crate) default_theme_id: String,
+    pub(crate) theme_appearance: ThemeAppearance,
+    pub(crate) theme_palette: ThemePalette,
     pub(crate) show_table_headers: bool,
     pub(crate) image_paste_behavior: ImagePasteBehavior,
     pub(crate) auto_save: AutoSavePreference,
     pub(crate) spell_check: bool,
     pub(crate) auto_pair_brackets: bool,
     pub(crate) auto_pair_markdown: bool,
+    pub(crate) code_folding: bool,
+    pub(crate) format_on_save: bool,
     pub(crate) editor_font_size: u8,
     pub(crate) editor_line_height_percent: u16,
     pub(crate) editor_content_width: u16,
     pub(crate) editor_font_family: String,
-    pub(crate) workspace_sidebar_position: WorkspaceSidebarPosition,
     pub(crate) show_tab_bar_actions: bool,
     pub(crate) recent_editing_commands: Vec<String>,
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
@@ -246,19 +214,22 @@ impl Default for AppPreferences {
     fn default() -> Self {
         Self {
             startup_open: StartupOpenPreference::NewFile,
+            auto_check_updates: true,
             default_language_id: DEFAULT_LANGUAGE_ID.into(),
-            default_theme_id: DEFAULT_THEME_ID.into(),
+            theme_appearance: ThemeAppearance::System,
+            theme_palette: ThemePalette::Xcode,
             show_table_headers: true,
             image_paste_behavior: ImagePasteBehavior::None,
             auto_save: AutoSavePreference::Off,
             spell_check: true,
             auto_pair_brackets: true,
             auto_pair_markdown: true,
+            code_folding: true,
+            format_on_save: false,
             editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
             editor_line_height_percent: DEFAULT_EDITOR_LINE_HEIGHT_PERCENT,
             editor_content_width: DEFAULT_EDITOR_CONTENT_WIDTH,
             editor_font_family: String::new(),
-            workspace_sidebar_position: WorkspaceSidebarPosition::Left,
             show_tab_bar_actions: false,
             recent_editing_commands: Vec::new(),
             keybindings: BTreeMap::new(),
@@ -268,63 +239,26 @@ impl Default for AppPreferences {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum DocumentLoadingPreset {
-    #[default]
-    Balanced,
-    LowMemory,
-    HighPerformance,
-}
-
-impl DocumentLoadingPreset {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Balanced => "balanced",
-            Self::LowMemory => "low_memory",
-            Self::HighPerformance => "high_performance",
-        }
-    }
-
-    fn from_str(value: &str) -> Self {
-        match value {
-            "low_memory" => Self::LowMemory,
-            "high_performance" => Self::HighPerformance,
-            _ => Self::Balanced,
-        }
-    }
-
-    fn core(self) -> gmark_document_core::LoadingPreset {
-        match self {
-            Self::Balanced => gmark_document_core::LoadingPreset::Balanced,
-            Self::LowMemory => gmark_document_core::LoadingPreset::LowMemory,
-            Self::HighPerformance => gmark_document_core::LoadingPreset::HighPerformance,
-        }
+impl AppPreferences {
+    pub(crate) fn resource_insert_behavior(&self) -> ResourceInsertBehavior {
+        self.image_paste_behavior
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DocumentLoadingPreferences {
-    pub(crate) preset: DocumentLoadingPreset,
     pub(crate) max_resident_mib: Option<u64>,
-    pub(crate) max_resident_lines: Option<u64>,
-    pub(crate) max_structural_units: Option<u64>,
 }
 
 impl DocumentLoadingPreferences {
     const MIB_RANGE: std::ops::RangeInclusive<u64> = 1..=1_024;
-    const LINE_RANGE: std::ops::RangeInclusive<u64> = 1_000..=10_000_000;
-    const STRUCTURE_RANGE: std::ops::RangeInclusive<u64> = 10_000..=50_000_000;
 
     pub(crate) fn policy(&self) -> gmark_document_core::LoadingPolicy {
-        let valid = |value: Option<u64>, range: &std::ops::RangeInclusive<u64>| {
-            value.filter(|value| range.contains(value))
-        };
         gmark_document_core::LoadingPolicy {
-            preset: self.preset.core(),
-            max_resident_bytes: valid(self.max_resident_mib, &Self::MIB_RANGE)
+            max_resident_bytes: self
+                .max_resident_mib
+                .filter(|value| Self::MIB_RANGE.contains(value))
                 .and_then(|mib| mib.checked_mul(1024 * 1024)),
-            max_resident_lines: valid(self.max_resident_lines, &Self::LINE_RANGE),
-            max_structural_units: valid(self.max_structural_units, &Self::STRUCTURE_RANGE),
             force_safe_source: false,
         }
     }
@@ -332,31 +266,15 @@ impl DocumentLoadingPreferences {
     pub(crate) fn effective_max_resident_mib(&self) -> u64 {
         self.max_resident_mib
             .filter(|value| Self::MIB_RANGE.contains(value))
-            .unwrap_or(self.preset.core().limits().max_resident_bytes / (1024 * 1024))
+            .unwrap_or(
+                gmark_document_core::DEFAULT_LOADING_LIMITS.max_resident_bytes / (1024 * 1024),
+            )
     }
 
-    pub(crate) fn effective_max_resident_lines(&self) -> u64 {
-        self.max_resident_lines
-            .filter(|value| Self::LINE_RANGE.contains(value))
-            .unwrap_or(self.preset.core().limits().max_resident_lines)
-    }
-
-    pub(crate) fn effective_max_structural_units(&self) -> u64 {
-        self.max_structural_units
-            .filter(|value| Self::STRUCTURE_RANGE.contains(value))
-            .unwrap_or(self.preset.core().limits().max_structural_units)
-    }
-
-    /// 非法覆盖值仍保留在配置中供用户修正，但打开策略会逐字段回退到预设。
+    /// 非法覆盖值仍保留在配置中供用户修正，但打开策略会回退到默认大小。
     pub(crate) fn has_invalid_override(&self) -> bool {
         self.max_resident_mib
             .is_some_and(|value| !Self::MIB_RANGE.contains(&value))
-            || self
-                .max_resident_lines
-                .is_some_and(|value| !Self::LINE_RANGE.contains(&value))
-            || self
-                .max_structural_units
-                .is_some_and(|value| !Self::STRUCTURE_RANGE.contains(&value))
     }
 }
 
@@ -379,8 +297,9 @@ pub struct EditorSettings {
     spell_check: bool,
     auto_pair_brackets: bool,
     auto_pair_markdown: bool,
+    code_folding: bool,
+    format_on_save: bool,
     editor_font_family: String,
-    workspace_sidebar_position: WorkspaceSidebarPosition,
     show_tab_bar_actions: bool,
     status_bar_settings: StatusBarSettings,
 }
@@ -404,7 +323,6 @@ impl EditorSettings {
             DEFAULT_EDITOR_LINE_HEIGHT_PERCENT,
             DEFAULT_EDITOR_CONTENT_WIDTH,
             "",
-            WorkspaceSidebarPosition::Left,
             false,
         );
     }
@@ -418,7 +336,6 @@ impl EditorSettings {
         editor_line_height_percent: u16,
         editor_content_width: u16,
         editor_font_family: &str,
-        workspace_sidebar_position: WorkspaceSidebarPosition,
         show_tab_bar_actions: bool,
     ) {
         let loaded_preferences = read_app_preferences().ok();
@@ -434,6 +351,14 @@ impl EditorSettings {
             .as_ref()
             .map(|preferences| preferences.auto_pair_markdown)
             .unwrap_or(true);
+        let code_folding = loaded_preferences
+            .as_ref()
+            .map(|preferences| preferences.code_folding)
+            .unwrap_or(true);
+        let format_on_save = loaded_preferences
+            .as_ref()
+            .map(|preferences| preferences.format_on_save)
+            .unwrap_or(false);
         Self::set_global(
             cx,
             show_table_headers,
@@ -441,8 +366,9 @@ impl EditorSettings {
             spell_check,
             auto_pair_brackets,
             auto_pair_markdown,
+            code_folding,
+            format_on_save,
             editor_font_family,
-            workspace_sidebar_position,
             show_tab_bar_actions,
             &status_bar,
         );
@@ -459,8 +385,9 @@ impl EditorSettings {
         spell_check: bool,
         auto_pair_brackets: bool,
         auto_pair_markdown: bool,
+        code_folding: bool,
+        format_on_save: bool,
         editor_font_family: &str,
-        workspace_sidebar_position: WorkspaceSidebarPosition,
         show_tab_bar_actions: bool,
         status_bar: &StatusBarPreferences,
     ) {
@@ -470,8 +397,9 @@ impl EditorSettings {
             spell_check,
             auto_pair_brackets,
             auto_pair_markdown,
+            code_folding,
+            format_on_save,
             editor_font_family: normalize_editor_font_family(editor_font_family),
-            workspace_sidebar_position,
             show_tab_bar_actions,
             status_bar_settings: StatusBarSettings {
                 status_bar_enabled: status_bar.enabled,
@@ -520,13 +448,17 @@ impl EditorSettings {
             .try_global::<Self>()
             .map(|settings| settings.auto_pair_markdown)
             .unwrap_or(true);
+        let code_folding = cx
+            .try_global::<Self>()
+            .map(|settings| settings.code_folding)
+            .unwrap_or(true);
+        let format_on_save = cx
+            .try_global::<Self>()
+            .map(|settings| settings.format_on_save)
+            .unwrap_or(false);
         let editor_font_family = cx
             .try_global::<Self>()
             .map(|settings| settings.editor_font_family.clone())
-            .unwrap_or_default();
-        let workspace_sidebar_position = cx
-            .try_global::<Self>()
-            .map(|settings| settings.workspace_sidebar_position)
             .unwrap_or_default();
         let show_tab_bar_actions = cx
             .try_global::<Self>()
@@ -539,8 +471,9 @@ impl EditorSettings {
             spell_check,
             auto_pair_brackets,
             auto_pair_markdown,
+            code_folding,
+            format_on_save,
             &editor_font_family,
-            workspace_sidebar_position,
             show_tab_bar_actions,
             &status_bar,
         );
@@ -609,31 +542,26 @@ impl EditorSettings {
             .unwrap_or(true)
     }
 
+    pub(crate) fn code_folding(cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .map(|settings| settings.code_folding)
+            .unwrap_or(true)
+    }
+
+    pub(crate) fn format_on_save(cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .is_some_and(|settings| settings.format_on_save)
+    }
+
     pub(crate) fn editor_font_family(cx: &App) -> String {
         cx.try_global::<Self>()
             .map(|settings| settings.editor_font_family.clone())
             .unwrap_or_default()
     }
 
-    pub(crate) fn workspace_sidebar_position(cx: &App) -> WorkspaceSidebarPosition {
-        cx.try_global::<Self>()
-            .map(|settings| settings.workspace_sidebar_position)
-            .unwrap_or_default()
-    }
-
     pub(crate) fn show_tab_bar_actions(cx: &App) -> bool {
         cx.try_global::<Self>()
             .is_some_and(|settings| settings.show_tab_bar_actions)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_workspace_sidebar_position_for_test(
-        cx: &mut App,
-        position: WorkspaceSidebarPosition,
-    ) {
-        cx.update_global::<Self, _>(|settings, _cx| {
-            settings.workspace_sidebar_position = position;
-        });
     }
 
     #[cfg(test)]
@@ -649,10 +577,9 @@ use storage::PreferencesNav;
 #[cfg(test)]
 use storage::*;
 pub(crate) use storage::{
-    apply_configured_language, apply_configured_theme, first_existing_recent_markdown_file,
-    import_language_config_and_select, import_theme_config_and_select,
-    load_or_create_app_preferences, read_app_preferences, save_app_preferences,
-    save_preferences_from_window,
+    apply_configured_language, first_existing_recent_markdown_file,
+    import_language_config_and_select, load_or_create_app_preferences, read_app_preferences,
+    save_app_preferences, save_preferences_from_window,
 };
 
 #[path = "preferences_parts/window.rs"]

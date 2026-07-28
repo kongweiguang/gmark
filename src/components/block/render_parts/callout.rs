@@ -26,6 +26,12 @@ impl Block {
                 .text_color(accent)
                 .child(header_label.clone())
                 .into_any_element()
+        } else if self.record.resource.is_some() && (!focused || self.resource_selected) {
+            div()
+                .min_w(px(0.0))
+                .flex_grow()
+                .child(self.render_resource_content(theme, cx))
+                .into_any_element()
         } else {
             div()
                 .min_w(px(0.0))

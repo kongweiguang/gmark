@@ -1,0 +1,185 @@
+// @author kongweiguang
+
+use super::*;
+
+#[test]
+fn automatic_check_is_due_without_a_success_marker() {
+    let root = tempfile::tempdir().unwrap();
+    let service = UpdateService::new(root.path().to_path_buf(), true);
+    assert!(service.automatic_check_due());
+}
+
+#[test]
+fn recent_success_marker_suppresses_the_daily_check() {
+    let root = tempfile::tempdir().unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    std::fs::write(root.path().join("last-successful-check"), now.to_string()).unwrap();
+    let service = UpdateService::new(root.path().to_path_buf(), true);
+    assert!(!service.automatic_check_due());
+}
+
+#[test]
+fn only_user_relevant_states_are_visible() {
+    assert!(!UpdateState::Idle.is_visible());
+    assert!(
+        !UpdateState::Checking {
+            origin: CheckOrigin::Automatic,
+        }
+        .is_visible()
+    );
+    assert!(
+        UpdateState::Checking {
+            origin: CheckOrigin::Manual,
+        }
+        .is_visible()
+    );
+}
+
+#[test]
+fn command_policy_rejects_duplicate_or_out_of_order_actions() {
+    assert!(UpdateState::Idle.accepts(UpdateCommand::Check));
+    assert!(!UpdateState::Idle.accepts(UpdateCommand::Download));
+    assert!(
+        !UpdateState::Checking {
+            origin: CheckOrigin::Manual,
+        }
+        .accepts(UpdateCommand::Check)
+    );
+
+    let release = release_fixture();
+    assert!(UpdateState::Available(release.clone()).accepts(UpdateCommand::Download));
+    assert!(!UpdateState::Available(release.clone()).accepts(UpdateCommand::Resume));
+    assert!(
+        UpdateState::Paused {
+            release: release.clone(),
+            downloaded: 25,
+            total: 100,
+        }
+        .accepts(UpdateCommand::Resume)
+    );
+    assert!(
+        !UpdateState::Paused {
+            release: release.clone(),
+            downloaded: 25,
+            total: 100,
+        }
+        .accepts(UpdateCommand::Download)
+    );
+
+    assert!(
+        UpdateState::Failed {
+            release: Some(release.clone()),
+            message: "timeout".to_owned(),
+            retryable: true,
+        }
+        .accepts(UpdateCommand::Retry)
+    );
+    assert!(
+        !UpdateState::Failed {
+            release: Some(release.clone()),
+            message: "signature mismatch".to_owned(),
+            retryable: false,
+        }
+        .accepts(UpdateCommand::Retry)
+    );
+    assert!(
+        UpdateState::Ready {
+            release,
+            artifact_path: PathBuf::from("artifact.ready"),
+        }
+        .accepts(UpdateCommand::InstallAndRestart)
+    );
+}
+
+#[test]
+fn busy_states_cannot_be_dismissed_or_restarted() {
+    let release = release_fixture();
+    let downloading = UpdateState::Downloading {
+        release: release.clone(),
+        downloaded: 25,
+        total: 100,
+        bytes_per_second: 10,
+    };
+    assert!(downloading.accepts(UpdateCommand::Pause));
+    assert!(!downloading.accepts(UpdateCommand::Dismiss));
+    assert!(!downloading.accepts(UpdateCommand::InstallAndRestart));
+    assert!(
+        !UpdateState::Verifying {
+            release: release.clone(),
+        }
+        .accepts(UpdateCommand::Dismiss)
+    );
+    assert!(!UpdateState::Installing { release }.accepts(UpdateCommand::Dismiss));
+}
+
+#[test]
+fn pending_install_cancellation_restores_the_ready_payload() {
+    let root = tempfile::tempdir().unwrap();
+    let release = release_fixture();
+    let artifact_path = root.path().join("artifact.ready");
+    let cancellation_path = root.path().join("cancel-install");
+    let mut service = UpdateService::new(root.path().to_path_buf(), true);
+    service.pending_install = Some(PendingInstall {
+        release: release.clone(),
+        artifact_path: artifact_path.clone(),
+        cancellation_path: cancellation_path.clone(),
+    });
+    service.state = UpdateState::Installing {
+        release: release.clone(),
+    };
+
+    assert!(service.restore_ready_after_cancel());
+    assert!(!service.restore_ready_after_cancel());
+
+    assert!(cancellation_path.is_file());
+    assert!(matches!(
+        service.state,
+        UpdateState::Ready {
+            artifact_path: ref path,
+            ..
+        } if path == &artifact_path
+    ));
+}
+
+#[test]
+fn apply_result_is_presented_once_without_deleting_diagnostics() {
+    let root = tempfile::tempdir().unwrap();
+    let result_path = root.path().join("last-result.json");
+    std::fs::write(
+        &result_path,
+        br#"{"schema_version":1,"status":"succeeded","to_version":"1.1.0","message":"ok"}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        restored_startup_state(root.path()),
+        Some(UpdateState::Succeeded { version, .. }) if version == "1.1.0"
+    ));
+    assert!(restored_startup_state(root.path()).is_none());
+    assert!(result_path.is_file());
+}
+
+fn release_fixture() -> UpdateRelease {
+    UpdateRelease {
+        current_version: "1.0.0".to_owned(),
+        version: "1.1.0".to_owned(),
+        published_at: "2026-07-22T00:00:00Z".to_owned(),
+        notes: "Release notes".to_owned(),
+        release_url: "https://github.com/kongweiguang/gmark/releases/tag/v1.1.0".to_owned(),
+        artifact_url: "https://github.com/kongweiguang/gmark/releases/download/v1.1.0/gmark.exe"
+            .to_owned(),
+        artifact_size: 100,
+        artifact_sha256: "00".repeat(32),
+        artifact_format: if cfg!(target_os = "windows") {
+            update_v2::ArtifactFormat::WindowsSetupExe
+        } else if cfg!(target_os = "macos") {
+            update_v2::ArtifactFormat::MacosAppTarGz
+        } else {
+            update_v2::ArtifactFormat::LinuxAppImage
+        },
+        system_trust: update_v2::SystemTrust::Unsigned,
+        signed_envelope: std::sync::Arc::from(&b"{}"[..]),
+    }
+}

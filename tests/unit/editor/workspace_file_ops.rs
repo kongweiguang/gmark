@@ -36,11 +36,10 @@ fn parser_ranges_cover_inline_images_and_reference_definitions_only() {
 }
 
 #[test]
-fn creates_and_safely_undoes_markdown_files_and_directories() {
+fn creates_and_safely_undoes_regular_files_and_directories() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    let file =
-        plan_workspace_create(root, root, "note.md", WorkspaceCreateKind::MarkdownFile).unwrap();
+    let file = plan_workspace_create(root, root, "main.java", WorkspaceCreateKind::File).unwrap();
     file.execute().unwrap();
     assert_eq!(fs::read(&file.path).unwrap(), b"");
     file.undo().unwrap();
@@ -55,34 +54,21 @@ fn creates_and_safely_undoes_markdown_files_and_directories() {
 }
 
 #[test]
-fn create_rejects_traversal_collisions_and_non_markdown_files() {
+fn create_accepts_arbitrary_extensions_and_rejects_traversal_and_collisions() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     write(&root.join("existing.md"), "existing");
-    assert!(
-        plan_workspace_create(
-            root,
-            root,
-            "../escape.md",
-            WorkspaceCreateKind::MarkdownFile
-        )
-        .is_err()
-    );
-    assert!(
-        plan_workspace_create(root, root, "existing.md", WorkspaceCreateKind::MarkdownFile)
-            .is_err()
-    );
-    assert!(
-        plan_workspace_create(root, root, "plain.txt", WorkspaceCreateKind::MarkdownFile).is_err()
-    );
+    assert!(plan_workspace_create(root, root, "../escape.md", WorkspaceCreateKind::File).is_err());
+    assert!(plan_workspace_create(root, root, "existing.md", WorkspaceCreateKind::File).is_err());
+    let source = plan_workspace_create(root, root, "main.rs", WorkspaceCreateKind::File).unwrap();
+    assert_eq!(source.path, root.join("main.rs"));
 }
 
 #[test]
 fn create_undo_refuses_modified_files_and_nonempty_directories() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    let file =
-        plan_workspace_create(root, root, "note.md", WorkspaceCreateKind::MarkdownFile).unwrap();
+    let file = plan_workspace_create(root, root, "note.md", WorkspaceCreateKind::File).unwrap();
     file.execute().unwrap();
     write(&file.path, "changed");
     assert!(file.undo().is_err());
@@ -109,9 +95,7 @@ fn create_parent_symlink_cannot_escape_workspace() {
     if !linked {
         return;
     }
-    assert!(
-        plan_workspace_create(root, &link, "escape.md", WorkspaceCreateKind::MarkdownFile).is_err()
-    );
+    assert!(plan_workspace_create(root, &link, "escape.md", WorkspaceCreateKind::File).is_err());
     assert!(!outside.path().join("escape.md").exists());
 }
 
@@ -144,6 +128,39 @@ fn rename_rewrites_relative_links_and_can_be_undone() {
     assert_eq!(
         fs::read_to_string(root.join("index.md")).unwrap(),
         "[old](docs/old.md) [web](https://example.com) [anchor](#x)\r\n"
+    );
+}
+
+#[test]
+fn workspace_move_preserves_strict_resource_links_verbatim() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let source = root.join("old.md");
+    let destination = root.join("new.md");
+    write(&source, "# old\n");
+    let before = concat!(
+        "[resource](old.md 'gmark:resource')\n",
+        "[video](old.md \"gmark:resource ; type = video\")\n",
+        "[normal](old.md)\n",
+        "![image](old.md \"gmark:resource\")\n",
+        "[unknown](old.md \"gmark:resource;mode=tip\")\n",
+        "[uppercase](old.md \"GMARK:RESOURCE\")\n",
+    );
+    write(&root.join("index.md"), before);
+
+    let plan = plan_workspace_move(root, &source, &destination).unwrap();
+    plan.execute().unwrap();
+
+    assert_eq!(
+        fs::read_to_string(root.join("index.md")).unwrap(),
+        concat!(
+            "[resource](old.md 'gmark:resource')\n",
+            "[video](old.md \"gmark:resource ; type = video\")\n",
+            "[normal](new.md)\n",
+            "![image](new.md \"gmark:resource\")\n",
+            "[unknown](new.md \"gmark:resource;mode=tip\")\n",
+            "[uppercase](new.md \"GMARK:RESOURCE\")\n",
+        )
     );
 }
 

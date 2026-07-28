@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 // @author kongweiguang
 
 //! gmark - a block-based Markdown editor built with GPUI.
@@ -38,11 +39,14 @@ mod net;
 mod perf;
 mod preferences;
 mod recovery;
+mod resource_io;
 #[cfg(target_os = "windows")]
 mod single_instance;
+mod source_tools;
 mod spellcheck;
 mod theme;
 mod ui;
+mod updater;
 mod window_chrome;
 
 use app_menu::{
@@ -179,6 +183,9 @@ impl AssetSource for GmarkAssets {
             "icon/ui/panel-left.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icon/ui/panel-left.svg"
             )))),
+            "icon/ui/panel-right.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/ui/panel-right.svg"
+            )))),
             "icon/ui/live.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icon/ui/live.svg"
             )))),
@@ -232,6 +239,9 @@ impl AssetSource for GmarkAssets {
             )))),
             "icon/ui/image.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icon/ui/image.svg"
+            )))),
+            "icon/ui/expand.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/ui/expand.svg"
             )))),
             "icon/ui/keyboard.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icon/ui/keyboard.svg"
@@ -383,7 +393,8 @@ fn run_app() {
     if let Err(error) = crash_report::install() {
         eprintln!("failed to initialize local crash reporting: {error:#}");
     }
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    let update_acknowledgement = take_update_acknowledgement(&mut args);
     let (detach, input_paths) = match cli::parse(&args[1..]) {
         cli::CliCommand::Run {
             detach,
@@ -474,7 +485,11 @@ fn run_app() {
             Default::default()
         });
         I18nManager::init_with_language_id(cx, &preferences.default_language_id);
-        ThemeManager::init_with_theme_id(cx, &preferences.default_theme_id);
+        ThemeManager::init_with_preference(
+            cx,
+            preferences.theme_appearance,
+            preferences.theme_palette,
+        );
         config::EditorSettings::init_with_typography(
             cx,
             preferences.show_table_headers,
@@ -484,13 +499,21 @@ fn run_app() {
             preferences.editor_line_height_percent,
             preferences.editor_content_width,
             &preferences.editor_font_family,
-            preferences.workspace_sidebar_position,
             preferences.show_tab_bar_actions,
         );
         net::install_http_client(cx);
+        updater::UpdateCoordinator::init(preferences.auto_check_updates, cx);
         init_editor(cx, &preferences.keybindings);
         init_app_menu(cx);
         install_system_theme_observer(cx);
+        if let Some(path) = update_acknowledgement.as_ref() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(error) = std::fs::write(path, format!("{}\n", env!("CARGO_PKG_VERSION"))) {
+                eprintln!("failed to acknowledge applied update: {error}");
+            }
+        }
 
         #[cfg(target_os = "windows")]
         cx.spawn(async move |cx| {
@@ -624,6 +647,42 @@ fn run_app() {
         app_menu::install_menus(cx);
         cx.refresh_windows();
     });
+}
+
+/// Helper 参数不属于用户 CLI；必须在普通参数解析前消费，避免文件路径或未知参数分支误判。
+fn take_update_acknowledgement(args: &mut Vec<String>) -> Option<PathBuf> {
+    let index = args
+        .iter()
+        .position(|argument| argument == "--update-ack")?;
+    if index + 1 >= args.len() {
+        args.remove(index);
+        return None;
+    }
+    let path = PathBuf::from(args.remove(index + 1));
+    args.remove(index);
+    Some(path)
+}
+
+#[cfg(test)]
+mod update_ack_tests {
+    use std::path::PathBuf;
+
+    use super::take_update_acknowledgement;
+
+    #[test]
+    fn internal_update_ack_is_removed_before_user_cli_parsing() {
+        let mut args = vec![
+            "gmark".to_owned(),
+            "--update-ack".to_owned(),
+            "C:/temp/update-ack".to_owned(),
+            "note.md".to_owned(),
+        ];
+        assert_eq!(
+            take_update_acknowledgement(&mut args),
+            Some(PathBuf::from("C:/temp/update-ack"))
+        );
+        assert_eq!(args, ["gmark", "note.md"]);
+    }
 }
 
 #[cfg(test)]

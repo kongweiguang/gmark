@@ -222,28 +222,7 @@ impl Editor {
             )
             .child(
                 div()
-                    .w(px(560.0))
-                    .max_w(relative(1.0))
-                    .text_size(px(t.text_size * 0.9))
-                    .line_height(px(t.text_size * t.text_line_height))
-                    .text_color(c.dialog_muted)
-                    .child(strings.file_open_failed_message.clone()),
-            )
-            .child(
-                div()
-                    .id("file-open-failure-reason")
-                    .debug_selector(|| "file-open-failure-reason".to_owned())
-                    .w(px(560.0))
-                    .max_w(relative(1.0))
-                    .overflow_hidden()
-                    .truncate()
-                    .text_size(px(t.text_size * 0.78))
-                    .text_color(c.dialog_muted.opacity(0.78))
-                    .child(failure.reason.clone()),
-            )
-            .child(
-                div()
-                    .mt(px(4.0))
+                    .mt(px(2.0))
                     .flex()
                     .flex_wrap()
                     .items_center()
@@ -275,7 +254,9 @@ impl Editor {
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings_arc();
         self.sync_window_title(window, &strings);
-        self.sync_workspace_visibility_for_viewport(f32::from(window.viewport_size().width));
+        let viewport_width = f32::from(window.viewport_size().width);
+        self.sync_workspace_visibility_for_viewport(viewport_width);
+        self.sync_document_sidebar_visibility_for_viewport(viewport_width);
 
         if self.file_open_failure.is_some() {
             return self.render_file_open_failure(&theme, &strings, cx);
@@ -687,6 +668,22 @@ impl Editor {
                     .into_any_element(),
             );
         }
+        let bottom_padding = editor_bottom_padding(viewport_height, d);
+        if self.view_mode == super::ViewMode::Rendered && bottom_padding > 0.5 {
+            block_rows.push(
+                div()
+                    .debug_selector(|| "editor-document-tail-blank".to_owned())
+                    .w_full()
+                    .flex_shrink_0()
+                    .h(px(bottom_padding))
+                    .cursor_text()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(Self::on_editor_tail_blank_mouse_down),
+                    )
+                    .into_any_element(),
+            );
+        }
 
         let scroll_content = div()
             .id("editor-scroll-inner")
@@ -713,7 +710,11 @@ impl Editor {
             } else {
                 editor_top_padding(self.typewriter_mode, viewport_height)
             }))
-            .pb(px(editor_bottom_padding(viewport_height, d)))
+            .pb(px(if self.view_mode == super::ViewMode::Rendered {
+                0.0
+            } else {
+                bottom_padding
+            }))
             .children(block_rows);
         let scroll_content = if let Some((focus_row, top)) = detached_focus {
             let entity = visible_blocks[row_starts[focus_row]].entity.clone();

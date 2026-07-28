@@ -15,6 +15,7 @@ use crate::preferences::{StatusBarButton, StatusBarPreferences};
 use crate::theme::Theme;
 
 const SIDEBAR_ICON: &str = "icon/ui/panel-left.svg";
+const DOCUMENT_SIDEBAR_ICON: &str = "icon/ui/panel-right.svg";
 const LIVE_MODE_ICON: &str = "icon/ui/live.svg";
 const SOURCE_MODE_ICON: &str = "icon/ui/source.svg";
 const SPLIT_MODE_ICON: &str = "icon/ui/split.svg";
@@ -27,16 +28,25 @@ const FORMAT_OVERFLOW_BREAKPOINT: f32 = 900.0;
 const METADATA_OVERFLOW_BREAKPOINT: f32 = 760.0;
 const ASYNC_CHARACTER_COUNT_THRESHOLD: usize = 1024 * 1024;
 const CHARACTER_COUNT_IDLE_DELAY: std::time::Duration = std::time::Duration::from_millis(750);
+const ALL_STATUS_VIEW_MODES: [super::ViewMode; 4] = [
+    super::ViewMode::Rendered,
+    super::ViewMode::Source,
+    super::ViewMode::Split,
+    super::ViewMode::Preview,
+];
+const PAGED_STATUS_VIEW_MODES: [super::ViewMode; 1] = [super::ViewMode::Source];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusTooltip {
     Sidebar,
+    DocumentSidebar,
     Mode(super::ViewMode),
 }
 
 #[derive(Default)]
 pub(super) struct StatusBarState {
     pub sidebar_hovered: bool,
+    pub document_sidebar_hovered: bool,
     pub mode_hovered: Option<super::ViewMode>,
     custom_button_hovered: Option<String>,
     word_count: Option<(Revision, usize)>,
@@ -46,9 +56,15 @@ pub(super) struct StatusBarState {
     tooltip_hovered: Option<StatusTooltip>,
     tooltip_visible: Option<StatusTooltip>,
     tooltip_task: Option<Task<()>>,
-    /// 模式分段跨 render 保持稳定焦点身份，避免鼠标与键盘维护两套选中状态。
+    /// 下拉入口与菜单项跨 render 保持稳定焦点身份，菜单关闭后可准确回到触发按钮。
+    pub(super) mode_menu_open: bool,
+    pub(super) line_ending_menu_open: bool,
+    pub(super) mode_button_focus_handle: Option<FocusHandle>,
     pub(super) mode_focus_handles: Option<[FocusHandle; 4]>,
+    pub(super) line_ending_button_focus_handle: Option<FocusHandle>,
+    pub(super) line_ending_focus_handles: Option<[FocusHandle; 3]>,
     pub(super) sidebar_focus_handle: Option<FocusHandle>,
+    pub(super) document_sidebar_focus_handle: Option<FocusHandle>,
     pub(super) overflow_focus_handle: Option<FocusHandle>,
     pub(super) conflict_focus_handle: Option<FocusHandle>,
     pub(super) custom_button_focus_handles: HashMap<String, FocusHandle>,
@@ -149,6 +165,15 @@ impl Editor {
         self.set_status_tooltip_hover(StatusTooltip::Sidebar, hovered, cx);
     }
 
+    pub(super) fn set_status_document_sidebar_tooltip_hover(
+        &mut self,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.status_bar.document_sidebar_hovered = hovered;
+        self.set_status_tooltip_hover(StatusTooltip::DocumentSidebar, hovered, cx);
+    }
+
     pub(super) fn set_status_mode_tooltip_hover(
         &mut self,
         mode: super::ViewMode,
@@ -243,19 +268,13 @@ impl Editor {
             .document_host
             .as_ref()
             .map_or(resident_encoding, |view| view.read(cx).encoding_label());
-        // 左侧只保留侧栏入口；文档状态与模式在右侧，低频源码格式在窄窗口进入 overflow。
+        // 换行符是高频可编辑格式，固定紧邻模式入口；编码等低频信息才进入窄屏 overflow。
         if viewport_width >= FORMAT_OVERFLOW_BREAKPOINT {
             right_items.push(render_source_format_label(encoding.clone(), theme));
-            right_items.push(render_source_format_label(line_ending.clone(), theme));
         } else {
             overflow_items.push(render_overflow_text(
                 "status-bar-overflow-encoding",
                 encoding.clone(),
-                theme,
-            ));
-            overflow_items.push(render_overflow_text(
-                "status-bar-overflow-line-ending",
-                line_ending.clone(),
                 theme,
             ));
         }
@@ -495,38 +514,49 @@ impl Editor {
             ));
         }
 
+        let line_ending_picker =
+            render_line_ending_picker(&mut self.status_bar, line_ending, theme, cx);
         if prefs.show_mode_switch {
-            let json_document = self
-                .document_host
-                .as_ref()
-                .is_some_and(|view| view.read(cx).is_json_document());
-            let available_modes: Vec<super::ViewMode> = self.document_host.as_ref().map_or_else(
-                || {
-                    vec![
-                        super::ViewMode::Rendered,
-                        super::ViewMode::Source,
-                        super::ViewMode::Split,
-                        super::ViewMode::Preview,
-                    ]
-                },
-                |view| {
-                    if view.read(cx).supports_tabular_modes() {
-                        vec![
-                            super::ViewMode::Rendered,
-                            super::ViewMode::Source,
-                            super::ViewMode::Split,
-                            super::ViewMode::Preview,
-                        ]
-                    } else {
-                        vec![super::ViewMode::Source]
-                    }
-                },
-            );
-            right_items.push(render_mode_switch(
+            let (json_document, paged_document) =
+                self.document_host.as_ref().map_or((false, false), |view| {
+                    let view = view.read(cx);
+                    (view.is_json_document(), view.is_paged_document())
+                });
+            // Paged 后端没有 resident Markdown 投影；状态栏必须只呈现真实可用的
+            // Source，不能用点击后再回退的方式暴露误导入口。
+            let available_modes = if paged_document {
+                &PAGED_STATUS_VIEW_MODES[..]
+            } else {
+                &ALL_STATUS_VIEW_MODES[..]
+            };
+            let mode_switch = render_mode_switch(
                 &mut self.status_bar,
                 self.view_mode,
-                &available_modes,
+                available_modes,
                 json_document,
+                theme,
+                strings,
+                cx,
+            );
+            right_items.push(
+                div()
+                    .id("status-bar-format-mode-group")
+                    .debug_selector(|| "status-bar-format-mode-group".to_owned())
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .child(line_ending_picker)
+                    .child(mode_switch)
+                    .into_any_element(),
+            );
+        } else {
+            right_items.push(line_ending_picker);
+        }
+
+        if prefs.show_sidebar_toggle {
+            right_items.push(render_document_sidebar_toggle(
+                &mut self.status_bar,
+                self.workspace.document_sidebar_open,
                 theme,
                 strings,
                 cx,
@@ -679,7 +709,8 @@ pub(crate) use view::count_characters;
 #[cfg(test)]
 use view::normalized_action_id;
 use view::{
-    render_character_count, render_cursor, render_custom_button, render_large_overflow_action,
-    render_mode_switch, render_overflow_text, render_recovery_status, render_sidebar_toggle,
+    render_character_count, render_cursor, render_custom_button, render_document_sidebar_toggle,
+    render_large_overflow_action, render_line_ending_picker, render_mode_switch,
+    render_overflow_text, render_recovery_status, render_sidebar_toggle,
     render_source_format_overflow_button, should_render_file_status,
 };

@@ -5,6 +5,7 @@ use super::*;
 #[derive(Serialize)]
 struct PreferencesFile {
     startup: StartupPreferencesFile,
+    updates: UpdatesPreferencesFile,
     language: LanguagePreferencesFile,
     theme: ThemePreferencesFile,
     editor: EditorPreferencesFile,
@@ -14,19 +15,19 @@ struct PreferencesFile {
 }
 
 #[derive(Serialize)]
+struct UpdatesPreferencesFile {
+    auto_check: bool,
+}
+
+#[derive(Serialize)]
 struct DocumentsPreferencesFile {
     loading: DocumentLoadingPreferencesFile,
 }
 
 #[derive(Serialize)]
 struct DocumentLoadingPreferencesFile {
-    preset: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_resident_mib: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_resident_lines: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_structural_units: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -37,15 +38,19 @@ struct StartupPreferencesFile {
 #[derive(Serialize)]
 struct EditorPreferencesFile {
     show_table_headers: bool,
+    resource_insert_behavior: String,
+    /// Kept for one compatible release so older GMark versions retain image
+    /// paste behavior when a user downgrades.
     image_paste_behavior: String,
     auto_save: String,
     spell_check: bool,
     auto_pair_brackets: bool,
     auto_pair_markdown: bool,
+    code_folding: bool,
+    format_on_save: bool,
     font_size: u8,
     line_height_percent: u16,
     content_width: u16,
-    workspace_sidebar_position: String,
     show_tab_bar_actions: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     recent_editing_commands: Vec<String>,
@@ -60,7 +65,8 @@ struct LanguagePreferencesFile {
 
 #[derive(Serialize)]
 struct ThemePreferencesFile {
-    default_theme_id: String,
+    appearance: String,
+    palette: String,
 }
 
 #[derive(Serialize)]
@@ -93,23 +99,29 @@ impl From<&AppPreferences> for PreferencesFile {
             startup: StartupPreferencesFile {
                 open: value.startup_open.as_str().into(),
             },
+            updates: UpdatesPreferencesFile {
+                auto_check: value.auto_check_updates,
+            },
             language: LanguagePreferencesFile {
                 default_language_id: value.default_language_id.clone(),
             },
             theme: ThemePreferencesFile {
-                default_theme_id: value.default_theme_id.clone(),
+                appearance: value.theme_appearance.as_str().into(),
+                palette: value.theme_palette.as_str().into(),
             },
             editor: EditorPreferencesFile {
                 show_table_headers: value.show_table_headers,
+                resource_insert_behavior: value.resource_insert_behavior().as_str().into(),
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
                 auto_save: value.auto_save.as_str().into(),
                 spell_check: value.spell_check,
                 auto_pair_brackets: value.auto_pair_brackets,
                 auto_pair_markdown: value.auto_pair_markdown,
+                code_folding: value.code_folding,
+                format_on_save: value.format_on_save,
                 font_size: value.editor_font_size,
                 line_height_percent: value.editor_line_height_percent,
                 content_width: value.editor_content_width,
-                workspace_sidebar_position: value.workspace_sidebar_position.as_str().into(),
                 show_tab_bar_actions: value.show_tab_bar_actions,
                 recent_editing_commands: value.recent_editing_commands.clone(),
                 font_family: value.editor_font_family.clone(),
@@ -117,10 +129,7 @@ impl From<&AppPreferences> for PreferencesFile {
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
             documents: DocumentsPreferencesFile {
                 loading: DocumentLoadingPreferencesFile {
-                    preset: value.document_loading.preset.as_str().into(),
                     max_resident_mib: value.document_loading.max_resident_mib,
-                    max_resident_lines: value.document_loading.max_resident_lines,
-                    max_structural_units: value.document_loading.max_structural_units,
                 },
             },
             keybindings: normalize_shortcut_config(&value.keybindings),
@@ -175,14 +184,29 @@ fn app_preferences_from_toml_value(
         .filter(|id| !id.is_empty())
         .unwrap_or(fallback_language_id)
         .to_string();
-    let default_theme_id = value
-        .get("theme")
-        .and_then(|theme| theme.get("default_theme_id"))
-        .and_then(|id| id.as_str())
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .unwrap_or(DEFAULT_THEME_ID)
-        .to_string();
+    let auto_check_updates = value
+        .get("updates")
+        .and_then(|updates| updates.get("auto_check"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true);
+    // The old `default_theme_id` field is intentionally ignored. A partial,
+    // invalid, or legacy theme block falls back to the complete new default
+    // pair instead of mixing an old dark/light choice with a new palette.
+    let (theme_appearance, theme_palette) = match (
+        value
+            .get("theme")
+            .and_then(|theme| theme.get("appearance"))
+            .and_then(|value| value.as_str())
+            .and_then(ThemeAppearance::parse),
+        value
+            .get("theme")
+            .and_then(|theme| theme.get("palette"))
+            .and_then(|value| value.as_str())
+            .and_then(ThemePalette::parse),
+    ) {
+        (Some(appearance), Some(palette)) => (appearance, palette),
+        _ => (ThemeAppearance::System, ThemePalette::Xcode),
+    };
     let keybindings = value
         .get("keybindings")
         .and_then(|keybindings| keybindings.as_table())
@@ -207,12 +231,18 @@ fn app_preferences_from_toml_value(
         .and_then(|editor| editor.get("show_table_headers"))
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
-    let image_paste_behavior = value
+    let legacy_image_paste_behavior = value
         .get("editor")
         .and_then(|editor| editor.get("image_paste_behavior"))
         .and_then(|value| value.as_str())
         .map(ImagePasteBehavior::from_str)
         .unwrap_or(ImagePasteBehavior::None);
+    let image_paste_behavior = value
+        .get("editor")
+        .and_then(|editor| editor.get("resource_insert_behavior"))
+        .and_then(|value| value.as_str())
+        .map(ImagePasteBehavior::from_str)
+        .unwrap_or(legacy_image_paste_behavior);
     let auto_save = value
         .get("editor")
         .and_then(|editor| editor.get("auto_save"))
@@ -234,6 +264,16 @@ fn app_preferences_from_toml_value(
         .and_then(|editor| editor.get("auto_pair_markdown"))
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
+    let code_folding = value
+        .get("editor")
+        .and_then(|editor| editor.get("code_folding"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true);
+    let format_on_save = value
+        .get("editor")
+        .and_then(|editor| editor.get("format_on_save"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let editor_font_size = value
         .get("editor")
         .and_then(|editor| editor.get("font_size"))
@@ -263,12 +303,6 @@ fn app_preferences_from_toml_value(
         .and_then(|value| value.as_str())
         .map(normalize_editor_font_family)
         .unwrap_or_default();
-    let workspace_sidebar_position = value
-        .get("editor")
-        .and_then(|editor| editor.get("workspace_sidebar_position"))
-        .and_then(|value| value.as_str())
-        .map(WorkspaceSidebarPosition::from_str)
-        .unwrap_or_default();
     let show_tab_bar_actions = value
         .get("editor")
         .and_then(|editor| editor.get("show_tab_bar_actions"))
@@ -291,21 +325,8 @@ fn app_preferences_from_toml_value(
         .get("documents")
         .and_then(|documents| documents.get("loading"));
     let document_loading = DocumentLoadingPreferences {
-        preset: loading
-            .and_then(|loading| loading.get("preset"))
-            .and_then(|value| value.as_str())
-            .map(DocumentLoadingPreset::from_str)
-            .unwrap_or_default(),
         max_resident_mib: loading
             .and_then(|loading| loading.get("max_resident_mib"))
-            .and_then(|value| value.as_integer())
-            .and_then(|value| u64::try_from(value).ok()),
-        max_resident_lines: loading
-            .and_then(|loading| loading.get("max_resident_lines"))
-            .and_then(|value| value.as_integer())
-            .and_then(|value| u64::try_from(value).ok()),
-        max_structural_units: loading
-            .and_then(|loading| loading.get("max_structural_units"))
             .and_then(|value| value.as_integer())
             .and_then(|value| u64::try_from(value).ok()),
     };
@@ -364,19 +385,22 @@ fn app_preferences_from_toml_value(
 
     AppPreferences {
         startup_open,
+        auto_check_updates,
         default_language_id,
-        default_theme_id,
+        theme_appearance,
+        theme_palette,
         show_table_headers,
         image_paste_behavior,
         auto_save,
         spell_check,
         auto_pair_brackets,
         auto_pair_markdown,
+        code_folding,
+        format_on_save,
         editor_font_size,
         editor_line_height_percent,
         editor_content_width,
         editor_font_family,
-        workspace_sidebar_position,
         show_tab_bar_actions,
         recent_editing_commands,
         keybindings,
@@ -460,31 +484,6 @@ pub(crate) fn apply_configured_language(cx: &mut App, language_id: &str) -> anyh
     Ok(changed)
 }
 
-pub(crate) fn apply_configured_theme(cx: &mut App, theme_id: &str) -> anyhow::Result<bool> {
-    let typography = read_app_preferences().unwrap_or_default();
-    let appearance = cx.window_appearance();
-    let mut applied = false;
-    let changed = cx.update_global::<ThemeManager, _>(|theme_manager, _cx| {
-        let changed = theme_manager.set_theme_preference(theme_id, appearance);
-        applied = changed || theme_manager.selected_theme_id() == theme_id;
-        if applied {
-            theme_manager.set_editor_typography(
-                typography.editor_font_size,
-                typography.editor_line_height_percent,
-            );
-            theme_manager.set_editor_content_width(typography.editor_content_width);
-        }
-        changed
-    });
-    if !applied {
-        return Ok(false);
-    }
-    update_app_preferences(|preferences| {
-        preferences.default_theme_id = theme_id.into();
-    })?;
-    Ok(changed)
-}
-
 pub(crate) fn import_language_config_and_select(
     cx: &mut App,
     path: impl AsRef<std::path::Path>,
@@ -498,39 +497,22 @@ pub(crate) fn import_language_config_and_select(
     Ok(imported_id)
 }
 
-pub(crate) fn import_theme_config_and_select(
-    cx: &mut App,
-    path: impl AsRef<std::path::Path>,
-) -> anyhow::Result<String> {
-    let typography = read_app_preferences().unwrap_or_default();
-    let imported_id = cx.update_global::<ThemeManager, _>(|theme_manager, _cx| {
-        let imported_id = theme_manager.import_theme_config(path)?;
-        theme_manager.set_editor_typography(
-            typography.editor_font_size,
-            typography.editor_line_height_percent,
-        );
-        theme_manager.set_editor_content_width(typography.editor_content_width);
-        Ok::<_, anyhow::Error>(imported_id)
-    })?;
-    update_app_preferences(|preferences| {
-        preferences.default_theme_id = imported_id.clone();
-    })?;
-    Ok(imported_id)
-}
-
 pub(crate) fn save_preferences_from_window(
     startup_open: StartupOpenPreference,
+    auto_check_updates: bool,
     auto_save: AutoSavePreference,
     spell_check: bool,
     auto_pair_brackets: bool,
     auto_pair_markdown: bool,
+    code_folding: bool,
+    format_on_save: bool,
     editor_font_size: u8,
     editor_line_height_percent: u16,
     editor_content_width: u16,
     editor_font_family: &str,
-    workspace_sidebar_position: WorkspaceSidebarPosition,
     show_tab_bar_actions: bool,
-    default_theme_id: &str,
+    theme_appearance: ThemeAppearance,
+    theme_palette: ThemePalette,
     default_language_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -540,17 +522,20 @@ pub(crate) fn save_preferences_from_window(
     let dirs = GmarkConfigDirs::from_system()?;
     save_preferences_from_window_with_dirs(
         startup_open,
+        auto_check_updates,
         auto_save,
         spell_check,
         auto_pair_brackets,
         auto_pair_markdown,
+        code_folding,
+        format_on_save,
         editor_font_size,
         editor_line_height_percent,
         editor_content_width,
         editor_font_family,
-        workspace_sidebar_position,
         show_tab_bar_actions,
-        default_theme_id,
+        theme_appearance,
+        theme_palette,
         default_language_id,
         image_paste_behavior,
         keybindings,
@@ -562,17 +547,20 @@ pub(crate) fn save_preferences_from_window(
 
 pub(super) fn save_preferences_from_window_with_dirs(
     startup_open: StartupOpenPreference,
+    auto_check_updates: bool,
     auto_save: AutoSavePreference,
     spell_check: bool,
     auto_pair_brackets: bool,
     auto_pair_markdown: bool,
+    code_folding: bool,
+    format_on_save: bool,
     editor_font_size: u8,
     editor_line_height_percent: u16,
     editor_content_width: u16,
     editor_font_family: &str,
-    workspace_sidebar_position: WorkspaceSidebarPosition,
     show_tab_bar_actions: bool,
-    default_theme_id: &str,
+    theme_appearance: ThemeAppearance,
+    theme_palette: ThemePalette,
     default_language_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -583,19 +571,22 @@ pub(super) fn save_preferences_from_window_with_dirs(
     let mut preferences =
         load_or_create_app_preferences_with_dirs_and_locales(dirs, sys_locale::get_locales())?;
     preferences.startup_open = startup_open;
+    preferences.auto_check_updates = auto_check_updates;
     preferences.auto_save = auto_save;
     preferences.spell_check = spell_check;
     preferences.auto_pair_brackets = auto_pair_brackets;
     preferences.auto_pair_markdown = auto_pair_markdown;
+    preferences.code_folding = code_folding;
+    preferences.format_on_save = format_on_save;
     preferences.editor_font_size =
         editor_font_size.clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
     preferences.editor_line_height_percent =
         normalize_editor_line_height_percent(editor_line_height_percent);
     preferences.editor_content_width = normalize_editor_content_width(editor_content_width);
     preferences.editor_font_family = normalize_editor_font_family(editor_font_family);
-    preferences.workspace_sidebar_position = workspace_sidebar_position;
     preferences.show_tab_bar_actions = show_tab_bar_actions;
-    preferences.default_theme_id = default_theme_id.into();
+    preferences.theme_appearance = theme_appearance;
+    preferences.theme_palette = theme_palette;
     preferences.default_language_id = default_language_id.into();
     preferences.image_paste_behavior = image_paste_behavior;
     preferences.keybindings = normalize_shortcut_config(&keybindings);

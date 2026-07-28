@@ -334,6 +334,7 @@ impl Block {
         &self,
         command: ToolbarCommand,
         show_block_type_label: bool,
+        block_type_width: f32,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -436,7 +437,11 @@ impl Block {
             )))
             .debug_selector(move || format!("selection-toolbar-{}", command.id()))
             .w(px(if command == ToolbarCommand::BlockType {
-                if show_block_type_label { 106.0 } else { 42.0 }
+                if show_block_type_label {
+                    block_type_width
+                } else {
+                    42.0
+                }
             } else {
                 28.0
             }))
@@ -484,17 +489,29 @@ impl Block {
         let text_bounds = self.last_bounds?;
         let attached_surface_height = if self.selection_toolbar_type_menu_open {
             312.0
+        } else if self.selection_toolbar_overflow_open {
+            OVERFLOW_MENU_HEIGHT
         } else if self.selection_toolbar_link_input.is_some() {
             42.0
         } else {
             0.0
         };
-        let position =
-            toolbar_window_position(selection, text_bounds, viewport, attached_surface_height);
+        let show_block_type = !self.is_table_cell() && self.editor_selection_range.is_none();
+        let block_type_width =
+            expanded_block_type_width(cx.global::<I18nManager>().current_language_id());
+        let expanded_block_type_width = show_block_type.then_some(block_type_width);
+        let position = toolbar_window_position(
+            selection,
+            text_bounds,
+            viewport,
+            attached_surface_height,
+            expanded_block_type_width,
+        );
         let d = &theme.dimensions;
         let c = &theme.colors;
-        let toolbar_width = selection_toolbar_width(text_bounds, viewport);
-        let show_block_type_label = toolbar_width >= TOOLBAR_EXPANDED_WIDTH;
+        let toolbar_width =
+            selection_toolbar_width(text_bounds, viewport, expanded_block_type_width);
+        let show_block_type_label = show_block_type && toolbar_width > TOOLBAR_COMPACT_WIDTH;
         let viewport_height = f32::from(viewport.height);
         let (type_menu_above, type_menu_available_height) = attached_surface_placement(
             position,
@@ -510,30 +527,31 @@ impl Block {
             d.menu_bar_height,
             d.status_bar_height,
         );
+        let (overflow_menu_above, _) = attached_surface_placement(
+            position,
+            OVERFLOW_MENU_HEIGHT,
+            viewport_height,
+            d.menu_bar_height,
+            d.status_bar_height,
+        );
         let origin_left = f32::from(text_bounds.left()) - d.block_padding_x;
         let origin_top = f32::from(text_bounds.top()) - d.block_padding_y;
-        let buttons = ToolbarCommand::PRIMARY
-            .into_iter()
-            .filter(|command| {
-                *command != ToolbarCommand::BlockType
-                    || (!self.is_table_cell() && self.editor_selection_range.is_none())
-            })
-            .map(|command| {
-                self.render_selection_toolbar_button(command, show_block_type_label, theme, cx)
-            })
-            .collect::<Vec<_>>();
         let overflow = self.selection_toolbar_overflow_open.then(|| {
             let menu = div()
                 .id("selection-toolbar-overflow-menu")
                 .debug_selector(|| "selection-toolbar-overflow-menu".to_owned())
                 .absolute()
-                .top_0()
+                .right_0()
                 .p(px(2.0))
                 .bg(c.dialog_surface)
                 .border(px(d.dialog_border_width))
                 .border_color(c.dialog_border)
                 .rounded(px(6.0))
                 .shadow_md()
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                    cx.stop_propagation();
+                })
                 .flex()
                 .flex_col()
                 .children(
@@ -546,14 +564,40 @@ impl Block {
                         ToolbarCommand::ClearFormatting,
                     ]
                     .into_iter()
-                    .map(|command| self.render_selection_toolbar_button(command, false, theme, cx)),
+                    .map(|command| {
+                        self.render_selection_toolbar_button(command, false, 42.0, theme, cx)
+                    }),
                 );
-            if position.above {
+            if overflow_menu_above {
                 menu.bottom(px(TOOLBAR_HEIGHT + 4.0))
             } else {
                 menu.top(px(TOOLBAR_HEIGHT + 4.0))
             }
         });
+        let buttons = ToolbarCommand::PRIMARY
+            .into_iter()
+            .filter(|command| *command != ToolbarCommand::BlockType || show_block_type)
+            .map(|command| {
+                let button = self.render_selection_toolbar_button(
+                    command,
+                    show_block_type_label,
+                    block_type_width,
+                    theme,
+                    cx,
+                );
+                if command == ToolbarCommand::Overflow {
+                    div()
+                        .relative()
+                        .w(px(28.0))
+                        .h(px(28.0))
+                        .flex_shrink_0()
+                        .child(button)
+                        .into_any_element()
+                } else {
+                    button
+                }
+            })
+            .collect::<Vec<_>>();
         let current_kind = self.kind();
         let type_menu = self.selection_toolbar_type_menu_open.then(|| {
             let type_menu_max_height = type_menu_available_height.clamp(1.0, 312.0);
@@ -639,11 +683,15 @@ impl Block {
                 .cloned()
                 .unwrap_or_else(|| "Remove".to_owned());
             let input = input.clone();
-            let popover_width =
-                292.0_f32.min((f32::from(viewport.width) - 2.0 * VIEWPORT_INSET).max(1.0));
+            let popover_min_left =
+                (f32::from(text_bounds.left()) + VIEWPORT_INSET).max(VIEWPORT_INSET);
+            let popover_right = (f32::from(text_bounds.right()).min(f32::from(viewport.width))
+                - VIEWPORT_INSET)
+                .max(popover_min_left + 1.0);
+            let popover_width = 292.0_f32.min(popover_right - popover_min_left);
             let popover_window_left = (position.left + toolbar_width - popover_width).clamp(
-                VIEWPORT_INSET,
-                (f32::from(viewport.width) - popover_width - VIEWPORT_INSET).max(VIEWPORT_INSET),
+                popover_min_left,
+                (popover_right - popover_width).max(popover_min_left),
             );
             let popover = div()
                 .id("selection-toolbar-link-editor")
@@ -745,6 +793,7 @@ impl Block {
                 cx.stop_propagation();
             })
             .children(buttons)
+            // 菜单作为面板兄弟参与命中测试；嵌在 28px 按钮命中框外时 GPUI 不会派发点击。
             .children(overflow)
             .children(type_menu)
             .children(link_editor);

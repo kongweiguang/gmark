@@ -60,6 +60,67 @@ pub(crate) fn is_markdown_path(path: &Path) -> bool {
         })
 }
 
+/// 已知非文本容器不进入文件探测；侧边栏会展示所有文件，但编辑器只打开文本正文。
+fn is_known_unsupported_document(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "7z" | "a"
+                    | "aac"
+                    | "avi"
+                    | "avif"
+                    | "bmp"
+                    | "bz2"
+                    | "class"
+                    | "dll"
+                    | "dmg"
+                    | "doc"
+                    | "docx"
+                    | "eot"
+                    | "exe"
+                    | "flac"
+                    | "gif"
+                    | "gz"
+                    | "ico"
+                    | "iso"
+                    | "jar"
+                    | "jpeg"
+                    | "jpg"
+                    | "lib"
+                    | "m4a"
+                    | "mkv"
+                    | "mov"
+                    | "mp3"
+                    | "mp4"
+                    | "msi"
+                    | "o"
+                    | "ogg"
+                    | "otf"
+                    | "pdf"
+                    | "png"
+                    | "ppt"
+                    | "pptx"
+                    | "rar"
+                    | "so"
+                    | "tar"
+                    | "tif"
+                    | "tiff"
+                    | "ttf"
+                    | "wav"
+                    | "webm"
+                    | "webp"
+                    | "woff"
+                    | "woff2"
+                    | "xls"
+                    | "xlsx"
+                    | "xz"
+                    | "zip"
+            )
+        })
+}
+
 pub(crate) fn document_open_policy(path: &Path, probe: &OpenProbe) -> DocumentOpenPolicy {
     if probe.strategy == OpenStrategy::Paged {
         DocumentOpenPolicy::PagedSource
@@ -85,14 +146,19 @@ pub(crate) fn open_document_with_policy(
     path: &Path,
     loading: LoadingPolicy,
 ) -> Result<OpenedDocument> {
+    if is_known_unsupported_document(path) {
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default();
+        bail!("unsupported file type '.{extension}'");
+    }
     let probe_started = crate::perf::start();
     let limits = loading.effective_limits();
     let mut probe = gmark_paged_document::probe_file(
         path,
         ProbeOptions {
             max_resident_bytes: limits.max_resident_bytes,
-            max_resident_lines: limits.max_resident_lines,
-            max_structural_units: limits.max_structural_units,
             ..ProbeOptions::default()
         },
     )

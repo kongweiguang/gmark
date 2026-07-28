@@ -26,6 +26,10 @@ cp "$APPIMAGE" "$TEMPORARY/gmark.AppImage"
 chmod +x "$TEMPORARY/gmark.AppImage"
 (cd "$TEMPORARY" && ./gmark.AppImage --appimage-extract >/dev/null)
 version="$($TEMPORARY/squashfs-root/AppRun --version)"
+[[ -x "$TEMPORARY/squashfs-root/usr/lib/gmark/gmark-update-helper" ]] || {
+    echo "AppImage update helper is missing" >&2
+    exit 1
+}
 [[ "$version" =~ (^|[[:space:]])$EXPECTED([[:space:]]|$) ]] || {
     echo "AppImage version mismatch: $version" >&2
     exit 1
@@ -33,6 +37,7 @@ version="$($TEMPORARY/squashfs-root/AppRun --version)"
 
 sudo dpkg -i "$DEB"
 version="$(/usr/bin/gmark --version)"
+[[ -x /usr/lib/gmark/gmark-update-helper ]] || { echo "Debian update helper is missing" >&2; exit 1; }
 [[ "$version" =~ (^|[[:space:]])$EXPECTED([[:space:]]|$) ]] || {
     echo "Debian package version mismatch: $version" >&2
     exit 1

@@ -66,7 +66,13 @@ impl Editor {
         if !supports_in_window_menu() {
             return false;
         }
-        let Some(menus) = cx.get_menus().filter(|menus| !menus.is_empty()) else {
+        let Some(menus) = cx
+            .try_global::<crate::app_menu::AppMenuState>()
+            .map(|state| state.in_window_menus.clone())
+            .or_else(|| cx.get_menus())
+            .filter(|menus| !menus.is_empty())
+            .map(|menus| self.contextual_menus(menus, cx))
+        else {
             if self.menu_bar_open.is_some() {
                 self.close_menu_bar(cx);
                 return true;
@@ -110,7 +116,7 @@ impl Editor {
 
         if !matches!(
             key,
-            "up" | "down" | "left" | "right" | "enter" | "escape" | "home" | "end"
+            "up" | "down" | "left" | "right" | "enter" | "space" | "escape" | "home" | "end"
         ) {
             return false;
         }
@@ -173,7 +179,7 @@ impl Editor {
                     cx.notify();
                 }
             }
-            "enter" => {
+            "enter" | "space" => {
                 if let Some(submenu_index) = self.menu_submenu_open
                     && let Some(child_index) = self.menu_keyboard_submenu_item
                     && let Some(OwnedMenuItem::Submenu(submenu)) = main_items.get(submenu_index)
@@ -195,6 +201,9 @@ impl Editor {
                             cx.notify();
                         }
                         OwnedMenuItem::Action { action, .. } => {
+                            if action.as_ref().as_any().is::<NoRecentFiles>() {
+                                return true;
+                            }
                             let action = action.boxed_clone();
                             let editor = cx.entity().downgrade();
                             self.close_menu_bar(cx);
@@ -240,20 +249,77 @@ impl Editor {
             .find_map(|visible| is_focused(&visible.entity).then(|| visible.entity.clone()))
     }
 
+    /// Opens the selected resource card's menu at its last painted origin.
+    /// The logical menu cursor is initialized independently from pointer hover,
+    /// matching native Menu-key and Shift+F10 behavior.
+    pub(in crate::editor) fn open_resource_context_menu_from_keyboard(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.context_menu.is_some() {
+            return false;
+        }
+        let modifiers = event.keystroke.modifiers;
+        let key = event.keystroke.key.as_str();
+        let menu_key = matches!(key, "menu" | "contextmenu")
+            && !modifiers.control
+            && !modifiers.platform
+            && !modifiers.alt;
+        let shift_f10 = key.eq_ignore_ascii_case("f10")
+            && modifiers.shift
+            && !modifiers.control
+            && !modifiers.platform
+            && !modifiers.alt;
+        if !(menu_key || shift_f10) {
+            return false;
+        }
+
+        let Some(block) = self.focused_block_for_tab_key(window, cx) else {
+            return false;
+        };
+        let (selected, has_resource, position) = block.read_with(cx, |block, _cx| {
+            (
+                block.resource_selected,
+                block.record.resource.is_some(),
+                block
+                    .last_bounds
+                    .map(|bounds| bounds.origin)
+                    .unwrap_or_else(|| point(px(16.0), px(16.0))),
+            )
+        });
+        if !selected || !has_resource {
+            return false;
+        }
+
+        self.context_menu = Some(crate::editor::ContextMenuState::Resource {
+            position,
+            entity_id: block.entity_id(),
+        });
+        self.context_menu_keyboard_item = Some(0);
+        self.context_menu_keyboard_submenu_item = None;
+        cx.notify();
+        true
+    }
+
     pub(crate) fn on_editor_key_down_capture(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.handle_workspace_link_completion_key(event, cx)
+        if self.handle_update_panel_key(event, window, cx)
+            || self.handle_workspace_link_completion_key(event, cx)
             || self.handle_diagram_overlay_key(event, cx)
             || self.handle_table_cell_selection_key(event, cx)
             || self.handle_context_menu_key(event, window, cx)
+            || self.open_resource_context_menu_from_keyboard(event, window, cx)
             || self.handle_in_window_menu_key(event, window, cx)
             || self.handle_find_panel_key(event, window, cx)
             || self.handle_command_palette_key(event, window, cx)
             || self.handle_quick_open_key(event, window, cx)
+            || self.handle_document_sidebar_key(event, window, cx)
             || self.handle_workspace_key(event, window, cx)
         {
             cx.stop_propagation();
@@ -618,6 +684,9 @@ impl Editor {
                     .with_context(|| format!("failed to write '{}'", target.display()))?;
                 Ok((target, behavior != ImagePasteBehavior::None))
             }
+            PastedImageSource::LocalResource(_) => Err(anyhow!(
+                "ordinary resources must use the resource insertion path"
+            )),
         }
     }
 
@@ -672,7 +741,27 @@ impl Editor {
         ))
     }
 
-    pub(super) fn show_image_paste_error(&self, err: anyhow::Error, cx: &mut Context<Self>) {
+    pub(super) fn pasted_resource_markdown(
+        &self,
+        source: &Path,
+    ) -> anyhow::Result<(String, crate::resource_io::MaterializedResource)> {
+        let behavior = read_app_preferences()
+            .map(|preferences| preferences.resource_insert_behavior())
+            .unwrap_or(ImagePasteBehavior::None);
+        crate::resource_io::resource_markdown_for_path(
+            "",
+            source,
+            self.file_path.as_deref(),
+            behavior,
+            None,
+        )
+    }
+
+    pub(in crate::editor) fn show_image_paste_error(
+        &self,
+        err: anyhow::Error,
+        cx: &mut Context<Self>,
+    ) {
         let strings = cx.global::<crate::i18n::I18nManager>().strings().clone();
         if let Some(window) = cx.active_window() {
             let ok = strings.info_dialog_ok.clone();
@@ -728,9 +817,9 @@ impl Editor {
         markdown: &str,
         trailing: &InlineTextTree,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(location) = self.document.find_block_location(block.entity_id()) else {
-            return;
+            return false;
         };
         let leading_empty = leading.visible_len() == 0;
         let trailing_empty = trailing.visible_len() == 0;
@@ -756,7 +845,7 @@ impl Editor {
             }
             self.focus_block(image_block.entity_id());
             self.rebuild_image_runtimes(cx);
-            return;
+            return true;
         }
 
         Self::set_block_title_and_kind(
@@ -778,5 +867,6 @@ impl Editor {
             .insert_blocks_at(location.parent, location.index + 1, inserted, cx);
         self.focus_block(image_block.entity_id());
         self.rebuild_image_runtimes(cx);
+        true
     }
 }

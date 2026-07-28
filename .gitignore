@@ -17,5 +17,4 @@ __pycache__/
 /.agents
 /.codex
 /docs/*
-!/docs/document-architecture.md
 AGENTS.md

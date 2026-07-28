@@ -600,34 +600,9 @@ pub(crate) fn resolve_code_language_key(language: Option<&str>) -> Option<CodeLa
 /// 根据独立源码文件的常见扩展名复用围栏代码块语言注册表。
 /// 返回规范语言名而不是扩展名，避免 `h`、`htm` 等别名泄漏到渲染缓存身份。
 pub(crate) fn code_language_for_path(path: &Path) -> Option<&'static str> {
-    let file_name = path.file_name()?.to_str()?;
-    if file_name.eq_ignore_ascii_case("Cargo.lock") {
-        return Some("toml");
-    }
-    let extension = path.extension()?.to_str()?;
-    Some(match extension.to_ascii_lowercase().as_str() {
-        "rs" => "rust",
-        "js" | "mjs" | "cjs" => "javascript",
-        "jsx" => "jsx",
-        "ts" | "mts" | "cts" => "typescript",
-        "tsx" => "tsx",
-        "json" | "jsonc" | "geojson" => "json",
-        "md" | "markdown" => "markdown",
-        "bash" | "sh" | "zsh" => "bash",
-        "c" | "h" => "c",
-        "cc" | "cpp" | "cxx" | "hpp" | "hxx" => "cpp",
-        "cs" => "csharp",
-        "css" => "css",
-        "go" => "go",
-        "htm" | "html" | "xml" | "svg" => "html",
-        "java" => "java",
-        "php" => "php",
-        "py" | "pyw" => "python",
-        "rb" => "ruby",
-        "yaml" | "yml" => "yaml",
-        "toml" => "toml",
-        _ => return None,
-    })
+    let language = crate::source_tools::SourceLanguageId::for_path(path);
+    (language != crate::source_tools::SourceLanguageId::PlainText)
+        .then_some(language.canonical_name())
 }
 
 pub(crate) fn highlight_code_block(

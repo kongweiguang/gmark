@@ -5,7 +5,7 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -14,17 +14,20 @@ use unicode_segmentation::*;
 mod auto_pair;
 mod code;
 mod image;
+mod mermaid;
 mod projection;
+mod resource;
 mod table;
 
 use self::projection::{
     ExpandedInlineProjection, ExpandedInlineSegment, ExpandedInlineSegmentKind, ExpandedLinkRun,
     ProjectedLinkSelectionSnapshot,
 };
+use self::resource::ResourceRuntime;
 use super::element;
 use super::{
-    BlockEvent, BlockHostAction, BlockKind, BlockRecord, CalloutVariant, EditingCommandId,
-    FootnoteRegistry, SlashMenuState, UndoCaptureKind,
+    BlockEvent, BlockHostAction, BlockKind, BlockRecord, CalloutVariant, CodeFenceOpening,
+    EditingCommandId, FootnoteRegistry, SlashMenuState, UndoCaptureKind,
 };
 use super::{CodeHighlightResult, highlight_code_block};
 use super::{
@@ -40,7 +43,8 @@ use crate::components::markdown::inline::{
 #[cfg(test)]
 use crate::components::markdown::inline::{InlineLinkHit, InlineStyle};
 use crate::components::{
-    TableAxisHighlight, TableAxisMarker, TableCellPosition, TableColumnAlignment, TableRuntime,
+    ResourceLocation, ResourceRecord, ResourceStatus, TableAxisHighlight, TableAxisMarker,
+    TableCellPosition, TableColumnAlignment, TableRuntime,
 };
 
 /// Inline formatting command issued by editor actions.
@@ -76,6 +80,15 @@ pub(crate) enum EditMode {
     SourceRaw,
     /// Raw text editing for fenced code block contents.
     CodeBlockRaw,
+}
+
+/// Mermaid 块的局部工作台视图；它只影响当前运行期的呈现，不参与 Markdown 序列化。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum MermaidViewMode {
+    Source,
+    #[default]
+    Preview,
+    Split,
 }
 
 pub(crate) type HostActionHandler = Rc<dyn Fn(BlockHostAction, &mut Window, &mut App)>;
@@ -162,8 +175,17 @@ pub struct Block {
     pub(crate) mermaid_render_error: Option<String>,
     pub(crate) math_preview_key: Option<u64>,
     pub(crate) mermaid_preview_key: Option<u64>,
+    /// 成功 SVG 对应的输入身份。源码改变后必须失效，避免导出上一次图表。
+    pub(crate) mermaid_successful_preview_key: Option<u64>,
     pub(crate) math_preview_task: Option<Task<()>>,
     pub(crate) mermaid_preview_task: Option<Task<()>>,
+    pub(crate) mermaid_view_mode: MermaidViewMode,
+    /// Mermaid 预览独立于文档正文滚动，预览与分屏共用位置以保持切换连续性。
+    pub(crate) mermaid_preview_scroll_handle: ScrollHandle,
+    /// 预览态没有文本排版边界；块菜单和拖放仍需使用工作台的真实窗口坐标。
+    pub(crate) mermaid_workbench_bounds: Arc<Mutex<Option<Bounds<Pixels>>>>,
+    pub(crate) mermaid_copy_feedback: bool,
+    pub(crate) mermaid_copy_feedback_task: Option<Task<()>>,
     pub children: Vec<Entity<Block>>,
     pub focus_handle: FocusHandle,
     pub(crate) code_language_focus_handle: FocusHandle,
@@ -254,6 +276,10 @@ pub struct Block {
     pub(crate) table_append_row_button_hovered: bool,
     pub(crate) table_append_row_close_task: Option<Task<()>>,
     image_runtime: Option<ImageRuntime>,
+    resource_runtime: Option<ResourceRuntime>,
+    resource_probe_key: Option<String>,
+    resource_probe_task: Option<Task<()>>,
+    pub(crate) resource_selected: bool,
     image_edit_expanded: bool,
     image_expand_requested: bool,
     pub(crate) image_selected: bool,
@@ -335,8 +361,14 @@ impl Block {
             mermaid_render_error: None,
             math_preview_key: None,
             mermaid_preview_key: None,
+            mermaid_successful_preview_key: None,
             math_preview_task: None,
             mermaid_preview_task: None,
+            mermaid_view_mode: MermaidViewMode::default(),
+            mermaid_preview_scroll_handle: ScrollHandle::new(),
+            mermaid_workbench_bounds: Arc::new(Mutex::new(None)),
+            mermaid_copy_feedback: false,
+            mermaid_copy_feedback_task: None,
             children: Vec::new(),
             focus_handle: cx.focus_handle(),
             code_language_focus_handle: cx.focus_handle(),
@@ -410,6 +442,10 @@ impl Block {
             table_append_row_button_hovered: false,
             table_append_row_close_task: None,
             image_runtime: None,
+            resource_runtime: None,
+            resource_probe_key: None,
+            resource_probe_task: None,
+            resource_selected: false,
             image_edit_expanded: false,
             image_expand_requested: false,
             image_selected: false,
@@ -464,6 +500,9 @@ impl Block {
         self.marked_range = None;
         self.code_language_marked_range = None;
         if read_only {
+            if self.kind() == BlockKind::MermaidBlock {
+                self.mermaid_view_mode = MermaidViewMode::Preview;
+            }
             self.clear_inline_projection();
             self.editor_selection_range = None;
             self.editor_selection_supports_inline_commands = false;
@@ -494,7 +533,7 @@ impl Block {
         footnote_registry: Arc<FootnoteRegistry>,
     ) {
         if self.image_base_dir != base_dir {
-            self.image_base_dir = base_dir;
+            self.image_base_dir = base_dir.clone();
         }
         if self.image_reference_definitions != image_reference_definitions {
             self.image_reference_definitions = image_reference_definitions;
@@ -502,6 +541,29 @@ impl Block {
         self.sync_link_reference_definitions(link_reference_definitions);
         self.sync_footnote_registry(footnote_registry);
         self.sync_image_runtime();
+        self.sync_resource_runtime_without_probe(base_dir);
+    }
+
+    /// Updates the same context as the legacy/test-friendly setter and starts
+    /// the asynchronous filesystem probe when a mounted editor block has a
+    /// GPUI context available. Keeping the probe-specific argument out of the
+    /// base setter preserves the narrow runtime API used by block tests and
+    /// non-mounted callers.
+    pub(crate) fn set_runtime_context_with_probe(
+        &mut self,
+        base_dir: Option<PathBuf>,
+        image_reference_definitions: Arc<ImageReferenceDefinitions>,
+        link_reference_definitions: Arc<LinkReferenceDefinitions>,
+        footnote_registry: Arc<FootnoteRegistry>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_runtime_context(
+            base_dir.clone(),
+            image_reference_definitions,
+            link_reference_definitions,
+            footnote_registry,
+        );
+        self.sync_resource_runtime(base_dir, cx);
     }
 
     pub(crate) fn uses_raw_text_editing(&self) -> bool {
@@ -541,11 +603,16 @@ impl Block {
     }
 
     pub(crate) fn set_source_document_mode(&mut self) {
+        self.set_source_document_mode_with_language(Some("markdown"));
+    }
+
+    pub(crate) fn set_source_document_mode_with_language(
+        &mut self,
+        language: Option<&'static str>,
+    ) {
         self.set_source_raw_mode();
         self.show_source_line_numbers = true;
-        // Resident 文档是 Markdown 真值；Source 视图必须显式启用语法语言，
-        // 否则 BlockTextElement 只会生成单色 TextRun。
-        self.set_source_syntax_language(Some("markdown"));
+        self.set_source_syntax_language(language);
     }
 
     pub(crate) fn sync_edit_mode_from_kind(&mut self) {

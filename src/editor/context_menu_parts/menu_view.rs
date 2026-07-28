@@ -1,6 +1,9 @@
 // @author kongweiguang
 
 use super::*;
+use gpui::prelude::FluentBuilder;
+
+type ResourceContextHandler = fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>);
 
 impl Editor {
     pub(in crate::editor) fn render_context_menu_overlay(
@@ -666,6 +669,192 @@ impl Editor {
                         .into_any_element(),
                 )
             }
+            ContextMenuState::Resource {
+                position,
+                entity_id,
+            } => {
+                let Some(_block) = self.focusable_entity_by_id(*entity_id) else {
+                    return None;
+                };
+                let Some(resource) = self.resource_context_record(cx) else {
+                    return None;
+                };
+                let missing = matches!(
+                    self.resource_context_status(cx),
+                    Some(crate::components::ResourceStatus::Missing)
+                );
+                let labels = [
+                    resource_menu_text(&s, "resource_open", "Open"),
+                    s.file_reveal_in_manager.clone(),
+                    resource_menu_text(&s, "resource_edit_title", "Edit Title"),
+                    resource_menu_text(&s, "resource_replace", "Replace Resource"),
+                    resource_menu_text(&s, "resource_copy_address", "Copy Address"),
+                    resource_menu_text(&s, "resource_convert_link", "Convert to Link"),
+                    resource_menu_text(&s, "resource_delete", "Delete"),
+                    resource_menu_text(&s, "resource_relocate", "Relocate"),
+                ];
+                let icons = [
+                    "icon/ui/external-link.svg",
+                    "icon/ui/file.svg",
+                    "icon/ui/type.svg",
+                    "icon/ui/replace.svg",
+                    COPY_ICON,
+                    "icon/ui/link.svg",
+                    TRASH_ICON,
+                    "icon/ui/locate.svg",
+                ];
+                let enabled = [
+                    !resource.is_unsafe_url(),
+                    resource.local_path().is_some(),
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    missing,
+                ];
+                let disabled_reasons = [
+                    (!enabled[0]).then(|| {
+                        resource_menu_text(
+                            &s,
+                            "resource_disabled_unsafe_scheme",
+                            "This address uses a blocked scheme",
+                        )
+                    }),
+                    (!enabled[1]).then(|| {
+                        resource_menu_text(
+                            &s,
+                            "resource_disabled_remote_location",
+                            "Remote resources have no local file location",
+                        )
+                    }),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    (!enabled[7]).then(|| {
+                        resource_menu_text(
+                            &s,
+                            "resource_disabled_not_missing",
+                            "Relocate is available only when the local file is missing",
+                        )
+                    }),
+                ];
+                let handlers: [ResourceContextHandler; 8] = [
+                    Self::open_resource_from_context_menu,
+                    Self::reveal_resource_from_context_menu,
+                    Self::edit_resource_title_from_context_menu,
+                    Self::replace_resource_from_context_menu,
+                    Self::copy_resource_address_from_context_menu,
+                    Self::convert_resource_to_link_from_context_menu,
+                    Self::delete_resource_from_context_menu,
+                    Self::relocate_resource_from_context_menu,
+                ];
+                let panel_width = d.context_menu_submenu_width.max(240.0);
+                let panel_origin = clamped_floating_panel_origin(
+                    *position,
+                    panel_width,
+                    compact_menu_panel_height(labels.len(), 2, d),
+                    window.viewport_size(),
+                );
+                let mut panel = div()
+                    .id("resource-context-menu-panel")
+                    .debug_selector(|| "resource-context-menu-panel".to_owned())
+                    .absolute()
+                    .left(panel_origin.x)
+                    .top(panel_origin.y)
+                    .w(px(panel_width))
+                    .p(px(d.menu_panel_padding))
+                    .flex()
+                    .flex_col()
+                    .gap(px(d.menu_panel_gap))
+                    .bg(c.dialog_surface)
+                    .border(px(d.dialog_border_width))
+                    .border_color(c.dialog_border)
+                    .rounded(px(d.menu_panel_radius))
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                        cx.stop_propagation()
+                    });
+                for index in 0..labels.len() {
+                    let keyboard_selected = self.context_menu_keyboard_item == Some(index);
+                    let id = format!("resource-context-menu-{index}");
+                    let label = labels[index].clone();
+                    let icon = icons[index];
+                    let handler = handlers[index];
+                    let disabled_reason = disabled_reasons[index].clone();
+                    let item = div()
+                        .id(ElementId::Name(id.clone().into()))
+                        .debug_selector(move || id.clone())
+                        .h(px(d.menu_item_height))
+                        .px(px(d.menu_item_padding_x))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .rounded(px(d.menu_item_radius))
+                        .bg(if keyboard_selected {
+                            c.dialog_secondary_button_hover
+                        } else {
+                            c.dialog_surface
+                        })
+                        .text_size(px(d.menu_text_size))
+                        .text_color(if enabled[index] {
+                            c.dialog_secondary_button_text
+                        } else {
+                            c.dialog_muted
+                        })
+                        .child(menu_icon_slot(Some(icon), c.dialog_muted))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .truncate()
+                                .child(label),
+                        )
+                        .on_hover(cx.listener(Self::on_context_menu_pointer_hover))
+                        .when_some(disabled_reason, |item, reason| {
+                            item.tooltip(move |_window, cx| {
+                                crate::ui::ui_tooltip(reason.clone(), cx)
+                            })
+                        });
+                    panel = if enabled[index] {
+                        panel.child(
+                            item.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                .cursor_pointer()
+                                .on_click(cx.listener(handler)),
+                        )
+                    } else {
+                        panel.child(item)
+                    };
+                    if index == 1 || index == 4 {
+                        panel = panel.child(
+                            div()
+                                .mx(px(d.menu_separator_margin_x))
+                                .my(px(d.menu_separator_margin_y))
+                                .h(px(d.menu_separator_height))
+                                .bg(c.dialog_border),
+                        );
+                    }
+                }
+                Some(
+                    div()
+                        .id("resource-context-menu-overlay")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .occlude()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(Self::on_dismiss_context_menu_overlay),
+                        )
+                        .child(panel)
+                        .into_any_element(),
+                )
+            }
             ContextMenuState::Workspace { position, .. } => {
                 let panel_width = d.context_menu_submenu_width.max(220.0);
                 let panel_origin = clamped_floating_panel_origin(
@@ -819,4 +1008,16 @@ impl Editor {
             }
         }
     }
+}
+
+fn resource_menu_text(
+    strings: &crate::i18n::I18nStrings,
+    key: &str,
+    english_fallback: &str,
+) -> String {
+    strings
+        .slash_commands
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| english_fallback.to_owned())
 }

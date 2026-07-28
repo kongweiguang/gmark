@@ -10,15 +10,15 @@ use super::{
     Editor, TableAxisSelection, ViewMode,
     render::{
         DialogButtonKind, DialogTitleIcon, clamped_floating_panel_origin,
-        compact_menu_panel_height, dialog_actions, dialog_body, dialog_button, dialog_content,
-        dialog_panel, dialog_title_with_icon, floating_submenu_x, menu_icon_slot, modal_overlay,
+        compact_menu_panel_height, dialog_actions, dialog_body, dialog_button, dialog_panel,
+        dialog_title_with_icon, floating_submenu_x, menu_icon_slot, modal_overlay,
     },
     workspace::WorkspaceOperationKind,
 };
 use crate::components::{
     BlockKind, BlockRecord, CollapsedCaretAffinity, DismissTransientUi, EditingCommandHistory,
-    EditingCommandId, EditingCommandPlan, INSERT_COMMANDS, InlineTextTree, TableAxisKind,
-    TableColumnAlignment, TableData, UndoCaptureKind,
+    EditingCommandId, EditingCommandPlan, INSERT_COMMANDS, InlineTextTree, ResourceRecord,
+    ResourceStatus, TableAxisKind, TableColumnAlignment, TableData, UndoCaptureKind,
 };
 use crate::i18n::I18nManager;
 use crate::theme::Theme;
@@ -66,6 +66,10 @@ pub(super) enum ContextMenuState {
         entity_id: EntityId,
         diagnostic: crate::spellcheck::SpellingDiagnostic,
     },
+    Resource {
+        position: Point<Pixels>,
+        entity_id: EntityId,
+    },
     Workspace {
         position: Point<Pixels>,
         path: std::path::PathBuf,
@@ -99,6 +103,14 @@ enum ContextMenuCommand {
     WorkspaceRename,
     WorkspaceMove,
     WorkspaceUndo,
+    ResourceOpen,
+    ResourceReveal,
+    ResourceEditTitle,
+    ResourceReplace,
+    ResourceCopyAddress,
+    ResourceConvertLink,
+    ResourceDelete,
+    ResourceRelocate,
     TabTogglePin,
     TabClose,
     TabCloseOthers,
@@ -157,6 +169,32 @@ impl Editor {
                     .collect(),
                 submenu: Vec::new(),
             },
+            ContextMenuState::Resource { entity_id, .. } => {
+                let Some(_block) = self.focusable_entity_by_id(*entity_id) else {
+                    return ContextMenuCommandModel::default();
+                };
+                let Some(resource) = self.resource_context_record(cx) else {
+                    return ContextMenuCommandModel::default();
+                };
+                let local = resource.local_path().is_some();
+                let missing = matches!(
+                    self.resource_context_status(cx),
+                    Some(ResourceStatus::Missing)
+                );
+                ContextMenuCommandModel {
+                    main: vec![
+                        entry(ContextMenuCommand::ResourceOpen, !resource.is_unsafe_url()),
+                        entry(ContextMenuCommand::ResourceReveal, local),
+                        entry(ContextMenuCommand::ResourceEditTitle, true),
+                        entry(ContextMenuCommand::ResourceReplace, true),
+                        entry(ContextMenuCommand::ResourceCopyAddress, true),
+                        entry(ContextMenuCommand::ResourceConvertLink, true),
+                        entry(ContextMenuCommand::ResourceDelete, true),
+                        entry(ContextMenuCommand::ResourceRelocate, missing),
+                    ],
+                    submenu: Vec::new(),
+                }
+            }
             ContextMenuState::TableAxis { selection, .. } => {
                 let Some(table) = self
                     .table_block_by_id(selection.table_block_id, cx)
@@ -363,6 +401,30 @@ impl Editor {
                 self.open_workspace_operation_dialog(WorkspaceOperationKind::Move, window, cx)
             }
             ContextMenuCommand::WorkspaceUndo => self.undo_workspace_file_operation(cx),
+            ContextMenuCommand::ResourceOpen => {
+                self.open_resource_from_context_menu(&click, window, cx)
+            }
+            ContextMenuCommand::ResourceReveal => {
+                self.reveal_resource_from_context_menu(&click, window, cx)
+            }
+            ContextMenuCommand::ResourceEditTitle => {
+                self.edit_resource_title_from_context_menu(&click, window, cx)
+            }
+            ContextMenuCommand::ResourceReplace => {
+                self.replace_resource_from_context_menu(&click, window, cx)
+            }
+            ContextMenuCommand::ResourceCopyAddress => {
+                self.copy_resource_address_from_context_menu(&click, window, cx)
+            }
+            ContextMenuCommand::ResourceConvertLink => {
+                self.convert_resource_to_link_from_context_menu(&click, window, cx)
+            }
+            ContextMenuCommand::ResourceDelete => {
+                self.delete_resource_from_context_menu(&click, window, cx)
+            }
+            ContextMenuCommand::ResourceRelocate => {
+                self.relocate_resource_from_context_menu(&click, window, cx)
+            }
             ContextMenuCommand::TabTogglePin => {
                 if let Some((index, _, _)) = self.tab_context_menu_info() {
                     self.dismiss_tab_context_menu();
@@ -587,7 +649,9 @@ impl Editor {
         let had_command_palette = self.dismiss_command_palette();
         let had_tab_context_menu = self.dismiss_tab_context_menu();
         let had_status_overflow = self.status_bar.format_overflow_open;
+        let had_status_mode_menu = self.status_bar.mode_menu_open;
         self.status_bar.format_overflow_open = false;
+        self.status_bar.mode_menu_open = false;
         let had_submenu_close = self.context_menu_submenu_close_task.take().is_some();
         if had_contextual_editing
             || had_menu
@@ -599,6 +663,7 @@ impl Editor {
             || had_command_palette
             || had_tab_context_menu
             || had_status_overflow
+            || had_status_mode_menu
             || had_keyboard
             || had_submenu_close
         {

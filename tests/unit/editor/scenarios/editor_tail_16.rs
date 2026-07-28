@@ -182,6 +182,12 @@ async fn json_opens_in_graph_preview_and_reuses_live_source_split_preview_modes(
             .is_some(),
         "the child edge must originate from its named parent field row"
     );
+    let mode_button = visual
+        .debug_bounds("status-bar-mode-switch")
+        .expect("JSON mode picker");
+    visual.simulate_click(mode_button.center(), Modifiers::default());
+    redraw(visual);
+    assert!(visual.debug_bounds("status-bar-mode-menu").is_some());
     assert!(visual.debug_bounds("status-bar-mode-Source").is_some());
     assert!(visual.debug_bounds("status-bar-mode-Split").is_some());
     assert!(visual.debug_bounds("status-bar-mode-Preview").is_some());
@@ -369,6 +375,11 @@ async fn json_live_edit_status_action_updates_field_and_participates_in_undo_red
     editor.update(visual, |editor, cx| {
         editor.set_view_mode(ViewMode::Source, cx)
     });
+    redraw(visual);
+    let mode_button = visual
+        .debug_bounds("status-bar-mode-switch")
+        .expect("JSON mode picker");
+    visual.simulate_click(mode_button.center(), Modifiers::default());
     redraw(visual);
     let live_edit = visual
         .debug_bounds("status-bar-mode-Rendered")
@@ -723,7 +734,7 @@ async fn json_tabs_keep_independent_modes_and_persist_split_ratio(cx: &mut TestA
 }
 
 #[gpui::test]
-async fn json_graph_split_click_and_keyboard_enter_locate_source(cx: &mut TestAppContext) {
+async fn json_graph_split_click_and_keyboard_enter_keep_details_open(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let temp = tempfile::tempdir().expect("JSON graph interaction tempdir");
     let path = temp.path().join("interaction.json");
@@ -783,6 +794,7 @@ async fn json_graph_split_click_and_keyboard_enter_locate_source(cx: &mut TestAp
         Some("node:$/nested#0".to_owned()),
         "nested card bounds: {child:?}"
     );
+
     let selection = large_view
         .read_with(visual, |view, _cx| view.source_selection_for_test())
         .expect("source selection after split click");
@@ -828,7 +840,9 @@ async fn json_graph_split_click_and_keyboard_enter_locate_source(cx: &mut TestAp
     });
     visual.simulate_keystrokes("enter");
     visual.run_until_parked();
-    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Source));
+    redraw(visual);
+    assert!(editor.read_with(visual, |editor, _cx| editor.view_mode == ViewMode::Preview));
+    assert!(visual.debug_bounds("json-graph-node-details").is_some());
 }
 
 #[gpui::test]

@@ -196,6 +196,30 @@ fn quote_serializes_back_to_markdown() {
 }
 
 #[test]
+fn resource_cards_preserve_container_markers_for_lists_quotes_and_callouts() {
+    let syntax = r#"[spec](./spec.pdf "gmark:resource")"#;
+    let list = BlockRecord::new(
+        BlockKind::BulletedListItem,
+        InlineTextTree::from_markdown(syntax),
+    );
+    let quote = BlockRecord::new(BlockKind::Quote, InlineTextTree::from_markdown(syntax));
+    let callout = BlockRecord::new(
+        BlockKind::Callout(CalloutVariant::Note),
+        InlineTextTree::from_markdown(syntax),
+    );
+
+    assert!(list.resource.is_some());
+    assert!(quote.resource.is_some());
+    assert!(callout.resource.is_some());
+    assert_eq!(list.markdown_line(0, None), format!("- {syntax}"));
+    assert_eq!(quote.markdown_line(0, None), format!("> {syntax}"));
+    assert_eq!(
+        callout.markdown_line(0, None),
+        format!("> [!NOTE] {syntax}")
+    );
+}
+
+#[test]
 fn parses_h2_and_h3_lines_with_correct_levels() {
     let h2 = BlockKind::parse_atx_heading_line("## hello");
     assert_eq!(h2, Some((2, "hello".to_string())));

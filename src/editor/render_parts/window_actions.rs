@@ -30,6 +30,10 @@ impl Editor {
             self.status_bar.format_overflow_open = false;
             changed = true;
         }
+        if self.status_bar.mode_menu_open {
+            self.status_bar.mode_menu_open = false;
+            changed = true;
+        }
         if changed {
             cx.notify();
         }

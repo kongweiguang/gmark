@@ -2,7 +2,709 @@
 
 use super::*;
 
+use gpui::{AnyElement, KeyDownEvent, MouseButton, WeakEntity};
+
+use crate::theme::{Theme, ThemeColors};
+
+const MAX_STRUCTURED_CACHED_ROWS: usize = STRUCTURED_OVERSCAN_ROWS * 6;
+
+/// Stable targets exposed to the editor shell. The shell never needs to know
+/// how JSON or delimited indexes are stored; a target is resolved by the host
+/// against the current document epoch and view mode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentSidebarTarget {
+    Column { column: usize },
+    StructuredRow { row: u64, offset: u64, json: bool },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DocumentSidebarNodeSnapshot {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) secondary: String,
+    pub(crate) depth: usize,
+    pub(crate) expandable: bool,
+    pub(crate) target: DocumentSidebarTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DocumentSidebarMetadata {
+    pub(crate) length: u64,
+    pub(crate) lines: u64,
+    pub(crate) encoding: String,
+    pub(crate) line_endings: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DocumentSidebarSnapshot {
+    pub(crate) format: DocumentMenuFormat,
+    pub(crate) metadata: DocumentSidebarMetadata,
+    pub(crate) document_epoch: u64,
+    pub(crate) revision: u64,
+    pub(crate) generation: u64,
+    pub(crate) nodes: Vec<DocumentSidebarNodeSnapshot>,
+}
+
+pub(super) fn prune_structured_row_cache<T>(
+    rows: &mut BTreeMap<u64, T>,
+    requested_center: u64,
+    max_rows: usize,
+) {
+    while rows.len() > max_rows {
+        let first = rows.first_key_value().map(|(row, _)| *row);
+        let last = rows.last_key_value().map(|(row, _)| *row);
+        let evicted = match (first, last) {
+            (Some(first), Some(last))
+                if requested_center.saturating_sub(first)
+                    >= last.saturating_sub(requested_center) =>
+            {
+                first
+            }
+            (_, Some(last)) => last,
+            _ => break,
+        };
+        rows.remove(&evicted);
+    }
+}
+
 impl DocumentHost {
+    fn structured_sidebar_row(&self, display_row: u64) -> Option<StructuredRow> {
+        if let Some(node) = self.json_node_at(display_row) {
+            return self.json_rows.get(&node.path()).cloned();
+        }
+        self.structured_rows
+            .values()
+            .find(|row| row.index == display_row)
+            .cloned()
+    }
+
+    /// Read-only navigation projection. Only already indexed/cached rows are
+    /// returned; rendering a large document therefore never triggers a full
+    /// parse or a second complete in-memory copy.
+    pub(crate) fn document_sidebar_snapshot(&self) -> DocumentSidebarSnapshot {
+        let format = self.document_menu_format();
+        let mut nodes = Vec::new();
+        match format {
+            DocumentMenuFormat::Csv | DocumentMenuFormat::Tsv => {
+                if let Some(StructuredIndex::Delimited(index)) = self.structured_index.as_ref() {
+                    nodes.extend(index.headers().iter().enumerate().map(|(column, header)| {
+                        let label = if header.trim().is_empty() {
+                            format!("Column {}", column + 1)
+                        } else {
+                            header.clone()
+                        };
+                        DocumentSidebarNodeSnapshot {
+                            id: format!("column:{column}"),
+                            label,
+                            secondary: (column + 1).to_string(),
+                            depth: 0,
+                            expandable: false,
+                            target: DocumentSidebarTarget::Column { column },
+                        }
+                    }));
+                }
+            }
+            DocumentMenuFormat::Json | DocumentMenuFormat::JsonLines => {
+                let count = self
+                    .json_root_index()
+                    .map_or_else(
+                        || {
+                            self.structured_index
+                                .as_ref()
+                                .map_or(0, StructuredIndex::row_count)
+                        },
+                        |root| self.json_visible_count(&[], root),
+                    )
+                    .min(128);
+                for display_row in 0..count {
+                    let Some(row) = self.structured_sidebar_row(display_row) else {
+                        continue;
+                    };
+                    let path = self
+                        .json_node_at(display_row)
+                        .map(|node| node.path())
+                        .unwrap_or_default();
+                    nodes.push(DocumentSidebarNodeSnapshot {
+                        id: if path.is_empty() {
+                            format!("row:{display_row}")
+                        } else {
+                            format!(
+                                "json:{}",
+                                path.iter()
+                                    .map(u64::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join("/")
+                            )
+                        },
+                        label: row.cells.first().cloned().unwrap_or_default(),
+                        secondary: row.cells.get(1).cloned().unwrap_or_default(),
+                        depth: row.depth,
+                        expandable: self
+                            .json_node_at(display_row)
+                            .is_some_and(|node| self.json_child_indexes.contains_key(&node.path())),
+                        target: DocumentSidebarTarget::StructuredRow {
+                            row: display_row,
+                            offset: row.byte_range.start,
+                            json: format == DocumentMenuFormat::Json,
+                        },
+                    });
+                }
+            }
+            DocumentMenuFormat::Markdown | DocumentMenuFormat::Text => {}
+        }
+        DocumentSidebarSnapshot {
+            format,
+            metadata: DocumentSidebarMetadata {
+                length: self.document_length(),
+                lines: self.document_line_count(),
+                encoding: self.encoding_label(),
+                line_endings: self.document_line_ending_label(),
+            },
+            document_epoch: self.document_epoch,
+            revision: self
+                .document
+                .as_ref()
+                .map_or(0, |document| document.revision()),
+            generation: self.structured_generation,
+            nodes,
+        }
+    }
+
+    /// Resolve a stable navigation target against the current host state.
+    /// Stale rows are ignored by the existing structured/source epoch checks.
+    pub(crate) fn reveal_document_sidebar_target(
+        &mut self,
+        target: DocumentSidebarTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            DocumentSidebarTarget::Column { column } => {
+                self.reveal_document_sidebar_column(column, window, cx)
+            }
+            DocumentSidebarTarget::StructuredRow { row, offset, json } => {
+                self.reveal_document_sidebar_structure(row, offset, json, cx)
+            }
+        }
+    }
+
+    /// 渲染右侧文档导航的只读投影。条目只读取当前已建立的结构索引，正文与主视图仍由
+    /// DocumentHost 独占；后台索引尚未完成时保持稳定的 loading 状态。
+    pub(crate) fn render_document_sidebar(
+        &mut self,
+        theme: &Theme,
+        strings: &I18nStrings,
+        _editor: &WeakEntity<crate::editor::Editor>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = &theme.colors;
+        let format = self.document_sidebar_snapshot().format;
+        if self.is_paged_document() {
+            return self.render_document_sidebar_info(colors, strings, cx);
+        }
+        match format {
+            DocumentMenuFormat::Csv | DocumentMenuFormat::Tsv => {
+                self.render_document_sidebar_columns(colors, strings, cx)
+            }
+            DocumentMenuFormat::Json | DocumentMenuFormat::JsonLines => {
+                self.render_document_sidebar_structure(colors, strings, cx)
+            }
+            DocumentMenuFormat::Markdown | DocumentMenuFormat::Text => {
+                self.render_document_sidebar_info(colors, strings, cx)
+            }
+        }
+    }
+
+    fn render_document_sidebar_info(
+        &self,
+        colors: &ThemeColors,
+        strings: &I18nStrings,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let format = match self.document_menu_format() {
+            DocumentMenuFormat::Text => strings.document_sidebar_text.clone(),
+            format => format.label(false).to_owned(),
+        };
+        let rows = [
+            (strings.document_sidebar_format.clone(), format),
+            (
+                strings.document_sidebar_size.clone(),
+                format_byte_count(self.probe.len),
+            ),
+            (
+                strings.document_sidebar_lines.clone(),
+                self.document_line_count().to_string(),
+            ),
+            (
+                strings.document_sidebar_encoding.clone(),
+                self.encoding_label(),
+            ),
+            (
+                strings.document_sidebar_line_endings.clone(),
+                self.document_line_ending_label(),
+            ),
+        ];
+        div()
+            .id("document-sidebar-info")
+            .debug_selector(|| "document-sidebar-info".to_owned())
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .children(rows.into_iter().map(|(label, value)| {
+                let selector_label = label.clone();
+                div()
+                    .id(SharedString::from(format!("document-sidebar-info-{label}")))
+                    .debug_selector(move || format!("document-sidebar-info-{selector_label}"))
+                    .w_full()
+                    .min_h(px(28.0))
+                    .px(px(8.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .rounded(px(6.0))
+                    .text_size(px(12.0))
+                    .child(div().text_color(colors.text_placeholder).child(label))
+                    .child(
+                        div()
+                            .max_w(px(150.0))
+                            .overflow_hidden()
+                            .truncate()
+                            .text_color(colors.text_default)
+                            .child(value),
+                    )
+            }))
+            .into_any_element()
+    }
+
+    fn render_document_sidebar_columns(
+        &mut self,
+        colors: &ThemeColors,
+        strings: &I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.is_paged_document() || self.structure_error.is_some() {
+            return self.render_document_sidebar_info(colors, strings, cx);
+        }
+        let Some(StructuredIndex::Delimited(index)) = self.structured_index.as_ref() else {
+            return self.render_document_sidebar_loading(colors, strings);
+        };
+        let headers = index.headers().to_vec();
+        if headers.is_empty() {
+            return self.render_document_sidebar_empty(colors, strings);
+        }
+        let row_count = index.record_count();
+        let mut body = div()
+            .id("document-sidebar-columns")
+            .debug_selector(|| "document-sidebar-columns".to_owned())
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(2.0));
+        for (column, header) in headers.into_iter().enumerate() {
+            let label = if header.trim().is_empty() {
+                strings
+                    .document_sidebar_column_fallback
+                    .replace("{count}", &(column + 1).to_string())
+            } else {
+                header
+            };
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "document-sidebar-column-{column}"
+                    )))
+                    .debug_selector(move || format!("document-sidebar-column-{column}"))
+                    .w_full()
+                    .min_h(px(30.0))
+                    .tab_index(0)
+                    .px(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded(px(7.0))
+                    .hover(|this| this.bg(colors.dialog_secondary_button_hover))
+                    .cursor_pointer()
+                    .text_size(px(12.0))
+                    .child(
+                        div()
+                            .w(px(24.0))
+                            .flex_shrink_0()
+                            .text_color(colors.text_placeholder)
+                            .child(format!("{}", column + 1)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .truncate()
+                            .text_color(colors.text_default)
+                            .child(label),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.reveal_document_sidebar_target(
+                            DocumentSidebarTarget::Column { column },
+                            window,
+                            cx,
+                        );
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.reveal_document_sidebar_target(
+                                DocumentSidebarTarget::Column { column },
+                                window,
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        }
+                    })),
+            );
+        }
+        body = body.child(
+            div()
+                .id("document-sidebar-column-count")
+                .debug_selector(|| "document-sidebar-column-count".to_owned())
+                .mt(px(8.0))
+                .px(px(8.0))
+                .text_size(px(11.0))
+                .text_color(colors.text_placeholder)
+                .child(
+                    strings
+                        .document_sidebar_rows_template
+                        .replace("{count}", &row_count.to_string()),
+                ),
+        );
+        body.into_any_element()
+    }
+
+    fn render_document_sidebar_structure(
+        &mut self,
+        colors: &ThemeColors,
+        strings: &I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.is_paged_document() || self.structure_error.is_some() {
+            return self.render_document_sidebar_info(colors, strings, cx);
+        }
+        let is_json = self.is_json_document();
+        let (count, rows) = if is_json {
+            let Some(root) = self.json_root_index() else {
+                return self.render_document_sidebar_loading(colors, strings);
+            };
+            let count = usize::try_from(self.json_visible_count(&[], root))
+                .unwrap_or(usize::MAX)
+                .min(128);
+            self.request_structured_rows(0..count, cx);
+            let rows = (0..count)
+                .filter_map(|index| {
+                    let node = self.json_node_at(index as u64)?;
+                    let row = self.json_rows.get(&node.path())?;
+                    Some((index as u64, row.clone()))
+                })
+                .collect::<Vec<_>>();
+            (count, rows)
+        } else {
+            let Some(index) = self.structured_index.as_ref() else {
+                return self.render_document_sidebar_loading(colors, strings);
+            };
+            let count = usize::try_from(index.row_count())
+                .unwrap_or(usize::MAX)
+                .min(128);
+            self.request_structured_rows(0..count, cx);
+            let rows = self
+                .structured_rows
+                .values()
+                .filter(|row| row.index < count as u64)
+                .cloned()
+                .map(|row| (row.index, row))
+                .collect::<Vec<_>>();
+            (count, rows)
+        };
+        if count == 0 {
+            return self.render_document_sidebar_empty(colors, strings);
+        }
+        let mut by_index = BTreeMap::new();
+        for (index, row) in rows {
+            by_index.insert(index, row);
+        }
+        let mut body = div()
+            .id("document-sidebar-structure")
+            .debug_selector(|| "document-sidebar-structure".to_owned())
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(2.0));
+        for index in 0..count {
+            let row = by_index.get(&(index as u64)).cloned();
+            let (label, value, depth, offset) = row.as_ref().map_or_else(
+                || ("Loading…".to_owned(), String::new(), 0usize, None),
+                |row| {
+                    (
+                        row.cells.first().cloned().unwrap_or_default(),
+                        row.cells.get(1).cloned().unwrap_or_default(),
+                        row.depth,
+                        Some(row.byte_range.start),
+                    )
+                },
+            );
+            let json_node = is_json.then(|| self.json_node_at(index as u64)).flatten();
+            let expandable = json_node
+                .as_ref()
+                .is_some_and(|node| self.json_child_indexes.contains_key(&node.path()));
+            let expanded = json_node
+                .as_ref()
+                .is_some_and(|node| self.json_expanded_nodes.contains(&node.path()));
+            let expand_editor = cx.entity().downgrade();
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "document-sidebar-structure-{index}"
+                    )))
+                    .debug_selector(move || format!("document-sidebar-structure-{index}"))
+                    .w_full()
+                    .min_h(px(30.0))
+                    .tab_index(0)
+                    .pl(px(8.0 + depth as f32 * 14.0))
+                    .pr(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded(px(7.0))
+                    .hover(|this| this.bg(colors.dialog_secondary_button_hover))
+                    .cursor_pointer()
+                    .text_size(px(12.0))
+                    .children(expandable.then(|| {
+                        div()
+                            .id(SharedString::from(format!(
+                                "document-sidebar-structure-toggle-{index}"
+                            )))
+                            .debug_selector(move || {
+                                format!("document-sidebar-structure-toggle-{index}")
+                            })
+                            .size(px(18.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .child(
+                                svg()
+                                    .path(if expanded {
+                                        "icon/ui/chevron-down.svg"
+                                    } else {
+                                        "icon/ui/chevron-right.svg"
+                                    })
+                                    .size(px(13.0))
+                                    .text_color(colors.text_placeholder),
+                            )
+                            .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                let _ = expand_editor.update(cx, |host, cx| {
+                                    host.activate_json_node(index as u64, cx);
+                                });
+                                cx.stop_propagation();
+                            })
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .truncate()
+                            .text_color(colors.text_default)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(110.0))
+                            .overflow_hidden()
+                            .truncate()
+                            .text_color(colors.text_placeholder)
+                            .child(value),
+                    )
+                    .when_some(offset, |row, offset| {
+                        let row = row.on_click(cx.listener(move |this, _, window, cx| {
+                            this.reveal_document_sidebar_target(
+                                DocumentSidebarTarget::StructuredRow {
+                                    row: index as u64,
+                                    offset,
+                                    json: is_json,
+                                },
+                                window,
+                                cx,
+                            );
+                        }));
+                        row.on_key_down(cx.listener(
+                            move |this, event: &KeyDownEvent, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.reveal_document_sidebar_target(
+                                        DocumentSidebarTarget::StructuredRow {
+                                            row: index as u64,
+                                            offset,
+                                            json: is_json,
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                    cx.stop_propagation();
+                                }
+                            },
+                        ))
+                    }),
+            );
+        }
+        if count
+            < if is_json {
+                self.json_root_index()
+                    .map_or(count as u64, JsonIndex::item_count)
+            } else {
+                self.structured_index
+                    .as_ref()
+                    .map_or(count as u64, StructuredIndex::row_count)
+            } as usize
+        {
+            body = body.child(
+                div()
+                    .id("document-sidebar-structure-limit")
+                    .debug_selector(|| "document-sidebar-structure-limit".to_owned())
+                    .mt(px(8.0))
+                    .px(px(8.0))
+                    .text_size(px(11.0))
+                    .text_color(colors.text_placeholder)
+                    .child(
+                        strings
+                            .document_sidebar_items_limit
+                            .replace("{count}", &count.to_string()),
+                    ),
+            );
+        }
+        body.into_any_element()
+    }
+
+    fn render_document_sidebar_loading(
+        &self,
+        colors: &ThemeColors,
+        strings: &I18nStrings,
+    ) -> AnyElement {
+        div()
+            .id("document-sidebar-loading")
+            .debug_selector(|| "document-sidebar-loading".to_owned())
+            .w_full()
+            .px(px(8.0))
+            .py(px(12.0))
+            .text_size(px(12.0))
+            .text_color(colors.text_placeholder)
+            .child(strings.document_sidebar_loading.clone())
+            .into_any_element()
+    }
+
+    fn render_document_sidebar_empty(
+        &self,
+        colors: &ThemeColors,
+        strings: &I18nStrings,
+    ) -> AnyElement {
+        div()
+            .id("document-sidebar-empty")
+            .debug_selector(|| "document-sidebar-empty".to_owned())
+            .w_full()
+            .px(px(8.0))
+            .py(px(12.0))
+            .text_size(px(12.0))
+            .text_color(colors.text_placeholder)
+            .child(strings.document_sidebar_empty.clone())
+            .into_any_element()
+    }
+
+    fn reveal_document_sidebar_column(
+        &mut self,
+        column: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_delimited_document() {
+            return;
+        }
+        if self.view_mode == DocumentHostViewMode::Source {
+            let offset = self
+                .structured_index
+                .as_ref()
+                .and_then(|index| match index {
+                    StructuredIndex::Delimited(index) => index
+                        .read_header()
+                        .ok()
+                        .flatten()
+                        .map(|record| record.byte_range.start)
+                        .or_else(|| {
+                            index.read_records(0, 1).ok().and_then(|records| {
+                                records.first().map(|record| record.byte_range.start)
+                            })
+                        }),
+                    _ => None,
+                });
+            if let Some(offset) = offset {
+                self.jump_byte_offset_to_source(offset, cx);
+            }
+        }
+        self.set_structured_column_window_start(column, cx);
+        self.structured_selected_cell = Some(StructuredCellEdit {
+            record: None,
+            column,
+        });
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    fn reveal_document_sidebar_structure(
+        &mut self,
+        row: u64,
+        offset: u64,
+        is_json: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match self.view_mode {
+            DocumentHostViewMode::Source => self.jump_byte_offset_to_source(offset, cx),
+            DocumentHostViewMode::Split => {
+                if is_json {
+                    self.activate_json_node(row, cx);
+                } else {
+                    self.reveal_structured_row_in_split(row, cx);
+                }
+            }
+            DocumentHostViewMode::Structure if is_json => {
+                let selected = self
+                    .derived_projection_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.as_any().downcast_ref::<JsonGraphSnapshot>())
+                    .and_then(|snapshot| {
+                        snapshot
+                            .projection()
+                            .nodes
+                            .iter()
+                            .find(|node| {
+                                node.source.range.start <= offset && node.source.range.end > offset
+                            })
+                            .map(|node| node.id.clone())
+                    });
+                if let Some(selected) = selected {
+                    self.graph_selected_item = Some(selected.clone());
+                    self.graph_pending_center = Some(selected.clone());
+                    self.reveal_graph_item(&selected);
+                    cx.notify();
+                } else {
+                    self.activate_json_node(row, cx);
+                }
+            }
+            DocumentHostViewMode::Structure => {
+                self.structured_selected_cell = Some(StructuredCellEdit {
+                    record: Some(row),
+                    column: 0,
+                });
+                cx.notify();
+            }
+            DocumentHostViewMode::Live => self.jump_byte_offset_to_source(offset, cx),
+        }
+    }
+
     pub(super) fn jump_to_search_result(&mut self, cx: &mut Context<Self>) {
         let Some(found_start) = self
             .search_results
@@ -39,7 +741,7 @@ impl DocumentHost {
             );
         if !keep_delimited_table {
             self.view_mode = DocumentHostViewMode::Source;
-            self.sync_session_active_view();
+            self.sync_tab_active_view();
         }
         self.select_source_lines(line..line.saturating_add(1), false);
         self.scroll_source_line(line, ScrollStrategy::Top);
@@ -429,11 +1131,9 @@ impl DocumentHost {
         {
             return;
         }
-        if self
-            .structured_pending
-            .as_ref()
-            .is_some_and(|pending| pending.start <= start && pending.end >= end)
-        {
+        // 同一时刻只允许一次视口读取。拖动滚动条会在相邻帧给出略有差异的范围；
+        // 若每帧替换 Task，磁盘读取会持续被取消，画面只能在加载占位之间闪烁。
+        if self.structured_pending.is_some() {
             return;
         }
 
@@ -441,6 +1141,12 @@ impl DocumentHost {
         let generation = self.structured_generation;
         let task_stamp = DocumentTaskStamp::capture(self, generation);
         let requested = start..end;
+        let requested_center = logical_rows
+            .get(logical_rows.len() / 2)
+            .copied()
+            .unwrap_or(start);
+        let requested_for_read = requested.clone();
+        let requested_for_completion = requested.clone();
         let column_start = self.structured_column_window_start;
         let column_end = column_start.saturating_add(STRUCTURED_COLUMN_WINDOW);
         let columns = column_start..column_end;
@@ -456,8 +1162,8 @@ impl DocumentHost {
                         Ok(rows)
                     } else {
                         index.read_rows(
-                            requested.start,
-                            usize::try_from(requested.end - requested.start)
+                            requested_for_read.start,
+                            usize::try_from(requested_for_read.end - requested_for_read.start)
                                 .unwrap_or(STRUCTURED_OVERSCAN_ROWS * 3),
                             columns,
                         )
@@ -466,14 +1172,24 @@ impl DocumentHost {
                 .await;
             let _ = this.update(cx, |view, cx| {
                 if !task_stamp.accepts_strict(view, view.structured_generation) {
+                    if view.structured_pending.as_ref() == Some(&requested_for_completion) {
+                        view.structured_pending = None;
+                        cx.notify();
+                    }
                     return;
                 }
                 view.structured_pending = None;
                 match result {
                     Ok(rows) => {
-                        view.structured_rows.clear();
                         view.structured_rows
                             .extend(rows.into_iter().map(|row| (row.index, row)));
+                        // 保留相邻 viewport 的重叠行，避免小步滚动把上一帧重新打回占位；
+                        // 超预算后只淘汰离本次请求中心最远的端点，内存仍与文件大小解耦。
+                        prune_structured_row_cache(
+                            &mut view.structured_rows,
+                            requested_center,
+                            MAX_STRUCTURED_CACHED_ROWS,
+                        );
                         view.clear_structure_error();
                     }
                     Err(error) => view.set_structure_error(error, cx),
@@ -517,14 +1233,15 @@ impl DocumentHost {
         };
         self.anchor_source_window_for_byte(line as u64, byte_offset);
         self.view_mode = DocumentHostViewMode::Source;
-        self.sync_session_active_view();
+        self.sync_tab_active_view();
         self.select_source_lines(line..line.saturating_add(1), false);
         self.scroll_source_line(line, ScrollStrategy::Top);
         cx.notify();
     }
 
     pub(super) fn source_list_len(&self) -> usize {
-        self.line_count()
+        self.fold_projection
+            .visible_line_count()
             .saturating_sub(self.source_list_origin)
             .min(SOURCE_LIST_WINDOW_ROWS)
     }
@@ -540,8 +1257,11 @@ impl DocumentHost {
     }
 
     fn prepare_source_list_target(&mut self, requested: usize) -> usize {
-        let total = self.line_count().max(1);
-        let target = requested.min(total.saturating_sub(1));
+        let real_total = self.line_count().max(1);
+        let real_target = requested.min(real_total.saturating_sub(1));
+        self.ensure_source_line_visible(real_target);
+        let total = self.fold_projection.visible_line_count().max(1);
+        let target = self.fold_projection.visible_line_for_real(real_target);
         let window_end = self
             .source_list_origin
             .saturating_add(SOURCE_LIST_WINDOW_ROWS)
@@ -736,5 +1456,20 @@ impl DocumentHost {
         cx: &mut Context<Self>,
     ) {
         self.activate_source_row_from_pointer(line, event, window, cx);
+    }
+}
+
+fn format_byte_count(bytes: u64) -> String {
+    const KIB: u64 = 1_024;
+    const MIB: u64 = KIB * 1_024;
+    const GIB: u64 = MIB * 1_024;
+    if bytes >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{bytes} B")
     }
 }

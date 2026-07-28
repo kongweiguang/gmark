@@ -75,8 +75,13 @@ actions!(
         ExportImage,
         ExportPdf,
         ExportSelection,
+        ShowDocumentInfo,
+        ShowDocumentOutline,
+        ShowStructureView,
+        ShowStructuredInspector,
+        FocusStructuredFilter,
+        FocusStructuredColumns,
         AddLanguageConfig,
-        AddThemeConfig,
         QuitApplication,
         CloseWindow,
         CloseTab,
@@ -92,6 +97,7 @@ actions!(
         DismissTransientUi,
         ToggleViewMode,
         ToggleWorkspace,
+        ToggleDocumentSidebar,
         QuickOpen,
         CommandPalette,
         GoToLine,
@@ -100,6 +106,13 @@ actions!(
         NormalizeLineEndingsLf,
         NormalizeLineEndingsCrLf,
         NormalizeLineEndingsCr,
+        CollapseFold,
+        ExpandFold,
+        CollapseAllFolds,
+        ExpandAllFolds,
+        FormatDocument,
+        FormatSelection,
+        CancelFormatting,
         SetHeading1,
         SetHeading2,
         SetHeading3,
@@ -112,6 +125,7 @@ actions!(
         SetTaskList,
         SetQuote,
         SetCodeBlock,
+        InsertResource,
     ]
 );
 
@@ -130,15 +144,6 @@ pub struct FindNext;
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = gmark)]
 pub struct FindPrevious;
-
-/// Selects a theme from the app-level theme registry.
-#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema, gpui::Action)]
-#[action(namespace = gmark)]
-#[serde(deny_unknown_fields)]
-pub struct SelectTheme {
-    /// Stable theme id from the built-in theme catalog.
-    pub theme_id: String,
-}
 
 /// Selects a UI language from the app-level language registry.
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema, gpui::Action)]
@@ -240,6 +245,7 @@ pub(crate) enum ShortcutCommand {
     DismissTransientUi,
     ToggleViewMode,
     ToggleWorkspace,
+    ToggleDocumentSidebar,
     QuickOpen,
     CommandPalette,
     GoToLine,
@@ -249,6 +255,13 @@ pub(crate) enum ShortcutCommand {
     FindPrevious,
     ToggleFocusMode,
     ToggleTypewriterMode,
+    CollapseFold,
+    ExpandFold,
+    CollapseAllFolds,
+    ExpandAllFolds,
+    FormatDocument,
+    FormatSelection,
+    CancelFormatting,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -669,6 +682,55 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: None,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::CollapseFold,
+        id: "collapse_fold",
+        category: ShortcutCategory::Navigation,
+        default_keys: &["cmd-alt-[", "ctrl-alt-["],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ExpandFold,
+        id: "expand_fold",
+        category: ShortcutCategory::Navigation,
+        default_keys: &["cmd-alt-]", "ctrl-alt-]"],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::CollapseAllFolds,
+        id: "collapse_all_folds",
+        category: ShortcutCategory::Navigation,
+        default_keys: &[],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ExpandAllFolds,
+        id: "expand_all_folds",
+        category: ShortcutCategory::Navigation,
+        default_keys: &[],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::FormatDocument,
+        id: "format_document",
+        category: ShortcutCategory::Formatting,
+        default_keys: &["shift-alt-f"],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::FormatSelection,
+        id: "format_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &[],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::CancelFormatting,
+        id: "cancel_formatting",
+        category: ShortcutCategory::Formatting,
+        default_keys: &[],
+        context: None,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::NewTab,
         id: "new_tab",
         category: ShortcutCategory::File,
@@ -750,6 +812,13 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         id: "toggle_workspace",
         category: ShortcutCategory::Navigation,
         default_keys: &["cmd-b", "ctrl-b"],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ToggleDocumentSidebar,
+        id: "toggle_document_sidebar",
+        category: ShortcutCategory::Navigation,
+        default_keys: &[],
         context: None,
     },
     ShortcutDefinition {

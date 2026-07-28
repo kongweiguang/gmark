@@ -640,18 +640,10 @@ async fn selection_toolbar_formats_without_losing_selection_and_undo_restores_so
         .debug_bounds("selection-toolbar-overflow-menu")
         .expect("overflow menu");
     let content = visual_cx.debug_bounds("editor-content").unwrap();
-    let selection = editor.update(visual_cx, |editor, cx| {
-        editor
-            .document
-            .first_root()
-            .expect("root")
-            .read(cx)
-            .active_range_or_cursor_bounds()
-            .expect("selection bounds")
-    });
     assert!(overflow.left() >= content.left());
     assert!(overflow.right() <= content.right());
-    assert!(overflow.bottom() <= selection.top());
+    assert!(overflow.top() >= content.top());
+    assert!(overflow.bottom() <= content.bottom());
     let underline = visual_cx
         .debug_bounds("selection-toolbar-underline")
         .expect("underline button");

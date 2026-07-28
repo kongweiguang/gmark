@@ -9,13 +9,14 @@
 use std::ops::Range;
 use std::path::PathBuf;
 
-use gpui::{EntityId, Image, Pixels, Point, SharedString};
+use gpui::{AnyWindowHandle, EntityId, Image, Pixels, Point, SharedString};
 use uuid::Uuid;
 
 use super::{EditingCommandId, SlashCommand};
 use crate::components::markdown::html::{HtmlDocument, parse_html_document};
 use crate::components::markdown::image::parse_standalone_image;
 use crate::components::markdown::inline::InlineTextTree;
+use crate::components::markdown::resource::ResourceRecord;
 use crate::components::{TableAxisKind, TableData};
 
 /// Supported callout variants parsed from `[!TYPE]` quote headers.
@@ -452,7 +453,9 @@ impl BlockKind {
 }
 #[path = "state_parts/model.rs"]
 mod model;
-pub(crate) use model::{BlockDragPayload, BlockDropPlacement, BlockHostAction};
+pub(crate) use model::{
+    BlockDragPayload, BlockDropPlacement, BlockHostAction, MermaidSvgExportRequest,
+};
 pub use model::{BlockEvent, BlockRecord, PastedImageSource, UndoCaptureKind};
 #[cfg(test)]
 #[path = "../../../tests/unit/components/block/state.rs"]

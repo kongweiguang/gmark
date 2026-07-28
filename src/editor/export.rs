@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 
 #[cfg(test)]
@@ -21,6 +21,12 @@ enum ExportTaskResult {
     Complete,
     Cancelled,
     Failed(String),
+}
+
+#[derive(Default)]
+pub(super) struct ExportProgress {
+    pub(super) completed: AtomicUsize,
+    pub(super) total: AtomicUsize,
 }
 
 impl Editor {
@@ -43,6 +49,10 @@ impl Editor {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             format!("untitled.{extension}"),
         )
+    }
+
+    fn mermaid_svg_export_dialog_defaults(&self) -> (PathBuf, String) {
+        mermaid_svg_export_defaults(self.file_path.as_deref())
     }
 
     fn export_title(&self) -> String {
@@ -92,6 +102,7 @@ impl Editor {
         std::fs::write(path, bytes).with_context(|| format!("failed to write '{}'", path.display()))
     }
 
+    #[cfg(test)]
     fn write_export_bytes_cancellable(
         format: ExportFormat,
         markdown: &str,
@@ -101,17 +112,57 @@ impl Editor {
         source_base_dir: Option<&Path>,
         cancelled: &AtomicBool,
     ) -> ExportTaskResult {
+        Self::write_export_bytes_cancellable_with_progress(
+            format,
+            markdown,
+            theme,
+            title,
+            path,
+            source_base_dir,
+            cancelled,
+            None,
+        )
+    }
+
+    fn write_export_bytes_cancellable_with_progress(
+        format: ExportFormat,
+        markdown: &str,
+        theme: &Theme,
+        title: &str,
+        path: &Path,
+        source_base_dir: Option<&Path>,
+        cancelled: &AtomicBool,
+        progress: Option<&ExportProgress>,
+    ) -> ExportTaskResult {
         if cancelled.load(Ordering::Acquire) {
             return ExportTaskResult::Cancelled;
         }
+        let mut prepared_html_resources: Option<document_export::PreparedHtmlResources> = None;
         let rendered = match format {
-            ExportFormat::Html => Ok(document_export::render_html_with_base_dir(
-                markdown,
-                theme,
-                title,
-                source_base_dir,
-            )
-            .into_bytes()),
+            ExportFormat::Html => {
+                let prepared = match document_export::prepare_html_resources_with_progress(
+                    markdown,
+                    source_base_dir,
+                    path,
+                    cancelled,
+                    progress.map(|progress| &progress.completed),
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(_error) if cancelled.load(Ordering::Acquire) => {
+                        return ExportTaskResult::Cancelled;
+                    }
+                    Err(error) => return ExportTaskResult::Failed(error.to_string()),
+                };
+                let bytes = document_export::render_html_with_base_dir(
+                    &prepared.markdown,
+                    theme,
+                    title,
+                    source_base_dir,
+                )
+                .into_bytes();
+                prepared_html_resources = Some(prepared);
+                Ok(bytes)
+            }
             ExportFormat::Png => document_export::render_png_cancellable(
                 markdown,
                 theme,
@@ -129,15 +180,38 @@ impl Editor {
         };
         let bytes = match rendered {
             Ok(bytes) => bytes,
-            Err(_) if cancelled.load(Ordering::Acquire) => return ExportTaskResult::Cancelled,
-            Err(error) => return ExportTaskResult::Failed(error.to_string()),
+            Err(_) if cancelled.load(Ordering::Acquire) => {
+                if let Some(prepared) = prepared_html_resources.as_ref() {
+                    prepared.cleanup_created();
+                }
+                return ExportTaskResult::Cancelled;
+            }
+            Err(error) => {
+                if let Some(prepared) = prepared_html_resources.as_ref() {
+                    prepared.cleanup_created();
+                }
+                return ExportTaskResult::Failed(error.to_string());
+            }
         };
         if cancelled.load(Ordering::Acquire) {
+            if let Some(prepared) = prepared_html_resources.as_ref() {
+                prepared.cleanup_created();
+            }
             return ExportTaskResult::Cancelled;
+        }
+        if let Some(progress) = progress {
+            progress
+                .completed
+                .store(progress.total.load(Ordering::Acquire), Ordering::Release);
         }
         match gmark_document::atomic_write(path, &bytes) {
             Ok(()) => ExportTaskResult::Complete,
-            Err(error) => ExportTaskResult::Failed(error.to_string()),
+            Err(error) => {
+                if let Some(prepared) = prepared_html_resources.as_ref() {
+                    prepared.cleanup_created();
+                }
+                ExportTaskResult::Failed(error.to_string())
+            }
         }
     }
 
@@ -176,7 +250,9 @@ impl Editor {
         let prompt = cx.prompt_for_new_path(&default_dir, Some(&suggested_name));
         let window_handle = window.window_handle();
         let cancelled = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(ExportProgress::default());
         self.export_cancel = Some(Arc::clone(&cancelled));
+        self.export_progress = Some(Arc::clone(&progress));
         self.export_cancel_requested = false;
 
         self.export_task = Some(cx.spawn(
@@ -187,6 +263,7 @@ impl Editor {
                         let _ = this.update(cx, |editor, _cx| {
                             editor.export_task = None;
                             editor.export_cancel = None;
+                            editor.export_progress = None;
                             editor.export_in_progress = false;
                             editor.export_cancel_requested = false;
                         });
@@ -196,6 +273,7 @@ impl Editor {
                         let _ = this.update(cx, |editor, _cx| {
                             editor.export_task = None;
                             editor.export_cancel = None;
+                            editor.export_progress = None;
                         });
                         let detail = err.to_string();
                         let _ = cx.update_window(
@@ -212,6 +290,16 @@ impl Editor {
                     path.set_extension(format.extension());
                 }
 
+                let total = if format == ExportFormat::Html {
+                    document_export::count_local_resource_cards(
+                        &markdown,
+                        source_base_dir.as_deref(),
+                    )
+                } else {
+                    1
+                };
+                progress.total.store(total.max(1), Ordering::Release);
+
                 let _ = this.update(cx, |editor, cx| {
                     editor.export_in_progress = true;
                     cx.notify();
@@ -219,10 +307,11 @@ impl Editor {
 
                 let (sender, receiver) = oneshot::channel();
                 let worker_cancelled = Arc::clone(&cancelled);
+                let worker_progress = Arc::clone(&progress);
                 let spawn_result = thread::Builder::new()
                     .name("gmark-export".to_string())
                     .spawn(move || {
-                        let result = Self::write_export_bytes_cancellable(
+                        let result = Self::write_export_bytes_cancellable_with_progress(
                             format,
                             &markdown,
                             &theme,
@@ -230,6 +319,7 @@ impl Editor {
                             &path,
                             source_base_dir.as_deref(),
                             &worker_cancelled,
+                            Some(&worker_progress),
                         );
                         let _ = sender.send(result);
                     });
@@ -238,6 +328,7 @@ impl Editor {
                     let _ = this.update(cx, |editor, cx| {
                         editor.export_task = None;
                         editor.export_cancel = None;
+                        editor.export_progress = None;
                         editor.export_in_progress = false;
                         editor.export_cancel_requested = false;
                         cx.notify();
@@ -260,6 +351,7 @@ impl Editor {
                 let _ = this.update(cx, |editor, cx| {
                     editor.export_task = None;
                     editor.export_cancel = None;
+                    editor.export_progress = None;
                     editor.export_in_progress = false;
                     editor.export_cancel_requested = false;
                     cx.notify();
@@ -274,6 +366,152 @@ impl Editor {
                 }
             },
         ));
+    }
+
+    /// Saves one already-rendered Mermaid SVG without re-running document export.
+    /// The diagram is immutable at this boundary, so the editor owns only the
+    /// save dialog, atomic write, and recoverable failure presentation.
+    pub(crate) fn export_mermaid_svg_via_prompt(
+        &mut self,
+        svg: String,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        if self.export_task.is_some() {
+            return;
+        }
+        let (default_dir, suggested_name) = self.mermaid_svg_export_dialog_defaults();
+        let prompt = cx.prompt_for_new_path(&default_dir, Some(&suggested_name));
+        self.export_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let mut path = match prompt.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) | Err(_) => {
+                    let _ = this.update(cx, |editor, _cx| {
+                        editor.export_task = None;
+                    });
+                    return;
+                }
+                Ok(Err(error)) => {
+                    let detail = error.to_string();
+                    let _ = this.update(cx, |editor, _cx| {
+                        editor.export_task = None;
+                    });
+                    let _ = cx.update_window(
+                        window_handle,
+                        move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                            show_export_error(window, cx, &detail);
+                        },
+                    );
+                    return;
+                }
+            };
+            if path.extension().is_none() {
+                path.set_extension("svg");
+            }
+
+            let result = cx
+                .background_spawn(async move { write_mermaid_svg(&path, &svg) })
+                .await;
+            let _ = this.update(cx, |editor, cx| {
+                editor.export_task = None;
+                cx.notify();
+            });
+            if let Err(detail) = result {
+                let _ = cx.update_window(
+                    window_handle,
+                    move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                        show_export_error(window, cx, &detail);
+                    },
+                );
+            }
+        }));
+    }
+
+    /// Export the current resident selection as Markdown while preserving the
+    /// source selection's byte boundaries. The serialized document is the
+    /// existing Markdown truth, so Live selections remain round-trippable.
+    pub(crate) fn export_selection_via_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.export_task.is_some() {
+            return;
+        }
+        let range = self.capture_source_selection_snapshot(cx).range();
+        if range.is_empty() {
+            return;
+        }
+        let source = self.current_document_source(cx);
+        let Some(selection) = source.get(range).map(str::to_owned) else {
+            return;
+        };
+        let default_dir = self
+            .file_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let stem = self
+            .file_path
+            .as_ref()
+            .and_then(|path| path.file_stem())
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or_else(|| "untitled".to_owned());
+        let prompt = cx.prompt_for_new_path(&default_dir, Some(&format!("{stem}.selection.md")));
+        let window_handle = window.window_handle();
+
+        self.export_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let path = match prompt.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) | Err(_) => {
+                    let _ = this.update(cx, |editor, _cx| {
+                        editor.export_task = None;
+                        editor.export_in_progress = false;
+                    });
+                    return;
+                }
+                Ok(Err(error)) => {
+                    let detail = error.to_string();
+                    let _ = this.update(cx, |editor, _cx| {
+                        editor.export_task = None;
+                        editor.export_in_progress = false;
+                    });
+                    let _ = cx.update_window(
+                        window_handle,
+                        move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                            show_export_error(window, cx, &detail);
+                        },
+                    );
+                    return;
+                }
+            };
+
+            let _ = this.update(cx, |editor, cx| {
+                editor.export_in_progress = true;
+                cx.notify();
+            });
+            let result = cx
+                .background_spawn(async move {
+                    gmark_document::atomic_write(&path, selection.as_bytes())
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |editor, cx| {
+                editor.export_task = None;
+                editor.export_in_progress = false;
+                cx.notify();
+            });
+            if let Err(detail) = result {
+                let _ = cx.update_window(
+                    window_handle,
+                    move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                        show_export_error(window, cx, &detail);
+                    },
+                );
+            }
+        }));
     }
 
     pub(crate) fn on_cancel_export(
@@ -300,6 +538,23 @@ fn show_export_error(window: &mut Window, cx: &mut App, detail: &str) {
         &buttons,
         cx,
     );
+}
+
+fn mermaid_svg_export_defaults(file_path: Option<&Path>) -> (PathBuf, String) {
+    let directory = file_path
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let stem = file_path
+        .and_then(Path::file_stem)
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("untitled");
+    (directory, format!("{stem}-mermaid.svg"))
+}
+
+fn write_mermaid_svg(path: &Path, svg: &str) -> Result<(), String> {
+    gmark_document::atomic_write(path, svg.as_bytes()).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

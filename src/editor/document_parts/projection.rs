@@ -179,6 +179,9 @@ pub(in crate::editor) fn scan_projection_regions_from_offset(
         } else if is_quote_start(line) {
             index = collect_quote_raw_region(lines, index);
             kind = ProjectionRegionKind::Quote;
+        } else if ResourceRecord::parse(line, None).is_some() {
+            index += 1;
+            kind = ProjectionRegionKind::StandaloneResource;
         } else if BlockKind::parse_atx_heading_line(line).is_some() {
             index += 1;
             kind = ProjectionRegionKind::AtxHeading;
@@ -290,6 +293,12 @@ pub(super) fn prepare_projection_region(
         }
         ProjectionRegionKind::StandaloneImage => {
             vec![BlockRecord::paragraph(markdown().trim().to_string())]
+        }
+        ProjectionRegionKind::StandaloneResource => {
+            vec![BlockRecord::resource(ResourceRecord::parse(
+                markdown().trim(),
+                None,
+            )?)]
         }
         ProjectionRegionKind::IndentedCode => {
             vec![collect_indented_code_record(region_lines, 0)?.0]
@@ -605,6 +614,11 @@ pub(super) fn native_block(
 }
 
 pub(super) fn native_record(kind: BlockKind, markdown: String) -> BlockRecord {
+    if kind == BlockKind::Paragraph {
+        if let Some(resource) = ResourceRecord::parse(&markdown, None) {
+            return BlockRecord::resource(resource);
+        }
+    }
     BlockRecord::new(kind, InlineTextTree::from_markdown(&markdown))
 }
 

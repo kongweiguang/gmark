@@ -120,6 +120,8 @@ impl Editor {
         session.window = self.tabs.window.clone();
         session.workspace_panel_width = self.workspace_panel_width();
         session.workspace_docked_open = Some(self.workspace_docked_open_preference());
+        session.document_sidebar_width = self.document_sidebar_panel_width();
+        session.document_sidebar_docked_open = Some(self.document_sidebar_docked_open_preference());
         session.split_pane_ratio = Some(self.split_pane_ratio.clamp(0.3, 0.7));
         session
     }
@@ -278,6 +280,7 @@ impl Editor {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn restore_tab_session(
         &mut self,
         session_id: uuid::Uuid,
@@ -286,6 +289,33 @@ impl Editor {
         workspace_root: Option<PathBuf>,
         workspace_panel_width: Option<f32>,
         workspace_docked_open: Option<bool>,
+        split_pane_ratio: Option<f32>,
+        cx: &mut Context<Self>,
+    ) {
+        self.restore_tab_session_with_sidebars(
+            session_id,
+            restored,
+            active_index,
+            workspace_root,
+            workspace_panel_width,
+            workspace_docked_open,
+            None,
+            None,
+            split_pane_ratio,
+            cx,
+        );
+    }
+
+    pub(crate) fn restore_tab_session_with_sidebars(
+        &mut self,
+        session_id: uuid::Uuid,
+        restored: Vec<RestoredTab>,
+        active_index: usize,
+        workspace_root: Option<PathBuf>,
+        workspace_panel_width: Option<f32>,
+        workspace_docked_open: Option<bool>,
+        document_sidebar_width: Option<f32>,
+        document_sidebar_docked_open: Option<bool>,
         split_pane_ratio: Option<f32>,
         cx: &mut Context<Self>,
     ) {
@@ -351,6 +381,8 @@ impl Editor {
         }
         self.restore_workspace_panel_width(workspace_panel_width);
         self.restore_workspace_docked_open_preference(workspace_docked_open);
+        self.restore_document_sidebar_panel_width(document_sidebar_width);
+        self.restore_document_sidebar_docked_open_preference(document_sidebar_docked_open);
         self.split_pane_ratio = split_pane_ratio
             .filter(|ratio| ratio.is_finite())
             .map_or(0.5, |ratio| ratio.clamp(0.3, 0.7));
@@ -628,6 +660,10 @@ impl Editor {
         snapshot: DocumentTabSnapshot,
         cx: &mut Context<Self>,
     ) {
+        // A dynamic format menu is derived from the active snapshot. Closing
+        // its panels before replacing the snapshot prevents old actions from
+        // being activated during the transition frame.
+        self.close_menu_bar(cx);
         self.accessibility_revision = None;
         self.document_host = snapshot.document_host.clone();
         if let Some(document_host) = self.document_host.as_ref() {
@@ -687,6 +723,8 @@ impl Editor {
             self.schedule_recovery_journal(cx);
             self.schedule_auto_save(cx);
         }
+        #[cfg(target_os = "macos")]
+        self.schedule_platform_document_menu_refresh(cx);
         cx.notify();
     }
 
@@ -734,12 +772,7 @@ impl Editor {
             })
     }
 
-    pub(in crate::editor) fn open_path_in_tab(
-        &mut self,
-        path: PathBuf,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(in crate::editor) fn open_path_in_tab(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if let Some(index) = self.tab_index_for_path(&path) {
             self.switch_to_tab_index(index, cx);
             return;

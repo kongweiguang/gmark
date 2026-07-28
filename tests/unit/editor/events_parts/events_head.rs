@@ -8,7 +8,7 @@ use crate::components::{
 use gpui::{App, AppContext, Bounds, Entity, TestAppContext, point, px, size};
 
 #[gpui::test]
-async fn clicking_canvas_below_last_block_focuses_document_end(cx: &mut TestAppContext) {
+async fn clicking_canvas_below_last_text_block_appends_empty_paragraph(cx: &mut TestAppContext) {
     let editor = cx.new(|cx| Editor::from_markdown(cx, "first\n\nlast".to_string(), None));
 
     editor.update(cx, |editor, cx| {
@@ -24,9 +24,18 @@ async fn clicking_canvas_below_last_block_focuses_document_end(cx: &mut TestAppC
         editor.active_entity_id = Some(first.entity_id());
 
         assert!(editor.focus_document_end_from_blank_area(point(px(300.0), px(300.0)), cx));
-        assert_eq!(editor.pending_focus, Some(last.entity_id()));
-        assert_eq!(editor.active_entity_id, Some(last.entity_id()));
-        assert_eq!(last.read(cx).selected_range, 4..4);
+        let roots = editor.document.root_blocks();
+        assert_eq!(roots.len(), 3);
+        let paragraph = roots[2].clone();
+        assert_eq!(paragraph.read(cx).kind(), BlockKind::Paragraph);
+        assert_eq!(paragraph.read(cx).display_text(), "");
+        assert_eq!(editor.pending_focus, Some(paragraph.entity_id()));
+        assert_eq!(paragraph.read(cx).selected_range, 0..0);
+        assert!(editor.document_dirty);
+        assert_eq!(editor.undo_history.len(), 1);
+
+        editor.undo_document(cx);
+        assert_eq!(editor.source_document.text(), "first\n\nlast");
     });
 }
 
@@ -81,6 +90,61 @@ async fn clicking_below_trailing_code_block_creates_usable_paragraph(cx: &mut Te
         editor.undo_document(cx);
         assert_eq!(editor.document.root_count(), 1);
         assert_eq!(editor.source_document.text(), source);
+    });
+}
+
+#[gpui::test]
+async fn clicking_below_trailing_separator_creates_root_paragraph(cx: &mut TestAppContext) {
+    let source = "---";
+    let editor = cx.new(|cx| Editor::from_markdown(cx, source.to_string(), None));
+
+    editor.update(cx, |editor, cx| {
+        let separator = editor.document.first_root().expect("separator").clone();
+        separator.update(cx, |block, _cx| {
+            block.last_bounds = Some(Bounds::new(
+                point(px(100.0), px(120.0)),
+                size(px(500.0), px(24.0)),
+            ));
+        });
+
+        assert!(editor.ensure_editable_document_tail(cx));
+        let roots = editor.document.root_blocks();
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].read(cx).kind(), BlockKind::Separator);
+        assert_eq!(roots[1].read(cx).kind(), BlockKind::Paragraph);
+        assert_eq!(editor.pending_focus, Some(roots[1].entity_id()));
+        assert_eq!(editor.undo_history.len(), 1);
+
+        editor.undo_document(cx);
+        assert_eq!(editor.source_document.text(), source);
+    });
+}
+
+#[gpui::test]
+async fn clicking_below_existing_trailing_empty_paragraph_reuses_it(cx: &mut TestAppContext) {
+    let editor = cx.new(|cx| Editor::from_markdown(cx, "last".to_string(), None));
+
+    editor.update(cx, |editor, cx| {
+        let empty = Editor::new_block(cx, BlockRecord::paragraph(String::new()));
+        editor.document.insert_blocks_at(
+            None,
+            editor.document.root_count(),
+            vec![empty.clone()],
+            cx,
+        );
+        empty.update(cx, |block, _cx| {
+            block.last_bounds = Some(Bounds::new(
+                point(px(100.0), px(160.0)),
+                size(px(500.0), px(24.0)),
+            ));
+        });
+
+        assert!(editor.ensure_editable_document_tail(cx));
+        assert_eq!(editor.document.root_count(), 2);
+        assert_eq!(editor.pending_focus, Some(empty.entity_id()));
+        assert_eq!(empty.read(cx).selected_range, 0..0);
+        assert!(editor.undo_history.is_empty());
+        assert!(!editor.document_dirty);
     });
 }
 

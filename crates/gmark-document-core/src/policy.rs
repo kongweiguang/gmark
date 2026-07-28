@@ -31,17 +31,8 @@ pub struct DocumentProfile {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LoadingPreset {
-    Balanced,
-    LowMemory,
-    HighPerformance,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LoadingLimits {
     pub max_resident_bytes: u64,
-    pub max_resident_lines: u64,
-    pub max_structural_units: u64,
 }
 
 impl LoadingLimits {
@@ -49,78 +40,32 @@ impl LoadingLimits {
     pub fn exceeded_reason(self, profile: &DocumentProfile) -> Option<OpenReason> {
         if profile.len > self.max_resident_bytes {
             Some(OpenReason::ByteLimitExceeded)
-        } else if profile.estimated_lines > self.max_resident_lines {
-            Some(OpenReason::LineLimitExceeded)
-        } else if profile.estimated_structural_units > self.max_structural_units {
-            Some(OpenReason::StructuralLimitExceeded)
         } else {
             None
         }
     }
 }
 
-pub const BALANCED_LIMITS: LoadingLimits = LoadingLimits {
+pub const DEFAULT_LOADING_LIMITS: LoadingLimits = LoadingLimits {
     max_resident_bytes: 16 * MIB,
-    max_resident_lines: 100_000,
-    max_structural_units: 500_000,
 };
 
-pub const LOW_MEMORY_LIMITS: LoadingLimits = LoadingLimits {
-    max_resident_bytes: 8 * MIB,
-    max_resident_lines: 50_000,
-    max_structural_units: 250_000,
-};
-
-pub const HIGH_PERFORMANCE_LIMITS: LoadingLimits = LoadingLimits {
-    max_resident_bytes: 64 * MIB,
-    max_resident_lines: 250_000,
-    max_structural_units: 1_000_000,
-};
-
-impl LoadingPreset {
-    pub const fn limits(self) -> LoadingLimits {
-        match self {
-            Self::Balanced => BALANCED_LIMITS,
-            Self::LowMemory => LOW_MEMORY_LIMITS,
-            Self::HighPerformance => HIGH_PERFORMANCE_LIMITS,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LoadingPolicy {
-    pub preset: LoadingPreset,
     pub max_resident_bytes: Option<u64>,
-    pub max_resident_lines: Option<u64>,
-    pub max_structural_units: Option<u64>,
     pub force_safe_source: bool,
-}
-
-impl Default for LoadingPolicy {
-    fn default() -> Self {
-        Self {
-            preset: LoadingPreset::Balanced,
-            max_resident_bytes: None,
-            max_resident_lines: None,
-            max_structural_units: None,
-            force_safe_source: false,
-        }
-    }
 }
 
 impl LoadingPolicy {
     pub fn effective_limits(self) -> LoadingLimits {
-        let preset = self.preset.limits();
         LoadingLimits {
-            max_resident_bytes: self.max_resident_bytes.unwrap_or(preset.max_resident_bytes),
-            max_resident_lines: self.max_resident_lines.unwrap_or(preset.max_resident_lines),
-            max_structural_units: self
-                .max_structural_units
-                .unwrap_or(preset.max_structural_units),
+            max_resident_bytes: self
+                .max_resident_bytes
+                .unwrap_or(DEFAULT_LOADING_LIMITS.max_resident_bytes),
         }
     }
 
-    /// 格式只决定视图，资源画像只决定存储后端。任一安全线越界都不得完整物化正文。
+    /// 格式只决定视图；只有文件体积越界时才切换到 Paged Source。
     pub fn resolve(self, profile: &DocumentProfile) -> OpenPlan {
         let limits = self.effective_limits();
         let reason = if self.force_safe_source {
@@ -181,8 +126,6 @@ pub enum OpenReason {
     WithinResidentLimits,
     ForcedSafeSource,
     ByteLimitExceeded,
-    LineLimitExceeded,
-    StructuralLimitExceeded,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,16 +144,16 @@ mod tests {
 
     fn profile(format: DocumentFormat) -> DocumentProfile {
         DocumentProfile {
-            len: BALANCED_LIMITS.max_resident_bytes,
+            len: DEFAULT_LOADING_LIMITS.max_resident_bytes,
             format,
             encoding: TextEncoding::Utf8 { bom: false },
-            estimated_lines: BALANCED_LIMITS.max_resident_lines,
-            estimated_structural_units: BALANCED_LIMITS.max_structural_units,
+            estimated_lines: u64::MAX,
+            estimated_structural_units: u64::MAX,
         }
     }
 
     #[test]
-    fn exact_limits_remain_resident_and_each_overflow_uses_paged_source() {
+    fn only_byte_overflow_uses_paged_source() {
         let policy = LoadingPolicy::default();
         let exact = profile(DocumentFormat::Json);
         assert_eq!(
@@ -218,25 +161,13 @@ mod tests {
             DocumentBackendKind::Resident
         );
 
-        for candidate in [
-            DocumentProfile {
-                len: exact.len + 1,
-                ..exact.clone()
-            },
-            DocumentProfile {
-                estimated_lines: exact.estimated_lines + 1,
-                ..exact.clone()
-            },
-            DocumentProfile {
-                estimated_structural_units: exact.estimated_structural_units + 1,
-                ..exact.clone()
-            },
-        ] {
-            let plan = policy.resolve(&candidate);
-            assert_eq!(plan.backend, DocumentBackendKind::Paged);
-            assert_eq!(plan.initial_view, DocumentViewId::source());
-            assert_eq!(plan.allowed_views, vec![ViewDescriptor::source()]);
-        }
+        let plan = policy.resolve(&DocumentProfile {
+            len: exact.len + 1,
+            ..exact
+        });
+        assert_eq!(plan.backend, DocumentBackendKind::Paged);
+        assert_eq!(plan.initial_view, DocumentViewId::source());
+        assert_eq!(plan.allowed_views, vec![ViewDescriptor::source()]);
     }
 
     #[test]

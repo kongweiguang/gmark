@@ -3,12 +3,28 @@
 use gpui::{AppContext, Bounds, point, px, size};
 
 use super::{
-    SLASH_COMMANDS, SlashCommand, boundary_available_index, filter_slash_commands,
-    selected_available_index, slash_menu_placement,
+    SLASH_COMMANDS, SlashCommand, block_gutter_container_inset,
+    block_gutter_represents_semantic_block, boundary_available_index, filter_slash_commands,
+    selected_available_index, slash_menu_placement, slash_menu_surface_bounds,
 };
 use crate::components::{
     Block, BlockKind, BlockRecord, EditingCommandId, EditingContext, InlineTextTree,
 };
+
+#[test]
+fn mermaid_block_menu_prefers_visual_bounds_over_stale_text_layout() {
+    let visual = Bounds::new(point(px(24.0), px(80.0)), size(px(640.0), px(404.0)));
+    let stale_text = Bounds::new(point(px(420.0), px(720.0)), size(px(180.0), px(24.0)));
+
+    assert_eq!(
+        slash_menu_surface_bounds(&BlockKind::MermaidBlock, Some(stale_text), Some(visual)),
+        Some((visual, true))
+    );
+    assert_eq!(
+        slash_menu_surface_bounds(&BlockKind::Paragraph, None, Some(visual)),
+        None
+    );
+}
 
 #[test]
 fn filters_english_chinese_and_pinyin_initial_aliases() {
@@ -102,6 +118,55 @@ fn slash_menu_flips_and_clamps_to_narrow_viewports() {
     assert!(!near_top.above);
     assert_eq!(near_top.top, 34.0);
     assert!(near_top.top + near_top.max_height <= 392.0);
+}
+
+#[test]
+fn block_gutter_cancels_special_container_insets() {
+    assert_eq!(
+        block_gutter_container_inset(false, false, 20.0, 16.0, 11.0),
+        0.0
+    );
+    assert_eq!(
+        block_gutter_container_inset(false, true, 20.0, 16.0, 11.0),
+        31.0
+    );
+    assert_eq!(
+        block_gutter_container_inset(true, false, 20.0, 16.0, 11.0),
+        36.0
+    );
+    assert_eq!(
+        block_gutter_container_inset(true, true, 20.0, 16.0, 11.0),
+        67.0
+    );
+}
+
+#[test]
+fn grouped_semantic_blocks_only_expose_one_gutter() {
+    assert!(block_gutter_represents_semantic_block(
+        &BlockKind::Callout(crate::components::CalloutVariant::Note),
+        true,
+        false,
+    ));
+    assert!(!block_gutter_represents_semantic_block(
+        &BlockKind::Paragraph,
+        true,
+        false,
+    ));
+    assert!(block_gutter_represents_semantic_block(
+        &BlockKind::FootnoteDefinition,
+        false,
+        true,
+    ));
+    assert!(!block_gutter_represents_semantic_block(
+        &BlockKind::Paragraph,
+        false,
+        true,
+    ));
+    assert!(block_gutter_represents_semantic_block(
+        &BlockKind::Paragraph,
+        false,
+        false,
+    ));
 }
 
 #[gpui::test]

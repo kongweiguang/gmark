@@ -1,6 +1,69 @@
 // @author kongweiguang
 
     #[gpui::test]
+    async fn deleting_focused_mermaid_preview_removes_the_whole_block(
+        cx: &mut TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| {
+            Editor::from_markdown(
+                cx,
+                "before\n\n```mermaid\nflowchart LR\nA --> B\n```\n\nafter".to_string(),
+                None,
+            )
+        });
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let mermaid = editor.document.visible_blocks()[1].entity.clone();
+                editor.focus_block(mermaid.entity_id());
+                mermaid.update(cx, |block, block_cx| {
+                    assert_eq!(
+                        block.mermaid_view_mode(),
+                        crate::components::MermaidViewMode::Preview
+                    );
+                    block.on_delete(&Delete, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 2);
+            assert_eq!(editor.document.markdown_text(cx), "before\n\nafter");
+            assert_eq!(editor.pending_focus, Some(visible[0].entity.entity_id()));
+        });
+    }
+
+    #[gpui::test]
+    async fn mermaid_fence_then_enter_creates_native_mermaid_block(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "```mermaid".to_string(), None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let block = editor.document.visible_blocks()[0].entity.clone();
+                block.update(cx, |block, block_cx| {
+                    block.move_to(block.visible_len(), block_cx);
+                    block.on_newline(&Newline, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let block = editor.document.visible_blocks()[0].entity.read(cx);
+            assert_eq!(block.kind(), BlockKind::MermaidBlock);
+            assert_eq!(
+                block.mermaid_view_mode(),
+                crate::components::MermaidViewMode::Source
+            );
+            assert_eq!(block.display_text(), "```mermaid\n\n```");
+            assert_eq!(block.selected_range, 11..11);
+            assert_eq!(editor.document.markdown_text(cx), "```mermaid\n\n```");
+        });
+    }
+
+    #[gpui::test]
     async fn dollar_dollar_prefix_then_enter_wraps_existing_line(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let editor = cx.new(|cx| Editor::from_markdown(cx, "E = mc^2".to_string(), None));
@@ -456,6 +519,38 @@
     }
 
     #[gpui::test]
+    async fn down_out_of_trailing_callout_body_creates_and_focuses_paragraph(
+        cx: &mut TestAppContext,
+    ) {
+        let editor = cx.new(|cx| {
+            Editor::from_markdown(cx, "> [!NOTE]\n> callout body".to_string(), None)
+        });
+
+        editor.update(cx, |editor, cx| {
+            let callout = editor.document.first_root().expect("callout root").clone();
+            let body = callout
+                .read(cx)
+                .children
+                .last()
+                .expect("callout body")
+                .clone();
+            assert_eq!(editor.document.root_count(), 1);
+
+            editor.on_block_event(
+                body,
+                &BlockEvent::RequestFocusNext { preferred_x: None },
+                cx,
+            );
+
+            let roots = editor.document.root_blocks();
+            assert_eq!(roots.len(), 2);
+            assert_eq!(roots[1].read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(roots[1].read(cx).display_text(), "");
+            assert_eq!(editor.pending_focus, Some(roots[1].entity_id()));
+        });
+    }
+
+    #[gpui::test]
     async fn down_at_end_of_trailing_paragraph_creates_nothing(cx: &mut TestAppContext) {
         // Regression guard: ordinary text blocks must not sprout a paragraph.
         let editor = cx.new(|cx| Editor::from_markdown(cx, "hello".to_string(), None));
@@ -724,4 +819,3 @@
             assert_eq!(roots[2].read(cx).display_text(), "");
         });
     }
-

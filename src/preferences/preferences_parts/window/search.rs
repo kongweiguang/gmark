@@ -16,7 +16,13 @@ impl PreferencesWindow {
         self.preference_search_items(strings)
             .into_iter()
             .filter(|item| {
-                let searchable = format!("{} {}", item.category, item.label).to_lowercase();
+                // 资源页改名后保留旧的 Image 搜索词，让既有使用习惯和旧配置仍能
+                // 在迁移后定位到同一项设置。
+                let legacy_alias = matches!(item.nav, PreferencesNav::Image)
+                    .then_some(" image 图片")
+                    .unwrap_or_default();
+                let searchable =
+                    format!("{} {}{}", item.category, item.label, legacy_alias).to_lowercase();
                 tokens.iter().all(|token| searchable.contains(token))
             })
             .collect()
@@ -75,17 +81,20 @@ impl PreferencesWindow {
 
     pub(super) fn has_unsaved_changes(&self) -> bool {
         self.startup_open != self.saved_startup_open
+            || self.auto_check_updates != self.saved_auto_check_updates
             || self.auto_save != self.saved_auto_save
             || self.spell_check != self.saved_spell_check
             || self.auto_pair_brackets != self.saved_auto_pair_brackets
             || self.auto_pair_markdown != self.saved_auto_pair_markdown
+            || self.code_folding != self.saved_code_folding
+            || self.format_on_save != self.saved_format_on_save
             || self.editor_font_size != self.saved_editor_font_size
             || self.editor_line_height_percent != self.saved_editor_line_height_percent
             || self.editor_content_width != self.saved_editor_content_width
             || self.editor_font_family != self.saved_editor_font_family
-            || self.workspace_sidebar_position != self.saved_workspace_sidebar_position
             || self.show_tab_bar_actions != self.saved_show_tab_bar_actions
-            || self.selected_theme_id != self.saved_theme_id
+            || self.theme_appearance != self.saved_theme_appearance
+            || self.theme_palette != self.saved_theme_palette
             || self.selected_language_id != self.saved_language_id
             || self.image_paste_behavior != self.saved_image_paste_behavior
             || normalize_shortcut_config(&self.keybindings)
@@ -174,8 +183,6 @@ impl PreferencesWindow {
     pub(super) fn close_all_dropdowns(&mut self) {
         self.startup_dropdown_open = false;
         self.auto_save_dropdown_open = false;
-        self.document_loading_dropdown_open = false;
-        self.theme_dropdown_open = false;
         self.language_dropdown_open = false;
         self.image_dropdown_open = false;
         self.font_dropdown_open = false;
@@ -185,8 +192,6 @@ impl PreferencesWindow {
         match dropdown {
             PreferencesDropdown::Startup => self.startup_dropdown_open,
             PreferencesDropdown::AutoSave => self.auto_save_dropdown_open,
-            PreferencesDropdown::DocumentLoadingPreset => self.document_loading_dropdown_open,
-            PreferencesDropdown::Theme => self.theme_dropdown_open,
             PreferencesDropdown::Language => self.language_dropdown_open,
             PreferencesDropdown::Image => self.image_dropdown_open,
             PreferencesDropdown::Font => self.font_dropdown_open,
@@ -199,10 +204,6 @@ impl PreferencesWindow {
             match dropdown {
                 PreferencesDropdown::Startup => self.startup_dropdown_open = true,
                 PreferencesDropdown::AutoSave => self.auto_save_dropdown_open = true,
-                PreferencesDropdown::DocumentLoadingPreset => {
-                    self.document_loading_dropdown_open = true
-                }
-                PreferencesDropdown::Theme => self.theme_dropdown_open = true,
                 PreferencesDropdown::Language => self.language_dropdown_open = true,
                 PreferencesDropdown::Image => self.image_dropdown_open = true,
                 PreferencesDropdown::Font => self.font_dropdown_open = true,
@@ -215,8 +216,6 @@ impl PreferencesWindow {
     pub(super) fn dropdown_option_count(&self, dropdown: PreferencesDropdown) -> usize {
         match dropdown {
             PreferencesDropdown::Startup | PreferencesDropdown::AutoSave => 2,
-            PreferencesDropdown::DocumentLoadingPreset => 3,
-            PreferencesDropdown::Theme => self.theme_options.len(),
             PreferencesDropdown::Language => self.language_options.len(),
             PreferencesDropdown::Image => 4,
             PreferencesDropdown::Font => self.font_options.len(),
@@ -233,16 +232,6 @@ impl PreferencesWindow {
                 AutoSavePreference::Off => 0,
                 AutoSavePreference::AfterDelay => 1,
             },
-            PreferencesDropdown::DocumentLoadingPreset => match self.document_loading.preset {
-                DocumentLoadingPreset::Balanced => 0,
-                DocumentLoadingPreset::LowMemory => 1,
-                DocumentLoadingPreset::HighPerformance => 2,
-            },
-            PreferencesDropdown::Theme => self
-                .theme_options
-                .iter()
-                .position(|entry| entry.id == self.selected_theme_id)
-                .unwrap_or(0),
             PreferencesDropdown::Language => self
                 .language_options
                 .iter()
@@ -282,25 +271,6 @@ impl PreferencesWindow {
                     [AutoSavePreference::Off, AutoSavePreference::AfterDelay][index.min(1)];
                 self.close_all_dropdowns();
                 cx.notify();
-            }
-            PreferencesDropdown::DocumentLoadingPreset => {
-                self.document_loading.preset = [
-                    DocumentLoadingPreset::Balanced,
-                    DocumentLoadingPreset::LowMemory,
-                    DocumentLoadingPreset::HighPerformance,
-                ][index.min(2)];
-                // 选择预设表示回到预设基线；高级阈值之后可再逐项覆盖。
-                self.document_loading.max_resident_mib = None;
-                self.document_loading.max_resident_lines = None;
-                self.document_loading.max_structural_units = None;
-                self.close_all_dropdowns();
-                cx.notify();
-            }
-            PreferencesDropdown::Theme => {
-                if let Some(theme_id) = self.theme_options.get(index).map(|entry| entry.id.clone())
-                {
-                    self.preview_theme(theme_id, cx);
-                }
             }
             PreferencesDropdown::Language => {
                 if let Some(language_id) = self
@@ -401,6 +371,9 @@ impl PreferencesWindow {
         cx: &mut Context<Self>,
     ) {
         match preference {
+            PreferencesSwitch::AutoCheckUpdates => {
+                self.auto_check_updates = !self.auto_check_updates
+            }
             PreferencesSwitch::SpellCheck => self.spell_check = !self.spell_check,
             PreferencesSwitch::AutoPairBrackets => {
                 self.auto_pair_brackets = !self.auto_pair_brackets
@@ -408,14 +381,8 @@ impl PreferencesWindow {
             PreferencesSwitch::AutoPairMarkdown => {
                 self.auto_pair_markdown = !self.auto_pair_markdown
             }
-            PreferencesSwitch::WorkspaceSidebarRight => {
-                self.workspace_sidebar_position =
-                    if self.workspace_sidebar_position == WorkspaceSidebarPosition::Right {
-                        WorkspaceSidebarPosition::Left
-                    } else {
-                        WorkspaceSidebarPosition::Right
-                    };
-            }
+            PreferencesSwitch::CodeFolding => self.code_folding = !self.code_folding,
+            PreferencesSwitch::FormatOnSave => self.format_on_save = !self.format_on_save,
             PreferencesSwitch::ShowTabBarActions => {
                 self.show_tab_bar_actions = !self.show_tab_bar_actions
             }
@@ -462,10 +429,13 @@ impl PreferencesWindow {
             }))
     }
 
-    pub(super) fn preview_theme(&mut self, theme_id: String, cx: &mut Context<Self>) {
-        let appearance = cx.window_appearance();
+    pub(super) fn preview_theme(&mut self, cx: &mut Context<Self>) {
+        let platform_appearance = cx.window_appearance();
+        let appearance = self.theme_appearance;
+        let palette = self.theme_palette;
         let changed = cx.update_global::<ThemeManager, _>(|theme_manager, _cx| {
-            let changed = theme_manager.set_theme_preference(&theme_id, appearance);
+            let changed =
+                theme_manager.set_theme_preference(appearance, palette, platform_appearance);
             if changed {
                 theme_manager
                     .set_editor_typography(self.editor_font_size, self.editor_line_height_percent);
@@ -474,11 +444,23 @@ impl PreferencesWindow {
             changed
         });
         if changed {
-            self.selected_theme_id = theme_id;
-            self.theme_dropdown_open = false;
             cx.refresh_windows();
-            cx.notify();
         }
+        cx.notify();
+    }
+
+    pub(super) fn preview_theme_appearance(
+        &mut self,
+        appearance: ThemeAppearance,
+        cx: &mut Context<Self>,
+    ) {
+        self.theme_appearance = appearance;
+        self.preview_theme(cx);
+    }
+
+    pub(super) fn preview_theme_palette(&mut self, palette: ThemePalette, cx: &mut Context<Self>) {
+        self.theme_palette = palette;
+        self.preview_theme(cx);
     }
 
     pub(super) fn preview_editor_typography(&mut self, cx: &mut Context<Self>) {
@@ -556,27 +538,22 @@ impl PreferencesWindow {
                 let value = self.document_loading.effective_max_resident_mib();
                 self.document_loading.max_resident_mib = Some(value.saturating_add(1).min(1_024));
             }
-            PreferencesStepperControl::ResidentLinesDecrease => {
-                let value = self.document_loading.effective_max_resident_lines();
-                self.document_loading.max_resident_lines =
-                    Some(value.saturating_sub(10_000).max(1_000));
-            }
-            PreferencesStepperControl::ResidentLinesIncrease => {
-                let value = self.document_loading.effective_max_resident_lines();
-                self.document_loading.max_resident_lines =
-                    Some(value.saturating_add(10_000).min(10_000_000));
-            }
-            PreferencesStepperControl::StructuralUnitsDecrease => {
-                let value = self.document_loading.effective_max_structural_units();
-                self.document_loading.max_structural_units =
-                    Some(value.saturating_sub(50_000).max(10_000));
-            }
-            PreferencesStepperControl::StructuralUnitsIncrease => {
-                let value = self.document_loading.effective_max_structural_units();
-                self.document_loading.max_structural_units =
-                    Some(value.saturating_add(50_000).min(50_000_000));
-            }
         }
+        let input = match control {
+            PreferencesStepperControl::FontSizeDecrease
+            | PreferencesStepperControl::FontSizeIncrease => PreferencesNumericInput::FontSize,
+            PreferencesStepperControl::LineHeightDecrease
+            | PreferencesStepperControl::LineHeightIncrease => PreferencesNumericInput::LineHeight,
+            PreferencesStepperControl::ContentWidthDecrease
+            | PreferencesStepperControl::ContentWidthIncrease => {
+                PreferencesNumericInput::ContentWidth
+            }
+            PreferencesStepperControl::ResidentMibDecrease
+            | PreferencesStepperControl::ResidentMibIncrease => {
+                PreferencesNumericInput::ResidentMib
+            }
+        };
+        self.sync_numeric_input(input, cx);
         if matches!(
             control,
             PreferencesStepperControl::FontSizeDecrease
@@ -592,9 +569,90 @@ impl PreferencesWindow {
         }
     }
 
+    pub(super) fn on_numeric_input_event(
+        &mut self,
+        input: Entity<Block>,
+        event: &BlockEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(event, BlockEvent::Changed) {
+            return;
+        }
+        let Some(index) = self
+            .numeric_inputs
+            .iter()
+            .position(|candidate| candidate == &input)
+        else {
+            return;
+        };
+        let field = PreferencesNumericInput::ORDER[index];
+        let text = input.read(cx).display_text().to_owned();
+        let Some(value) = parse_numeric_input(field, &text) else {
+            // 编辑期间允许空值或尚未完成的数字；无效值不会进入设置草稿，也会禁用保存。
+            cx.notify();
+            return;
+        };
+        match field {
+            PreferencesNumericInput::FontSize => self.editor_font_size = value as u8,
+            PreferencesNumericInput::LineHeight => self.editor_line_height_percent = value as u16,
+            PreferencesNumericInput::ContentWidth => self.editor_content_width = value as u16,
+            PreferencesNumericInput::ResidentMib => {
+                self.document_loading.max_resident_mib = Some(value)
+            }
+        }
+        if matches!(
+            field,
+            PreferencesNumericInput::FontSize
+                | PreferencesNumericInput::LineHeight
+                | PreferencesNumericInput::ContentWidth
+        ) {
+            self.preview_editor_typography(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn numeric_input_is_valid(&self, field: PreferencesNumericInput, cx: &App) -> bool {
+        parse_numeric_input(
+            field,
+            self.numeric_inputs[field.index()].read(cx).display_text(),
+        )
+        .is_some()
+    }
+
+    pub(super) fn has_invalid_numeric_input(&self, cx: &App) -> bool {
+        PreferencesNumericInput::ORDER
+            .iter()
+            .any(|field| !self.numeric_input_is_valid(*field, cx))
+    }
+
+    fn numeric_input_value(&self, field: PreferencesNumericInput) -> u64 {
+        match field {
+            PreferencesNumericInput::FontSize => u64::from(self.editor_font_size),
+            PreferencesNumericInput::LineHeight => u64::from(self.editor_line_height_percent),
+            PreferencesNumericInput::ContentWidth => u64::from(self.editor_content_width),
+            PreferencesNumericInput::ResidentMib => {
+                self.document_loading.effective_max_resident_mib()
+            }
+        }
+    }
+
+    fn sync_numeric_input(&mut self, field: PreferencesNumericInput, cx: &mut Context<Self>) {
+        let value = self.numeric_input_value(field).to_string();
+        let input = self.numeric_inputs[field.index()].clone();
+        input.update(cx, |input, cx| {
+            if input.display_text() == value {
+                return;
+            }
+            let len = input.visible_len();
+            input.replace_text_in_visible_range(0..len, &value, None, false, cx);
+        });
+    }
+
     /// 主题预览属于可丢弃的窗口草稿；任何未保存关闭都必须恢复打开窗口时的基线。
     pub(super) fn restore_saved_theme(&mut self, cx: &mut Context<Self>) {
-        if self.selected_theme_id == self.saved_theme_id
+        if self.theme_appearance == self.saved_theme_appearance
+            && self.theme_palette == self.saved_theme_palette
             && self.editor_font_size == self.saved_editor_font_size
             && self.editor_line_height_percent == self.saved_editor_line_height_percent
             && self.editor_content_width == self.saved_editor_content_width
@@ -602,31 +660,23 @@ impl PreferencesWindow {
         {
             return;
         }
-        let saved_theme_id = self.saved_theme_id.clone();
-        let appearance = cx.window_appearance();
-        let restored = cx.update_global::<ThemeManager, _>(|theme_manager, _cx| {
-            let restored = theme_manager.set_theme_preference(&saved_theme_id, appearance);
-            if restored {
-                theme_manager.set_editor_typography(
-                    self.saved_editor_font_size,
-                    self.saved_editor_line_height_percent,
-                );
-                theme_manager.set_editor_content_width(self.saved_editor_content_width);
-            }
-            restored
+        let saved_appearance = self.saved_theme_appearance;
+        let saved_palette = self.saved_theme_palette;
+        let platform_appearance = cx.window_appearance();
+        cx.update_global::<ThemeManager, _>(|theme_manager, _cx| {
+            theme_manager.set_theme_preference(
+                saved_appearance,
+                saved_palette,
+                platform_appearance,
+            );
+            theme_manager.set_editor_typography(
+                self.saved_editor_font_size,
+                self.saved_editor_line_height_percent,
+            );
+            theme_manager.set_editor_content_width(self.saved_editor_content_width);
         });
-        if !restored {
-            let _ = cx.update_global::<ThemeManager, _>(|theme_manager, _cx| {
-                let changed = theme_manager.set_theme_by_id(DEFAULT_THEME_ID);
-                theme_manager.set_editor_typography(
-                    self.saved_editor_font_size,
-                    self.saved_editor_line_height_percent,
-                );
-                theme_manager.set_editor_content_width(self.saved_editor_content_width);
-                changed
-            });
-        }
-        self.selected_theme_id = self.saved_theme_id.clone();
+        self.theme_appearance = self.saved_theme_appearance;
+        self.theme_palette = self.saved_theme_palette;
         self.editor_font_size = self.saved_editor_font_size;
         self.editor_line_height_percent = self.saved_editor_line_height_percent;
         self.editor_content_width = self.saved_editor_content_width;
@@ -657,23 +707,26 @@ impl PreferencesWindow {
     }
 
     pub(super) fn save(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.has_unsaved_changes() {
+        if !self.has_unsaved_changes() || self.has_invalid_numeric_input(cx) {
             return;
         }
 
         let preferences = match save_preferences_from_window(
             self.startup_open,
+            self.auto_check_updates,
             self.auto_save,
             self.spell_check,
             self.auto_pair_brackets,
             self.auto_pair_markdown,
+            self.code_folding,
+            self.format_on_save,
             self.editor_font_size,
             self.editor_line_height_percent,
             self.editor_content_width,
             &self.editor_font_family,
-            self.workspace_sidebar_position,
             self.show_tab_bar_actions,
-            &self.selected_theme_id,
+            self.theme_appearance,
+            self.theme_palette,
             &self.selected_language_id,
             self.image_paste_behavior,
             self.keybindings.clone(),
@@ -712,11 +765,13 @@ impl PreferencesWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let appearance = window.appearance();
+        let platform_appearance = window.appearance();
         cx.update_global::<ThemeManager, _>(|theme_manager, _cx| {
-            if !theme_manager.set_theme_preference(&preferences.default_theme_id, appearance) {
-                let _ = theme_manager.set_theme_by_id(DEFAULT_THEME_ID);
-            }
+            theme_manager.set_theme_preference(
+                preferences.theme_appearance,
+                preferences.theme_palette,
+                platform_appearance,
+            );
             theme_manager.set_editor_typography(
                 preferences.editor_font_size,
                 preferences.editor_line_height_percent,
@@ -734,8 +789,9 @@ impl PreferencesWindow {
             settings.spell_check = preferences.spell_check;
             settings.auto_pair_brackets = preferences.auto_pair_brackets;
             settings.auto_pair_markdown = preferences.auto_pair_markdown;
+            settings.code_folding = preferences.code_folding;
+            settings.format_on_save = preferences.format_on_save;
             settings.editor_font_family = preferences.editor_font_family.clone();
-            settings.workspace_sidebar_position = preferences.workspace_sidebar_position;
             settings.show_tab_bar_actions = preferences.show_tab_bar_actions;
             settings.status_bar_settings.status_bar_enabled = preferences.status_bar.enabled;
             settings.status_bar_settings.status_bar_show_word_count =
@@ -748,21 +804,25 @@ impl PreferencesWindow {
                 preferences.status_bar.show_mode_switch;
             settings.status_bar_settings.custom_buttons = preferences.status_bar.custom_buttons;
         });
+        crate::updater::UpdateCoordinator::set_auto_check(preferences.auto_check_updates, cx);
         cx.refresh_windows();
         window.activate_window();
         self.focus_handle.focus(window);
         self.saved_startup_open = self.startup_open;
+        self.saved_auto_check_updates = self.auto_check_updates;
         self.saved_auto_save = self.auto_save;
         self.saved_spell_check = self.spell_check;
         self.saved_auto_pair_brackets = self.auto_pair_brackets;
         self.saved_auto_pair_markdown = self.auto_pair_markdown;
+        self.saved_code_folding = self.code_folding;
+        self.saved_format_on_save = self.format_on_save;
         self.saved_editor_font_size = self.editor_font_size;
         self.saved_editor_line_height_percent = self.editor_line_height_percent;
         self.saved_editor_content_width = self.editor_content_width;
         self.saved_editor_font_family = self.editor_font_family.clone();
-        self.saved_workspace_sidebar_position = self.workspace_sidebar_position;
         self.saved_show_tab_bar_actions = self.show_tab_bar_actions;
-        self.saved_theme_id = self.selected_theme_id.clone();
+        self.saved_theme_appearance = self.theme_appearance;
+        self.saved_theme_palette = self.theme_palette;
         self.saved_language_id = self.selected_language_id.clone();
         self.saved_image_paste_behavior = self.image_paste_behavior;
         self.saved_keybindings = normalize_shortcut_config(&self.keybindings);

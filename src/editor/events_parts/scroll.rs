@@ -65,7 +65,22 @@ impl Editor {
         self.focus_document_end_from_blank_area(event.position, cx);
     }
 
-    /// 点击最后一个块下方的画布空白时，把插入点落到可继续输入的文档末尾。
+    pub(crate) fn on_editor_tail_blank_mouse_down(
+        &mut self,
+        _: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        self.dismiss_menu_bar_from_body(cx);
+        self.clear_table_axis_preview(cx);
+        self.clear_table_axis_selection(cx);
+        if !self.focus_trailing_editable_text(cx) {
+            self.ensure_editable_document_tail(cx);
+        }
+    }
+
+    /// 点击最后一个块下方的画布空白时，确保文档末尾存在可继续输入的空段落。
     ///
     /// 仅在视口已进入文末留白时启用，避免把长文档中间的虚拟占位区
     /// 误判成文档结尾；块自身范围内的点击仍由 Block 精确命中字符位置。
@@ -101,42 +116,80 @@ impl Editor {
         else {
             return false;
         };
-        let (Some(bounds), cursor, multiline_structure) = last.read_with(cx, |block, _cx| {
-            (
-                block.last_bounds,
-                block.visible_len(),
-                block.kind().is_multiline_text_block(),
-            )
-        }) else {
+        let Some(bounds) = last.read_with(cx, |block, _cx| block.last_bounds) else {
             return false;
         };
         if position.y <= bounds.bottom() {
             return false;
         }
 
-        if multiline_structure {
-            // fenced code / math 等多行结构没有块外插入点；点击文末留白应创建真正的正文行。
-            self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
-            self.ensure_trailing_paragraph_after_structural(&last, cx);
-            let landing = self
-                .document
-                .visible_blocks()
-                .iter()
-                .position(|visible| visible.entity.entity_id() == last.entity_id())
-                .and_then(|index| self.document.visible_blocks().get(index + 1))
-                .map(|visible| visible.entity.clone());
-            if let Some(landing) = landing {
-                self.focus_block_range(&landing, 0..0, cx);
-                self.mark_dirty(cx);
-                self.request_active_block_scroll_into_view(cx);
-                self.finalize_pending_undo_capture(cx);
-                cx.notify();
-                return true;
-            }
-            self.finalize_pending_undo_capture(cx);
+        // 未挂载视口的控制器调用没有可滚动文末区，保持其“显式创建新正文行”契约；
+        // 真实视口中的底部 padding 则优先使用普通文本已有的文末插入点。
+        if max_scroll_y > 0.5 && self.focus_trailing_editable_text(cx) {
+            true
+        } else {
+            self.ensure_editable_document_tail(cx)
+        }
+    }
+
+    /// 普通单行文本已有合法的块内文末插入点；结构块、资源和渲染图片必须另建正文段落。
+    fn focus_trailing_editable_text(&mut self, cx: &mut Context<Self>) -> bool {
+        let trailing_text_block = self
+            .document
+            .visible_blocks()
+            .last()
+            .map(|visible| visible.entity.clone())
+            .filter(|block| {
+                block.read_with(cx, |block, _cx| {
+                    block.record.resource.is_none()
+                        && !block.showing_rendered_image()
+                        && !block.kind().is_multiline_text_block()
+                        && !matches!(block.kind(), BlockKind::Separator | BlockKind::Table)
+                })
+            });
+        if let Some(block) = trailing_text_block {
+            let cursor = block.read_with(cx, |block, _cx| block.visible_len());
+            self.focus_block_range(&block, cursor..cursor, cx);
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    /// 为没有块内文末插入点的尾部创建根级空段落；该事务必须可独立撤销。
+    pub(super) fn ensure_editable_document_tail(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.view_mode != super::ViewMode::Rendered || self.document.root_count() == 0 {
+            return false;
         }
 
-        self.focus_block_range(&last, cursor..cursor, cx);
+        if let Some(paragraph) = self
+            .document
+            .visible_blocks()
+            .last()
+            .map(|visible| visible.entity.clone())
+            .filter(|block| {
+                block.read_with(cx, |block, _cx| {
+                    block.kind() == BlockKind::Paragraph
+                        && block.record.resource.is_none()
+                        && block.visible_len() == 0
+                })
+            })
+        {
+            self.focus_block_range(&paragraph, 0..0, cx);
+            cx.notify();
+            return true;
+        }
+
+        // 始终在根级追加，避免文末恰好位于列表、引用或脚注内部时把正文误插入其容器。
+        self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+        let paragraph = Self::new_block(cx, BlockRecord::paragraph(String::new()));
+        let insert_at = self.document.root_count();
+        self.document
+            .insert_blocks_at(None, insert_at, vec![paragraph.clone()], cx);
+        self.focus_block_range(&paragraph, 0..0, cx);
+        self.mark_dirty(cx);
+        self.request_active_block_scroll_into_view(cx);
+        self.finalize_pending_undo_capture(cx);
         cx.notify();
         true
     }

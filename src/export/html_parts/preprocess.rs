@@ -356,7 +356,7 @@ pub(super) fn theme_css(theme: &Theme) -> String {
     };
     let pre_overflow = "overflow: auto;";
     let media_overflow = "overflow-x: auto;";
-    format!(
+    let mut css = format!(
         r#":root {{
   color-scheme: {};
   --vlt-bg: {};
@@ -578,7 +578,49 @@ hr {{ border: 0; border-top: 1px solid; border-color: var(--vlt-border); }}
         d.code_bg_radius,
         media_overflow,
         media_overflow
-    )
+    );
+    css.push_str(
+        r#"
+.gmark-resource-card {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--vlt-border);
+  border-radius: 0.55rem;
+  background-color: var(--vlt-code-bg);
+  color: var(--vlt-text);
+  text-decoration: none;
+}
+.gmark-resource-card:hover { border-color: var(--vlt-link); }
+.gmark-resource-kind {
+  flex: 0 0 auto;
+  color: var(--vlt-link);
+  font-size: 0.72em;
+  font-weight: 700;
+}
+.gmark-resource-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+.gmark-resource-main strong,
+.gmark-resource-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gmark-resource-main small,
+.gmark-resource-status {
+  color: var(--vlt-muted);
+}
+.gmark-resource-status { flex: 0 0 auto; font-size: 0.86em; }
+"#,
+    );
+    css
 }
 
 pub(super) fn chromium_pdf_theme_css(theme: &Theme) -> String {

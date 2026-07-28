@@ -159,6 +159,10 @@ pub(crate) struct WorkspaceSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) workspace_docked_open: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) document_sidebar_width: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) document_sidebar_docked_open: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) split_pane_ratio: Option<f32>,
 }
 
@@ -177,6 +181,8 @@ impl WorkspaceSession {
             window: None,
             workspace_panel_width: None,
             workspace_docked_open: None,
+            document_sidebar_width: None,
+            document_sidebar_docked_open: None,
             split_pane_ratio: None,
         }
     }
@@ -476,6 +482,10 @@ fn normalize_session(mut session: WorkspaceSession) -> anyhow::Result<WorkspaceS
     session.window = session.window.and_then(normalize_window);
     session.workspace_panel_width = session
         .workspace_panel_width
+        .filter(|width| width.is_finite())
+        .map(|width| width.clamp(200.0, 360.0));
+    session.document_sidebar_width = session
+        .document_sidebar_width
         .filter(|width| width.is_finite())
         .map(|width| width.clamp(200.0, 360.0));
     session.split_pane_ratio = session

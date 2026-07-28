@@ -14,7 +14,7 @@ use crate::components::markdown::inline::{
 use crate::components::markdown::link::parse_link_reference_definitions;
 use crate::components::{
     Block, BlockKind, BlockRecord, CopyAsMarkdown, DeleteBack, IndentBlock, Newline,
-    PasteAsPlainText, TableCellPosition,
+    MermaidViewMode, PasteAsPlainText, TableCellPosition,
 };
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;

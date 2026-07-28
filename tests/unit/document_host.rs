@@ -14,6 +14,58 @@ fn source_font_uses_a_real_direct_write_family_on_windows() {
     assert_eq!(source_monospace_font_family(), "monospace");
 }
 
+#[gpui::test]
+async fn untitled_json_and_csv_install_resident_format_capabilities(cx: &mut gpui::TestAppContext) {
+    let json = cx.new(|cx| {
+        DocumentHost::new_untitled(
+            PathBuf::from("Untitled.json"),
+            DocumentFormat::Json,
+            "{\n  \"name\": \"x\"\n}\n",
+            cx,
+        )
+    });
+    json.update(cx, |host, _cx| {
+        assert!(host.is_json_document());
+        assert!(host.has_registered_structure_view());
+        assert!(host.source_view_for_test());
+        assert_eq!(host.source_text_for_test(), "{\n  \"name\": \"x\"\n}\n");
+        assert!(host.provisional_source.is_none());
+        let snapshot = host.document_sidebar_snapshot();
+        assert_eq!(snapshot.format, DocumentMenuFormat::Json);
+        assert_eq!(snapshot.metadata.encoding, "UTF-8");
+        assert!(snapshot.metadata.lines >= 1);
+        assert!(snapshot.document_epoch > 0);
+    });
+
+    let csv = cx.new(|cx| {
+        DocumentHost::new_untitled(
+            PathBuf::from("Untitled.csv"),
+            DocumentFormat::Delimited { delimiter: b',' },
+            "Column 1,Column 2\n",
+            cx,
+        )
+    });
+    csv.update(cx, |host, _cx| {
+        assert!(host.is_delimited_document());
+        assert!(host.has_registered_structure_view());
+        assert!(host.source_view_for_test());
+        assert_eq!(host.source_text_for_test(), "Column 1,Column 2\n");
+        assert!(matches!(
+            host.structured_index,
+            Some(StructuredIndex::Delimited(_))
+        ));
+        assert!(host.provisional_source.is_none());
+        let snapshot = host.document_sidebar_snapshot();
+        assert_eq!(snapshot.format, DocumentMenuFormat::Csv);
+        assert_eq!(snapshot.metadata.length, "Column 1,Column 2\n".len() as u64);
+        assert_eq!(snapshot.nodes.len(), 2);
+        assert!(matches!(
+            snapshot.nodes[0].target,
+            navigation::DocumentSidebarTarget::Column { column: 0 }
+        ));
+    });
+}
+
 fn open_document(text: &str) -> (tempfile::TempDir, DocumentSession) {
     let temp = tempfile::tempdir().expect("bounded line tempdir");
     let path = temp.path().join("long-line.txt");
@@ -36,8 +88,6 @@ fn stale_resident_probe_is_rejected_and_fresh_probe_replans_to_paged() {
     fs::write(&path, "a,b\n").expect("small probe fixture");
     let options = gmark_paged_document::ProbeOptions {
         max_resident_bytes: 8,
-        max_resident_lines: u64::MAX,
-        max_structural_units: u64::MAX,
         ..gmark_paged_document::ProbeOptions::default()
     };
     let stale_probe = gmark_paged_document::probe_file(&path, options).expect("resident probe");
@@ -119,8 +169,6 @@ fn resident_host_session_keeps_probe_limits_and_only_marks_runtime_growth() {
     fs::write(&path, "a,b\n").expect("resident growth fixture");
     let options = gmark_paged_document::ProbeOptions {
         max_resident_bytes: 5,
-        max_resident_lines: u64::MAX,
-        max_structural_units: u64::MAX,
         ..gmark_paged_document::ProbeOptions::default()
     };
     let probe = gmark_paged_document::probe_file(&path, options).expect("resident growth probe");
@@ -608,4 +656,18 @@ fn built_in_derived_descriptors_publish_their_resource_limits() {
         json_lines.descriptor.max_items,
         Some(DEFAULT_JSON_GRAPH_ITEM_LIMIT)
     );
+}
+
+#[test]
+fn structured_row_cache_keeps_the_requested_window_while_pruning_far_rows() {
+    let mut rows = (0..32).map(|row| (row, row)).collect::<BTreeMap<_, _>>();
+
+    navigation::prune_structured_row_cache(&mut rows, 24, 8);
+
+    assert_eq!(rows.len(), 8);
+    assert!(rows.contains_key(&24));
+    let first = rows.first_key_value().map(|(row, _)| *row).unwrap();
+    let last = rows.last_key_value().map(|(row, _)| *row).unwrap();
+    assert!(24 - first <= 4);
+    assert!(last - 24 <= 4);
 }

@@ -23,6 +23,7 @@ mkdir -p "$MOUNT"
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"
 APP="$MOUNT/gmark.app"
 [[ -x "$APP/Contents/MacOS/gmark" ]] || { echo "DMG app executable is missing" >&2; exit 1; }
+[[ -x "$APP/Contents/Helpers/gmark-update-helper" ]] || { echo "DMG update helper is missing" >&2; exit 1; }
 for relative in README.md LICENSE; do
     [[ -f "$APP/Contents/Resources/$relative" ]] || { echo "DMG is missing $relative" >&2; exit 1; }
 done

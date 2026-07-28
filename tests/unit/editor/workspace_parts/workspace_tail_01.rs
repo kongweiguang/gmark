@@ -18,7 +18,7 @@
             editor.on_editor_key_down_capture(&key_event("right"), window, cx);
         });
         editor.update(visual, |editor, _cx| {
-            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Outline);
+            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Search);
         });
     }
 
@@ -392,6 +392,7 @@
                 .as_ref()
                 .expect("new-file dialog");
             assert_eq!(dialog.kind, super::WorkspaceOperationKind::NewFile);
+            assert_eq!(dialog.input.read(cx).display_text(), "untitled.txt");
             assert!(dialog.input.read(cx).focus_handle.is_focused(window));
         });
         let _ = fs::remove_dir_all(root);
@@ -468,7 +469,7 @@
     }
 
     #[gpui::test]
-    async fn creating_and_undoing_markdown_file_updates_open_document(
+    async fn creating_arbitrary_file_opens_source_tab_and_can_be_undone(
         cx: &mut gpui::TestAppContext,
     ) {
         init_workspace_test_app(cx);
@@ -480,8 +481,8 @@
         let plan = crate::editor::workspace_file_ops::plan_workspace_create(
             &root,
             &root,
-            "created.md",
-            crate::editor::workspace_file_ops::WorkspaceCreateKind::MarkdownFile,
+            "created.java",
+            crate::editor::workspace_file_ops::WorkspaceCreateKind::File,
         )
         .unwrap();
         let created = plan.path.clone();
@@ -497,6 +498,7 @@
         editor.update(visual, |editor, cx| {
             assert_eq!(editor.file_path.as_ref(), Some(&created));
             assert_eq!(editor.source_document.text(), "");
+            assert_eq!(editor.view_mode, super::ViewMode::Source);
             let Some(super::WorkspaceUndoOperation::Create(plan)) =
                 editor.workspace.undo_file_operation.clone()
             else {
@@ -507,6 +509,7 @@
         visual.run_until_parked();
         editor.update(visual, |editor, _cx| {
             assert_eq!(editor.file_path, None);
+            assert!(editor.document_host.is_none());
             assert!(editor.workspace.undo_file_operation.is_none());
         });
         assert!(!created.exists());

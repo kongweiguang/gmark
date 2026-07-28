@@ -149,13 +149,13 @@ fn paste_image_text_accepts_file_url() {
 }
 
 #[test]
-fn paste_image_text_rejects_non_image_path() {
+fn paste_text_accepts_non_image_resource_path() {
     let path = temp_image_path("notes.txt");
     let text = path.to_string_lossy().to_string();
 
     let source = Block::pasted_image_source_from_text(&text);
 
-    assert_eq!(source, None);
+    assert_eq!(source, Some(PastedImageSource::LocalResource(path.clone())));
     remove_temp_image(&path);
 }
 

@@ -113,6 +113,9 @@ impl Editor {
                 ProjectionRegionKind::StandaloneImage => {
                     roots.push(standalone_image_block(cx, markdown()));
                 }
+                ProjectionRegionKind::StandaloneResource => {
+                    roots.push(native_block(cx, BlockKind::Paragraph, markdown()));
+                }
                 ProjectionRegionKind::IndentedCode => {
                     if let Some((block, _)) = collect_indented_code_block(cx, region_lines, 0) {
                         roots.push(block);
@@ -229,6 +232,7 @@ impl Editor {
                     && current.table == node.record.table
                     && current.html == node.record.html
                     && current.raw_fallback == node.record.raw_fallback
+                    && current.resource == node.record.resource
             };
             if semantic_matches {
                 return block;

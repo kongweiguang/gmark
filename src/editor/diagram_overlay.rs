@@ -7,6 +7,10 @@ use crate::components::DismissTransientUi;
 use crate::i18n::I18nStrings;
 use crate::theme::Theme;
 
+const DIAGRAM_OVERLAY_MIN_SCALE: f32 = 0.01;
+const DIAGRAM_OVERLAY_MAX_SCALE: f32 = 100.0;
+const DIAGRAM_OVERLAY_WHEEL_ZOOM_SENSITIVITY: f32 = 700.0;
+
 impl Editor {
     pub(super) fn open_diagram_overlay(
         &mut self,
@@ -19,7 +23,7 @@ impl Editor {
             block_id,
             preview_key,
             rendered,
-            actual_size: false,
+            manual_scale: None,
             close_focus_handle: cx.focus_handle(),
             focus_close_on_render: true,
         });
@@ -35,9 +39,43 @@ impl Editor {
 
     fn toggle_diagram_overlay_scale(&mut self, cx: &mut Context<Self>) {
         if let Some(state) = self.diagram_overlay.as_mut() {
-            state.actual_size = !state.actual_size;
+            state.manual_scale = if state.manual_scale.is_some() {
+                None
+            } else {
+                Some(
+                    (1.0 / state.rendered.display_scale.max(f32::EPSILON))
+                        .clamp(DIAGRAM_OVERLAY_MIN_SCALE, DIAGRAM_OVERLAY_MAX_SCALE),
+                )
+            };
             cx.notify();
         }
+    }
+
+    fn zoom_diagram_overlay(
+        &mut self,
+        wheel_delta_y: Pixels,
+        fit_scale: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let wheel_delta_y = f32::from(wheel_delta_y);
+        if !wheel_delta_y.is_finite() || wheel_delta_y.abs() < f32::EPSILON {
+            return;
+        }
+
+        let Some(state) = self.diagram_overlay.as_mut() else {
+            return;
+        };
+        let current_scale = state.manual_scale.unwrap_or(fit_scale);
+        // GPUI 向上滚轮为正值；以乘法缩放使触控板和普通滚轮在不同级别下手感一致。
+        let factor = (wheel_delta_y / DIAGRAM_OVERLAY_WHEEL_ZOOM_SENSITIVITY).exp();
+        let next_scale =
+            (current_scale * factor).clamp(DIAGRAM_OVERLAY_MIN_SCALE, DIAGRAM_OVERLAY_MAX_SCALE);
+        if (next_scale - current_scale).abs() < f32::EPSILON {
+            return;
+        }
+
+        state.manual_scale = Some(next_scale);
+        cx.notify();
     }
 
     pub(super) fn render_diagram_overlay(
@@ -86,27 +124,19 @@ impl Editor {
         let viewport = window.viewport_size();
         let max_width = f32::from(viewport.width) * 0.9;
         let max_height = f32::from(viewport.height) * 0.9;
-        let (width, height) = if state.actual_size {
-            let scale = state.rendered.display_scale.max(f32::EPSILON);
-            (
-                state.rendered.display_width / scale,
-                state.rendered.display_height / scale,
-            )
-        } else {
-            let scale = (max_width / state.rendered.display_width.max(1.0))
-                .min(max_height / state.rendered.display_height.max(1.0))
-                .min(1.0);
-            (
-                state.rendered.display_width * scale,
-                state.rendered.display_height * scale,
-            )
-        };
+        let fit_scale = (max_width / state.rendered.display_width.max(1.0))
+            .min(max_height / state.rendered.display_height.max(1.0))
+            .min(1.0);
+        let scale = state.manual_scale.unwrap_or(fit_scale);
+        let width = state.rendered.display_width * scale;
+        let height = state.rendered.display_height * scale;
         let close_editor = cx.entity().downgrade();
         let dismiss_editor = close_editor.clone();
         let key_editor = close_editor.clone();
         let backdrop_editor = close_editor.clone();
         let scale_editor = close_editor.clone();
-        let scale_label = if state.actual_size {
+        let zoom_editor = close_editor.clone();
+        let scale_label = if state.manual_scale.is_some() {
             strings.large_document_text("diagram_fit_window")
         } else {
             strings.large_document_text("diagram_actual_size")
@@ -126,6 +156,8 @@ impl Editor {
                     let _ =
                         backdrop_editor.update(cx, |editor, cx| editor.close_diagram_overlay(cx));
                 })
+                // 覆盖层是模态阅读界面；工具栏和留白上的滚轮同样不能穿透到正文。
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                 .child(
                     div()
                         .id("diagram-overlay-panel")
@@ -211,10 +243,30 @@ impl Editor {
                                 .items_center()
                                 .justify_center()
                                 .child(
-                                    img(state.rendered.path)
+                                    div()
+                                        .id("diagram-overlay-canvas")
+                                        .debug_selector(|| "diagram-overlay-canvas".to_owned())
                                         .w(px(width.max(1.0)))
                                         .h(px(height.max(1.0)))
-                                        .object_fit(ObjectFit::Contain),
+                                        .on_scroll_wheel(
+                                            move |event: &ScrollWheelEvent, _window, cx| {
+                                                let delta = event.delta.pixel_delta(px(28.0));
+                                                let _ = zoom_editor.update(cx, |editor, cx| {
+                                                    editor.zoom_diagram_overlay(
+                                                        delta.y, fit_scale, cx,
+                                                    );
+                                                });
+                                                // Canvas 在滚动容器内部，先于其默认滚动处理；在此
+                                                // 截断可同时避免预览和编辑器正文跟随滚动。
+                                                cx.stop_propagation();
+                                            },
+                                        )
+                                        .child(
+                                            img(state.rendered.path)
+                                                .w(px(width.max(1.0)))
+                                                .h(px(height.max(1.0)))
+                                                .object_fit(ObjectFit::Contain),
+                                        ),
                                 ),
                         ),
                 )

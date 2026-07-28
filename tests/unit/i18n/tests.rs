@@ -112,10 +112,14 @@ fn theme_switch_does_not_modify_selected_language() {
     let mut theme_manager = ThemeManager::default();
     let mut i18n_manager = I18nManager::new_with_language_id("zh-CN");
 
-    assert!(theme_manager.set_theme_by_id("gmark"));
+    assert!(theme_manager.set_theme_preference(
+        crate::theme::ThemeAppearance::Light,
+        crate::theme::ThemePalette::Xcode,
+        gpui::WindowAppearance::Dark,
+    ));
     assert!(!i18n_manager.set_language_by_id("missing"));
 
-    assert_eq!(theme_manager.current_theme_id(), "gmark");
+    assert_eq!(theme_manager.current_theme_id(), "xcode-light");
     assert_eq!(i18n_manager.current_language_id(), "zh-CN");
     assert_eq!(i18n_manager.strings().menu_file, "文件");
 }

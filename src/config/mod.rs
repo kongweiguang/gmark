@@ -14,9 +14,8 @@ pub(crate) mod workspace_session;
 
 pub(crate) use crate::preferences::{
     AutoSavePreference, EditorSettings, ImagePasteBehavior, StartupOpenPreference,
-    WorkspaceSidebarPosition, apply_configured_language, apply_configured_theme,
-    first_existing_recent_markdown_file, import_language_config_and_select,
-    import_theme_config_and_select, load_or_create_app_preferences, open_preferences_window,
+    apply_configured_language, first_existing_recent_markdown_file,
+    import_language_config_and_select, load_or_create_app_preferences, open_preferences_window,
     read_app_preferences,
 };
 
@@ -32,7 +31,7 @@ impl GmarkConfigDirs {
     /// Resolves the platform-specific app config directory.
     ///
     /// GPUI does not currently expose an app config path, so user-imported
-    /// language and theme packs are stored under the OS location returned by
+    /// language packs are stored under the OS location returned by
     /// `directories::ProjectDirs`.
     pub(crate) fn from_system() -> anyhow::Result<Self> {
         Self::from_system_override(
@@ -62,10 +61,6 @@ impl GmarkConfigDirs {
         self.root.join("languages")
     }
 
-    pub(crate) fn themes_dir(&self) -> PathBuf {
-        self.root.join("themes")
-    }
-
     pub(crate) fn history_file(&self) -> PathBuf {
         self.root.join(".history")
     }
@@ -80,6 +75,11 @@ impl GmarkConfigDirs {
 
     pub(crate) fn crash_reports_dir(&self) -> PathBuf {
         self.root.join("crash-reports")
+    }
+
+    /// 持久更新缓存不能放在系统临时目录：暂停、应用退出和安装重启后仍需恢复同一事务。
+    pub(crate) fn updates_dir(&self) -> PathBuf {
+        self.root.join("updates")
     }
 
     pub(crate) fn installation_id_file(&self) -> PathBuf {
@@ -438,44 +438,9 @@ pub(crate) fn prune_empty_json_values(value: &mut Value) -> bool {
     }
 }
 
-pub(crate) fn merge_non_empty_json_values(base: &mut Value, patch: &Value) {
-    if is_empty_json_value(patch) {
-        return;
-    }
-
-    match (base, patch) {
-        (Value::Object(base_object), Value::Object(patch_object)) => {
-            for (key, patch_value) in patch_object {
-                if is_empty_json_value(patch_value) {
-                    continue;
-                }
-                match base_object.get_mut(key) {
-                    Some(base_value) => merge_non_empty_json_values(base_value, patch_value),
-                    None => {
-                        base_object.insert(key.clone(), patch_value.clone());
-                    }
-                }
-            }
-        }
-        (base_value, patch_value) => {
-            *base_value = patch_value.clone();
-        }
-    }
-}
-
 pub(crate) fn object_without_empty_values(mut object: Map<String, Value>) -> Map<String, Value> {
     object.retain(|_, value| !prune_empty_json_values(value));
     object
-}
-
-fn is_empty_json_value(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::String(text) => text.trim().is_empty(),
-        Value::Array(items) => items.iter().all(is_empty_json_value),
-        Value::Object(object) => object.values().all(is_empty_json_value),
-        Value::Bool(_) | Value::Number(_) => false,
-    }
 }
 
 #[cfg(test)]

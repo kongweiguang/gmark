@@ -568,6 +568,9 @@ impl Editor {
             } => {
                 self.open_diagram_overlay(block.entity_id(), *preview_key, rendered.clone(), cx);
             }
+            BlockEvent::RequestExportMermaidSvg(request) => {
+                self.export_mermaid_svg_via_prompt(request.svg.clone(), request.window, cx);
+            }
             BlockEvent::RequestJumpToFootnoteDefinition { id, .. } => {
                 let _ = self.jump_to_footnote_definition(id, cx);
                 cx.notify();
@@ -641,11 +644,16 @@ impl Editor {
             }
             BlockEvent::RequestFocusNext { preferred_x } => {
                 if current_visible_index + 1 >= visible_before.len() {
-                    // A trailing multi-line block (code, math, ...) has nowhere
-                    // below to move to, so give it a paragraph to land on and
-                    // focus that, matching how a trailing table behaves.
-                    if block.read(cx).kind().is_multiline_text_block() {
-                        self.ensure_trailing_paragraph_after_structural(&block, cx);
+                    // 多行结构块以及引用/提示块的最后一个子块下方都没有光标落点；
+                    // 后者必须以最外层容器为锚点，避免把空段落错误插进提示块内部。
+                    let trailing_structure = block
+                        .read(cx)
+                        .kind()
+                        .is_multiline_text_block()
+                        .then(|| block.clone())
+                        .or_else(|| self.topmost_quote_ancestor(block.entity_id(), cx));
+                    if let Some(trailing_structure) = trailing_structure {
+                        self.ensure_trailing_paragraph_after_structural(&trailing_structure, cx);
                         let visible = self.document.flatten_visible_blocks();
                         if let Some(landing) = visible
                             .iter()

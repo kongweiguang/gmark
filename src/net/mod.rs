@@ -2,7 +2,9 @@
 
 //! HTTP client integration used by remote image loading.
 
+#[cfg(test)]
 pub(crate) mod update;
+pub(crate) mod update_v2;
 
 use std::io;
 use std::str::FromStr;

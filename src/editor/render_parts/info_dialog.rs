@@ -9,11 +9,18 @@ impl Editor {
         kind: InfoDialogKind,
     ) -> &'a str {
         match kind {
-            InfoDialogKind::CheckForUpdates => &strings.help_check_updates_title,
             InfoDialogKind::About => &strings.help_about_title,
+            InfoDialogKind::Document => {
+                if strings.menu_preferences == "偏好设置" {
+                    "文档信息"
+                } else {
+                    "Document Info"
+                }
+            }
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn about_dialog_body_lines(strings: &I18nStrings) -> Vec<String> {
         vec![
             format!("gmark {}", env!("CARGO_PKG_VERSION")),
@@ -22,18 +29,12 @@ impl Editor {
         ]
     }
 
-    pub(super) fn info_dialog_body(&self, strings: &I18nStrings, kind: InfoDialogKind) -> String {
-        match kind {
-            InfoDialogKind::CheckForUpdates => strings.help_check_updates_message.clone(),
-            InfoDialogKind::About => Self::about_dialog_body_lines(strings).join("\n"),
-        }
-    }
-
     pub(super) fn render_info_dialog_body(
         &self,
         theme: &Theme,
         strings: &I18nStrings,
         kind: InfoDialogKind,
+        cx: &App,
     ) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -46,18 +47,6 @@ impl Editor {
         };
 
         match kind {
-            InfoDialogKind::CheckForUpdates => div()
-                .flex()
-                .flex_col()
-                .gap(px(d.dialog_gap * 0.5))
-                .child(
-                    body_style(div()).children(
-                        self.info_dialog_body(strings, kind)
-                            .lines()
-                            .map(|line| div().child(line.to_string())),
-                    ),
-                )
-                .into_any_element(),
             InfoDialogKind::About => div()
                 .flex()
                 .flex_col()
@@ -83,6 +72,23 @@ impl Editor {
                         ),
                 )
                 .into_any_element(),
+            InfoDialogKind::Document => {
+                let c = &theme.colors;
+                let t = &theme.typography;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .children(self.document_info_lines(cx).into_iter().map(|line| {
+                        div()
+                            .text_size(px(t.dialog_body_size))
+                            .font_weight(t.dialog_body_weight.to_font_weight())
+                            .line_height(rems(t.text_line_height))
+                            .text_color(c.dialog_body)
+                            .child(line)
+                    }))
+                    .into_any_element()
+            }
         }
     }
 
@@ -111,21 +117,18 @@ impl Editor {
                 .flex()
                 .justify_center()
                 .child(
-                    // 信息弹框内容短而固定，直接给足阅读高度，避免用户为最后一行滚动。
+                    // 文档信息固定包含七个字段，预留完整阅读高度，避免“当前视图”被操作区遮住。
                     dialog_panel("info-dialog", d.dialog_width, theme)
-                        .min_h(px(304.0))
+                        .min_h(px(384.0))
                         .child(
                             dialog_content("info-dialog-content", theme)
                                 .child(dialog_title_with_icon(
                                     "info-dialog-title",
                                     self.info_dialog_title(strings, kind).to_string(),
-                                    match kind {
-                                        InfoDialogKind::CheckForUpdates => DialogTitleIcon::Refresh,
-                                        InfoDialogKind::About => DialogTitleIcon::Info,
-                                    },
+                                    DialogTitleIcon::Info,
                                     theme,
                                 ))
-                                .child(self.render_info_dialog_body(theme, strings, kind)),
+                                .child(self.render_info_dialog_body(theme, strings, kind, cx)),
                         )
                         .child(
                             dialog_actions(theme).child(
@@ -207,6 +210,9 @@ impl Editor {
             cx.stop_propagation();
             return;
         }
+        if self.on_document_sidebar_resize_mouse_move(event, cx) {
+            return;
+        }
         self.on_workspace_resize_mouse_move(event, window, cx);
     }
 
@@ -221,6 +227,9 @@ impl Editor {
             self.schedule_workspace_session_save(cx);
             cx.notify();
             cx.stop_propagation();
+            return;
+        }
+        if self.on_document_sidebar_resize_mouse_up(cx) {
             return;
         }
         self.on_workspace_resize_mouse_up(event, window, cx);

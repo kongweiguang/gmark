@@ -525,6 +525,10 @@ impl Editor {
                     // 会看起来像菜单丢失，也与高频浏览路径相冲突。
                     editor.close_menu_panels(cx);
                     cx.notify();
+                } else {
+                    editor.refresh_resource_probes(cx);
+                    #[cfg(target_os = "macos")]
+                    editor.schedule_platform_document_menu_refresh(cx);
                 }
             }));
     }

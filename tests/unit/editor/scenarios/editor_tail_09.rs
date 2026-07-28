@@ -1,6 +1,26 @@
 // @author kongweiguang
 
 #[test]
+fn resource_links_inside_lists_and_callouts_keep_their_projection_container() {
+    let source = concat!(
+        "- [spec](./spec.pdf \"gmark:resource\")\n\n",
+        "> [!NOTE] [clip](./clip.mp4 \"gmark:resource;type=video\")"
+    );
+    let prepared = PreparedSplitProjection::from_snapshot(
+        gmark_document::SourceDocument::new(source).snapshot(),
+    );
+
+    assert_eq!(prepared.regions[0].kind, ProjectionRegionKind::List);
+    assert_eq!(prepared.regions[2].kind, ProjectionRegionKind::Quote);
+    let list_node = &prepared.nodes[0].as_ref().expect("list node")[0].record;
+    let callout_node = &prepared.nodes[2].as_ref().expect("callout node")[0].record;
+    assert!(list_node.resource.is_some());
+    assert_eq!(list_node.kind, BlockKind::BulletedListItem);
+    assert!(callout_node.resource.is_some());
+    assert!(matches!(callout_node.kind, BlockKind::Callout(_)));
+}
+
+#[test]
 fn incremental_projection_reuses_unchanged_region_prefix_for_tail_edit() {
     let previous = "# A\n\nalpha\n\n## B\n\nbeta\n\n## C\n\n中文尾部";
     let current = "# A\n\nalpha\n\n## B\n\nbeta\n\n## C\n\n中文结尾";

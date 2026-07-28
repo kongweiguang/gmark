@@ -12,7 +12,7 @@ use gpui::*;
 use super::CollapsedCaretAffinity;
 use super::{
     Block, BlockEvent, BlockHostAction, BlockKind, InlineFormat, InlineLinkHit, InlineTextTree,
-    PastedImageSource, UndoCaptureKind, element,
+    MermaidViewMode, PastedImageSource, UndoCaptureKind, element,
 };
 use crate::components::markdown::paste::should_split_plain_multiline_paste;
 use crate::components::{
@@ -190,24 +190,29 @@ impl Block {
             return None;
         }
 
-        Self::pasted_image_path_from_text_item(trimmed).map(PastedImageSource::LocalPath)
+        let path = Self::pasted_local_path_from_text_item(trimmed)?;
+        if Self::is_supported_local_image_path(&path) {
+            Some(PastedImageSource::LocalPath(path))
+        } else {
+            Some(PastedImageSource::LocalResource(path))
+        }
     }
 
-    /// Parses a single clipboard text item as a local image path.
+    /// Parses a single clipboard text item as a local file path.
     ///
     /// Windows file-copy paste reaches GPUI as a plain drive-letter path; that
     /// must be tested as a path before URL parsing, because `url::Url` treats
     /// the drive letter as a URL scheme.
-    fn pasted_image_path_from_text_item(text: &str) -> Option<std::path::PathBuf> {
+    fn pasted_local_path_from_text_item(text: &str) -> Option<std::path::PathBuf> {
         let unquoted = text
             .strip_prefix('"')
             .and_then(|rest| rest.strip_suffix('"'))
             .unwrap_or(text);
         let direct_path = std::path::PathBuf::from(unquoted);
-        let path = if Self::is_supported_local_image_path(&direct_path) {
+        let path = if direct_path.is_file() {
             direct_path
         } else if let Ok(url) = url::Url::parse(unquoted) {
-            if url.scheme() == "file" {
+            if url.scheme().eq_ignore_ascii_case("file") {
                 url.to_file_path().ok()?
             } else {
                 return None;
@@ -215,7 +220,7 @@ impl Block {
         } else {
             return None;
         };
-        if !Self::is_supported_local_image_path(&path) {
+        if !path.is_file() {
             return None;
         }
         Some(path)
@@ -234,7 +239,7 @@ impl Block {
         )
     }
 
-    fn paste_image_split(&self) -> (InlineTextTree, InlineTextTree) {
+    pub(crate) fn paste_resource_split(&self) -> (InlineTextTree, InlineTextTree) {
         let clean_selected = self.selection_clean_range();
         let (leading, tail) = self.record.title.split_at(clean_selected.start);
         let (_, trailing) = tail.split_at(clean_selected.end.saturating_sub(clean_selected.start));
@@ -451,6 +456,16 @@ impl Block {
         if self.commit_slash_menu(cx) {
             return;
         }
+        if self.record.resource.is_some() && !self.uses_raw_text_editing() {
+            if let Some(record) = self
+                .resource_runtime()
+                .map(|runtime| runtime.record.clone())
+                .or_else(|| self.record.resource.clone())
+            {
+                self.request_resource_open(&record, cx);
+            }
+            return;
+        }
         if self.image_selected && self.showing_rendered_image() {
             self.request_image_edit_expansion();
             self.sync_image_focus_state(self.focus_handle.is_focused(window));
@@ -520,7 +535,13 @@ impl Block {
             && self.cursor_offset() == self.visible_len()
             && let Some(fence) = BlockKind::parse_code_fence_opening(self.display_text())
         {
-            self.enter_code_block(fence.language, cx);
+            if crate::components::is_mermaid_info_string(
+                fence.language.as_deref().map(|language| &**language),
+            ) {
+                self.enter_mermaid_block(fence, cx);
+            } else {
+                self.enter_code_block(fence.language, cx);
+            }
             return;
         }
 
@@ -612,6 +633,13 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.kind() == BlockKind::MermaidBlock
+            && self.mermaid_view_mode() == MermaidViewMode::Preview
+        {
+            cx.emit(BlockEvent::RequestDelete);
+            return;
+        }
+
         if self.try_delete_empty_auto_pair(cx) {
             return;
         }

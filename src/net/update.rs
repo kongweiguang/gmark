@@ -1,5 +1,7 @@
 // @author kongweiguang
 
+#![allow(dead_code)]
+
 //! Signed update-manifest verification and online version checks.
 //!
 //! 远端内容在 Ed25519 验证前不参与版本、URL 或 rollout 决策。签名覆盖 payload 的原始

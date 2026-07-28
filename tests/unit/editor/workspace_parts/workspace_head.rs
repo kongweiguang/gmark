@@ -1,12 +1,15 @@
 // @author kongweiguang
 
     use super::{
-        WORKSPACE_COMPACT_OVERLAY_WIDTH, WORKSPACE_PANEL_MAX_WIDTH, WORKSPACE_PANEL_MIN_WIDTH,
-        WORKSPACE_RESIZE_HIT_WIDTH, WorkspaceKeyboardZone, WorkspaceSearchMatch,
+        DOCUMENT_SIDEBAR_COMPACT_OVERLAY_WIDTH, DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
+        DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH, WORKSPACE_COMPACT_OVERLAY_WIDTH,
+        WORKSPACE_PANEL_MAX_WIDTH, WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_RESIZE_HIT_WIDTH,
+        WorkspaceKeyboardZone, WorkspaceSearchMatch,
         WorkspaceSearchOptions, WorkspaceSelection, WorkspaceState, WorkspaceTab,
         WorkspaceTreeKind, build_outline_tree, insert_workspace_directory, prune_outline_state,
         rank_quick_open_paths, scan_workspace_dir, search_workspace,
-        workspace_panel_width_for_viewport, workspace_uses_overlay,
+        document_sidebar_panel_width_for_viewport, workspace_panel_width_for_viewport,
+        workspace_uses_overlay,
     };
     use gpui::{AppContext as _, KeyDownEvent, Keystroke, Modifiers, MouseButton, point, px, size};
     use std::fs;
@@ -36,7 +39,6 @@
         assert!(visual.debug_bounds("workspace-collapse").is_none());
         for (selector, icon_selector) in [
             ("workspace-tab-files", "workspace-tab-files-icon"),
-            ("workspace-tab-outline", "workspace-tab-outline-icon"),
             ("workspace-tab-search", "workspace-tab-search-icon"),
         ] {
             let tab = visual.debug_bounds(selector).unwrap();
@@ -147,6 +149,7 @@
         editor.update(visual, |editor, _cx| {
             assert_eq!(editor.file_path.as_ref(), Some(&binary));
             assert!(editor.file_open_failure.is_some());
+            assert!(editor.saved_file_fingerprint.is_none());
             assert!(editor.workspace.operation_error.is_none());
         });
         assert!(visual.debug_bounds("file-open-failure").is_some());
@@ -159,11 +162,10 @@
         let content = visual.debug_bounds("editor-content").unwrap();
         let placeholder = visual.debug_bounds("file-open-failure").unwrap();
         let file_name = visual.debug_bounds("file-open-failure-name").unwrap();
-        let reason = visual.debug_bounds("file-open-failure-reason").unwrap();
         assert!(placeholder.left() >= content.left());
         assert!(placeholder.right() <= content.right());
         assert!(f32::from(file_name.size.width) > 100.0);
-        assert!(f32::from(reason.size.width) > 100.0);
+        assert!(visual.debug_bounds("file-open-failure-reason").is_none());
         editor.update_in(visual, |editor, window, cx| {
             editor.file_open_failure_focus_handles[0].focus(window);
             assert!(editor.file_open_failure_focus_handles[0].is_focused(window));

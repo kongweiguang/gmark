@@ -26,7 +26,7 @@ impl DocumentHost {
         }
         self.active_edit = None;
         self.view_mode = mode;
-        self.sync_session_active_view();
+        self.sync_tab_active_view();
         cx.notify();
     }
 
@@ -134,7 +134,7 @@ impl DocumentHost {
         };
         let id = provider.descriptor().id.clone();
         self.selected_projection_view = Some(id.clone());
-        document_view_state_mut(&mut self.document, &mut self.pending_view_state)
+        document_view_state_mut(&mut self.document, &mut self.tab_view_state)
             .derived
             .entry(id.clone())
             .or_default();
@@ -633,18 +633,12 @@ impl DocumentHost {
                             }
                         }
                         if let Some(top_anchor) = view.displayed_screen_lines.top_source_anchor() {
-                            document_view_state_mut(
-                                &mut view.document,
-                                &mut view.pending_view_state,
-                            )
-                            .source
-                            .top_byte_anchor = top_anchor;
-                            document_view_state_mut(
-                                &mut view.document,
-                                &mut view.pending_view_state,
-                            )
-                            .source
-                            .line_offset_y = 0.0;
+                            document_view_state_mut(&mut view.document, &mut view.tab_view_state)
+                                .source
+                                .top_byte_anchor = top_anchor;
+                            document_view_state_mut(&mut view.document, &mut view.tab_view_state)
+                                .source
+                                .line_offset_y = 0.0;
                             // provisional 逻辑行只是估算坐标。每次真实行窗口安装后保存其
                             // source byte anchor，全文索引收敛时才能回到相同正文而非 byte 0。
                             if view.document.is_none() {
@@ -881,7 +875,7 @@ impl DocumentHost {
             }
         }
         self.view_mode = DocumentHostViewMode::Source;
-        self.sync_session_active_view();
+        self.sync_tab_active_view();
         self.select_source_lines(line..line.saturating_add(1), false);
         self.scroll_source_line(line, ScrollStrategy::Center);
         cx.emit(DocumentHostEvent::StateChanged);
@@ -914,7 +908,7 @@ impl DocumentHost {
             if self.probe.format == DocumentFormat::Json {
                 let query = block.read(cx).display_text().trim().to_lowercase();
                 if let Some(id) = self.selected_projection_view.clone() {
-                    document_view_state_mut(&mut self.document, &mut self.pending_view_state)
+                    document_view_state_mut(&mut self.document, &mut self.tab_view_state)
                         .derived
                         .entry(id)
                         .or_default()
@@ -936,11 +930,10 @@ impl DocumentHost {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                let state =
-                    document_view_state_mut(&mut self.document, &mut self.pending_view_state)
-                        .derived
-                        .entry(DocumentViewId::json_graph())
-                        .or_default();
+                let state = document_view_state_mut(&mut self.document, &mut self.tab_view_state)
+                    .derived
+                    .entry(DocumentViewId::json_graph())
+                    .or_default();
                 if query.is_empty() {
                     if let Some(collapsed) = self.graph_search_collapsed_before.take() {
                         state.collapsed_items = collapsed;
@@ -977,7 +970,7 @@ impl DocumentHost {
             .trim()
             .to_owned();
         if let Some(id) = self.selected_projection_view.clone() {
-            document_view_state_mut(&mut self.document, &mut self.pending_view_state)
+            document_view_state_mut(&mut self.document, &mut self.tab_view_state)
                 .derived
                 .entry(id)
                 .or_default()

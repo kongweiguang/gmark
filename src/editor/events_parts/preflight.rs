@@ -54,6 +54,29 @@ impl Editor {
             return true;
         }
         if let BlockEvent::RequestEditingCommand { command } = event {
+            if command.plan() == EditingCommandPlan::InsertResource {
+                let Some(location) = self.document.find_block_location(block.entity_id()) else {
+                    return true;
+                };
+                let (kind, title, cursor, query_only) = {
+                    let block = block.read(cx);
+                    let title = block.record.title.clone();
+                    let cursor = block.cursor_offset();
+                    let query_only = title.visible_text().trim().is_empty();
+                    (block.kind(), title, cursor, query_only)
+                };
+                self.prompt_and_insert_resource(
+                    block.clone(),
+                    location.parent,
+                    location.index,
+                    kind,
+                    title,
+                    cursor,
+                    query_only,
+                    cx,
+                );
+                return true;
+            }
             match command.plan() {
                 EditingCommandPlan::ChangeBlockKind(kind) => {
                     self.set_block_kind_for(block.clone(), kind, cx)
