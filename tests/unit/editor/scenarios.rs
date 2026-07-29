@@ -4,6 +4,7 @@
 
 include!("scenarios/editor_head.rs");
 include!("scenarios/editor_tail_18.rs");
+include!("scenarios/editor_tail_19.rs");
 include!("scenarios/editor_tail_17.rs");
 include!("scenarios/editor_tail_16.rs");
 include!("scenarios/editor_tail_15.rs");

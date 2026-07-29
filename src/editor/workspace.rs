@@ -153,12 +153,14 @@ pub(super) enum WorkspaceOperationKind {
     Move,
     NewFile,
     NewFolder,
+    Delete,
 }
 
 #[derive(Clone)]
 enum WorkspacePendingPlan {
     Move(super::workspace_file_ops::WorkspaceMovePlan),
     Create(super::workspace_file_ops::WorkspaceCreatePlan),
+    Delete(super::workspace_file_ops::WorkspaceDeletePlan),
 }
 
 #[derive(Clone)]
@@ -452,6 +454,37 @@ impl WorkspaceState {
         Some((root, paths))
     }
 
+    pub(super) fn insert_created_path(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        kind: super::workspace_file_ops::WorkspaceCreateKind,
+    ) -> bool {
+        if self.root.as_deref() != Some(root) {
+            return false;
+        }
+        let Some(tree) = self.file_tree.as_mut() else {
+            return false;
+        };
+        match kind {
+            super::workspace_file_ops::WorkspaceCreateKind::File => {
+                insert_workspace_file(tree, root, path)
+            }
+            super::workspace_file_ops::WorkspaceCreateKind::Directory => {
+                insert_workspace_directory(tree, root, path)
+            }
+        }
+        sort_workspace_tree(tree);
+        true
+    }
+
+    pub(super) fn remove_path(&mut self, path: &Path) -> bool {
+        let Some(tree) = self.file_tree.as_mut() else {
+            return false;
+        };
+        remove_workspace_path(tree, path, &self.pinned_empty_directories)
+    }
+
     #[cfg(test)]
     pub(super) fn install_markdown_snapshot_for_test(
         &mut self,
@@ -629,12 +662,18 @@ fn insert_workspace_file(root: &mut WorkspaceTreeNode, base: &Path, file: &Path)
             });
         current = &mut current.children[index];
     }
-    current.children.push(WorkspaceTreeNode {
-        id: file_node_id(file),
-        label: file_label(file),
-        kind: WorkspaceTreeKind::File(file.to_path_buf()),
-        children: Vec::new(),
-    });
+    if !current
+        .children
+        .iter()
+        .any(|node| matches!(&node.kind, WorkspaceTreeKind::File(path) if path == file))
+    {
+        current.children.push(WorkspaceTreeNode {
+            id: file_node_id(file),
+            label: file_label(file),
+            kind: WorkspaceTreeKind::File(file.to_path_buf()),
+            children: Vec::new(),
+        });
+    }
 }
 
 fn insert_workspace_directory(root: &mut WorkspaceTreeNode, base: &Path, directory: &Path) {
@@ -675,6 +714,38 @@ fn sort_workspace_tree(node: &mut WorkspaceTreeNode) {
     for child in &mut node.children {
         sort_workspace_tree(child);
     }
+}
+
+fn remove_workspace_path(
+    node: &mut WorkspaceTreeNode,
+    target: &Path,
+    pinned_empty_directories: &HashSet<PathBuf>,
+) -> bool {
+    let mut removed = false;
+    node.children.retain_mut(|child| {
+        let child_path = match &child.kind {
+            WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::File(path) => {
+                Some(path.clone())
+            }
+            WorkspaceTreeKind::Heading { .. } => None,
+        };
+        if child_path.as_deref() == Some(target) {
+            removed = true;
+            return false;
+        }
+        if matches!(child.kind, WorkspaceTreeKind::Directory(_)) {
+            removed |= remove_workspace_path(child, target, pinned_empty_directories);
+            if child.children.is_empty()
+                && child_path
+                    .as_ref()
+                    .is_some_and(|path| !pinned_empty_directories.contains(path))
+            {
+                return false;
+            }
+        }
+        true
+    });
+    removed
 }
 
 fn file_label(path: &Path) -> String {

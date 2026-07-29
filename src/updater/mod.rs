@@ -279,6 +279,13 @@ impl UpdateCoordinator {
         };
         entity.update(cx, |service, cx| service.cancel_pending_install(cx));
     }
+
+    /// 未保存文档处理完并关闭一个窗口后，继续检查剩余窗口，最终退出主进程让 helper 接管。
+    pub(crate) fn continue_pending_install_quit(cx: &mut App) {
+        if matches!(Self::try_state(cx), Some(UpdateState::Installing { .. })) {
+            crate::app_menu::request_quit_application(cx);
+        }
+    }
 }
 
 pub(crate) struct UpdateService {
@@ -527,11 +534,17 @@ impl UpdateService {
         };
         match self.write_apply_plan(&release, &artifact_path) {
             Ok((plan_path, helper_path, cancellation_path)) => {
-                match Command::new(&helper_path)
-                    .arg("--apply-plan")
-                    .arg(&plan_path)
-                    .spawn()
+                let mut command = Command::new(&helper_path);
+                command.arg("--apply-plan").arg(&plan_path);
+                #[cfg(target_os = "windows")]
                 {
+                    use std::os::windows::process::CommandExt as _;
+
+                    // helper 是纯后台事务进程；Windows Terminal 不应为它创建可见黑框。
+                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                    command.creation_flags(CREATE_NO_WINDOW);
+                }
+                match command.spawn() {
                     Ok(_) => {
                         self.pending_install = Some(PendingInstall {
                             release: release.clone(),

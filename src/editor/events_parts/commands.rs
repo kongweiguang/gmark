@@ -217,6 +217,16 @@ impl Editor {
             return;
         }
 
+        if programmatic && command == SlashCommand::Table {
+            // 左侧块操作是显式鼠标入口，表格需要先给出可见反馈并让用户确认尺寸；
+            // 键入 `/表格` 的高效路径仍直接插入默认表格。
+            self.open_table_insert_dialog_for_target(
+                crate::editor::context_menu::TableInsertTarget::After(block.entity_id()),
+                cx,
+            );
+            return;
+        }
+
         self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
         let (cleaned_title, cursor) = {
             let block_ref = block.read(cx);

@@ -1,5 +1,7 @@
 // @author kongweiguang
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 //! Out-of-process installer used only by signed gmark update transactions.
 
 use std::collections::BTreeMap;

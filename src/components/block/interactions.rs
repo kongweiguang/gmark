@@ -511,6 +511,7 @@ impl Block {
             cx.emit(BlockEvent::RequestNewline {
                 trailing: InlineTextTree::plain(String::new()),
                 source_already_mutated: true,
+                insert_before: false,
             });
             return;
         }
@@ -549,6 +550,7 @@ impl Block {
             cx.emit(BlockEvent::RequestNewline {
                 trailing: InlineTextTree::plain(String::new()),
                 source_already_mutated: false,
+                insert_before: false,
             });
             return;
         }
@@ -592,6 +594,7 @@ impl Block {
                 cx.emit(BlockEvent::RequestNewline {
                     trailing: InlineTextTree::plain(String::new()),
                     source_already_mutated: true,
+                    insert_before: false,
                 });
                 return;
             }
@@ -600,6 +603,16 @@ impl Block {
             }
             self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
             self.replace_text_in_range(None, "\n", window, cx);
+            return;
+        }
+
+        if self.selected_range.is_empty() && self.cursor_offset() == 0 && !self.is_empty() {
+            // 块首回车插入同级空块，当前块的类型、内容和子树必须保持为一个整体。
+            cx.emit(BlockEvent::RequestNewline {
+                trailing: InlineTextTree::plain(String::new()),
+                source_already_mutated: false,
+                insert_before: true,
+            });
             return;
         }
 
@@ -624,6 +637,7 @@ impl Block {
         cx.emit(BlockEvent::RequestNewline {
             trailing,
             source_already_mutated: true,
+            insert_before: false,
         });
     }
 

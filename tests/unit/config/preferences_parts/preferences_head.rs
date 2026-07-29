@@ -510,7 +510,7 @@ fn saving_preferences_window_persists_selected_language() {
         "Georgia",
         true,
         ThemeAppearance::Light,
-        ThemePalette::JetBrains,
+        ThemePalette::Fleet,
         "en-US",
         ImagePasteBehavior::CopyToNamedAssetsFolder,
         BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
@@ -523,7 +523,10 @@ fn saving_preferences_window_persists_selected_language() {
     assert_eq!(saved.startup_open, StartupOpenPreference::LastOpenedFile);
     assert!(!saved.auto_check_updates);
     assert_eq!(saved.theme_appearance, ThemeAppearance::Light);
-    assert_eq!(saved.theme_palette, ThemePalette::JetBrains);
+    assert_eq!(saved.theme_palette, ThemePalette::Fleet);
+    let text = std::fs::read_to_string(dirs.app_config_file()).expect("config.toml should exist");
+    assert!(text.contains("palette = \"fleet\""));
+    assert!(!text.contains("jetbrains"));
     assert_eq!(saved.auto_save, AutoSavePreference::AfterDelay);
     assert!(!saved.spell_check);
     assert!(!saved.auto_pair_brackets);

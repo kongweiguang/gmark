@@ -187,6 +187,144 @@ impl Editor {
         self.open_workspace_operation_dialog(WorkspaceOperationKind::Rename, window, cx);
     }
 
+    pub(in crate::editor) fn on_workspace_open_menu(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ContextMenuState::Workspace { path, .. }) = self.context_menu.take() else {
+            return;
+        };
+        self.context_menu_keyboard_item = None;
+        self.context_menu_keyboard_submenu_item = None;
+        if path.is_file() {
+            self.open_workspace_file(path, window, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub(in crate::editor) fn on_workspace_reveal_menu(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ContextMenuState::Workspace { path, .. }) = self.context_menu.take() else {
+            return;
+        };
+        self.context_menu_keyboard_item = None;
+        self.context_menu_keyboard_submenu_item = None;
+        self.workspace.operation_error = crate::editor::system_file::reveal_in_file_manager(&path)
+            .err()
+            .map(|error| error.to_string());
+        cx.notify();
+    }
+
+    pub(in crate::editor) fn on_workspace_copy_path_menu(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_workspace_context_path(false, cx);
+    }
+
+    pub(in crate::editor) fn on_workspace_copy_relative_path_menu(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_workspace_context_path(true, cx);
+    }
+
+    fn copy_workspace_context_path(&mut self, relative: bool, cx: &mut Context<Self>) {
+        let Some(ContextMenuState::Workspace { path, .. }) = self.context_menu.take() else {
+            return;
+        };
+        self.context_menu_keyboard_item = None;
+        self.context_menu_keyboard_submenu_item = None;
+        let copied = if relative {
+            self.workspace
+                .root
+                .as_ref()
+                .and_then(|root| path.strip_prefix(root).ok())
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+        } else {
+            Some(path.to_string_lossy().into_owned())
+        };
+        if let Some(copied) = copied {
+            cx.write_to_clipboard(ClipboardItem::new_string(copied));
+        }
+        cx.notify();
+    }
+
+    pub(in crate::editor) fn on_workspace_refresh_menu(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.context_menu = None;
+        self.context_menu_keyboard_item = None;
+        self.context_menu_keyboard_submenu_item = None;
+        self.invalidate_workspace_file_tree();
+        self.sync_workspace_file_tree(cx);
+    }
+
+    pub(in crate::editor) fn on_workspace_delete_menu(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ContextMenuState::Workspace { path, .. }) = self.context_menu.take() else {
+            return;
+        };
+        self.context_menu_keyboard_item = None;
+        self.context_menu_keyboard_submenu_item = None;
+        let Some(root) = self.workspace.root.as_ref() else {
+            return;
+        };
+        let planned = super::workspace_file_ops::plan_workspace_delete(root, &path);
+        let (plan, error) = match planned {
+            Ok(plan) => {
+                let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.path);
+                if has_dirty {
+                    (
+                        None,
+                        Some(
+                            cx.global::<I18nManager>()
+                                .strings()
+                                .workspace_delete_dirty_error
+                                .clone(),
+                        ),
+                    )
+                } else {
+                    (Some(WorkspacePendingPlan::Delete(plan)), None)
+                }
+            }
+            Err(error) => (None, Some(error.to_string())),
+        };
+        let input = cx.new(|cx| {
+            let mut block = Block::with_record(cx, BlockRecord::paragraph(String::new()));
+            block.set_source_raw_mode();
+            block
+        });
+        self.workspace.operation_dialog = Some(WorkspaceOperationDialog {
+            kind: WorkspaceOperationKind::Delete,
+            source: path,
+            input,
+            plan,
+            error,
+            running: false,
+        });
+        self.workspace.operation_error = None;
+        cx.notify();
+    }
+
     pub(in crate::editor) fn on_workspace_move_menu(
         &mut self,
         _: &ClickEvent,
@@ -240,6 +378,7 @@ impl Editor {
                 .replace('\\', "/"),
             WorkspaceOperationKind::NewFile => "untitled.txt".to_owned(),
             WorkspaceOperationKind::NewFolder => "New Folder".to_owned(),
+            WorkspaceOperationKind::Delete => String::new(),
         };
         let input = cx.new(|cx| {
             let mut block = Block::with_record(cx, BlockRecord::paragraph(initial));
@@ -366,6 +505,7 @@ impl Editor {
             }
             WorkspaceOperationKind::Move => root.join(PathBuf::from(&value)),
             WorkspaceOperationKind::NewFile | WorkspaceOperationKind::NewFolder => PathBuf::new(),
+            WorkspaceOperationKind::Delete => return,
         };
         let creation_parent = if source.is_dir() {
             source.clone()
@@ -412,6 +552,9 @@ impl Editor {
                                 )
                                 .map(WorkspacePendingPlan::Create)
                             }
+                            WorkspaceOperationKind::Delete => Err(anyhow::anyhow!(
+                                "delete plans are created before confirmation"
+                            )),
                         }
                     })
                     .await;
@@ -479,7 +622,90 @@ impl Editor {
             WorkspacePendingPlan::Create(plan) => {
                 self.execute_workspace_create_plan(plan, false, cx)
             }
+            WorkspacePendingPlan::Delete(plan) => self.execute_workspace_delete_plan(plan, cx),
         }
+    }
+
+    pub(super) fn execute_workspace_delete_plan(
+        &mut self,
+        plan: super::workspace_file_ops::WorkspaceDeletePlan,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace.file_operation_task.is_some() {
+            return;
+        }
+        let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.path);
+        if has_dirty {
+            if let Some(dialog) = self.workspace.operation_dialog.as_mut() {
+                dialog.error = Some(
+                    cx.global::<I18nManager>()
+                        .strings()
+                        .workspace_delete_dirty_error
+                        .clone(),
+                );
+            }
+            cx.notify();
+            return;
+        }
+        let generation = self.workspace.file_operation_generation.wrapping_add(1);
+        self.workspace.file_operation_generation = generation;
+        // 回收站操作可能受 Shell/磁盘影响持续数百毫秒；确认后先从本地树移除目标，
+        // 失败时再重新扫描恢复，避免用户误以为点击没有生效。
+        let tree_updated = self.workspace.remove_path(&plan.path);
+        self.workspace.operation_dialog = None;
+        if matches!(
+            self.workspace.selected.as_ref(),
+            Some(WorkspaceSelection::File(path)) if path.starts_with(&plan.path)
+        ) {
+            self.workspace.selected = None;
+        }
+        self.workspace.operation_error = None;
+        cx.notify();
+        let worker_plan = plan.clone();
+        self.workspace.file_operation_task =
+            Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+                let result = cx
+                    .background_spawn(async move { worker_plan.execute() })
+                    .await;
+                let _ = this.update(cx, |editor, cx| {
+                    if editor.workspace.file_operation_generation != generation {
+                        return;
+                    }
+                    editor.workspace.file_operation_task = None;
+                    match result {
+                        Ok(()) => {
+                            let tabs_closed =
+                                editor.close_tabs_affected_by_deleted_path(&plan.path, cx);
+                            editor.workspace.operation_dialog = None;
+                            editor.workspace.operation_error = if tabs_closed {
+                                None
+                            } else {
+                                Some(
+                                    cx.global::<I18nManager>()
+                                        .strings()
+                                        .workspace_delete_completed_dirty_error
+                                        .clone(),
+                                )
+                            };
+                            editor.workspace.undo_file_operation = None;
+                            editor
+                                .workspace
+                                .pinned_empty_directories
+                                .retain(|path| !path.starts_with(&plan.path));
+                            if !tree_updated {
+                                editor.invalidate_workspace_file_tree();
+                            }
+                            editor.sync_workspace_after_document_path_change(cx);
+                        }
+                        Err(error) => {
+                            editor.workspace.operation_error = Some(error.to_string());
+                            editor.invalidate_workspace_file_tree();
+                            editor.sync_workspace_after_document_path_change(cx);
+                        }
+                    }
+                });
+            }));
+        cx.notify();
     }
 
     pub(in crate::editor) fn on_workspace_undo_file_operation(
@@ -553,6 +779,7 @@ impl Editor {
                         Ok(()) => {
                             editor.workspace.operation_dialog = None;
                             editor.workspace.operation_error = None;
+                            let tree_updated;
                             if undo {
                                 if editor.file_path.as_ref() == Some(&plan.path) {
                                     // 新建的源码文件使用 DocumentHost；撤销后必须同时解除后端，
@@ -562,6 +789,7 @@ impl Editor {
                                 }
                                 editor.workspace.undo_file_operation = None;
                                 editor.workspace.pinned_empty_directories.remove(&plan.path);
+                                tree_updated = editor.workspace.remove_path(&plan.path);
                             } else {
                                 editor.workspace.undo_file_operation =
                                     Some(WorkspaceUndoOperation::Create(plan.clone()));
@@ -579,8 +807,13 @@ impl Editor {
                                         .pinned_empty_directories
                                         .insert(plan.path.clone());
                                 }
+                                tree_updated = editor
+                                    .workspace
+                                    .insert_created_path(&plan.root, &plan.path, plan.kind);
                             }
-                            editor.invalidate_workspace_file_tree();
+                            if !tree_updated {
+                                editor.invalidate_workspace_file_tree();
+                            }
                             editor.sync_workspace_after_document_path_change(cx);
                         }
                         Err(error) => {

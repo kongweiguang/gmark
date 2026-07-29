@@ -59,6 +59,7 @@ mod source_mapping;
 mod source_tools;
 mod spellcheck;
 mod status_bar;
+mod system_file;
 mod table_edit;
 mod table_fragment;
 mod table_selection;

@@ -1,5 +1,6 @@
 // @author kongweiguang
 
+use super::text::code_language_cursor_bounds;
 use super::{
     link_at_position, source_line_number_gutter_width, source_line_number_tops, source_text_bounds,
     wrapped_line_height,
@@ -57,6 +58,18 @@ fn source_text_bounds_are_offset_by_gutter_width() {
     assert_eq!(text_bounds.top(), px(20.0));
     assert_eq!(text_bounds.size.width, px(252.0));
     assert_eq!(text_bounds.size.height, px(120.0));
+}
+
+#[test]
+fn code_language_cursor_uses_font_height_and_stays_centered() {
+    let input_bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(156.0), px(24.0)));
+    let cursor = code_language_cursor_bounds(input_bounds, px(42.0), px(14.0), px(2.0));
+
+    assert_eq!(cursor.left(), px(52.0));
+    assert_eq!(cursor.top(), px(25.0));
+    assert_eq!(cursor.size, size(px(2.0), px(14.0)));
+    assert!(cursor.top() >= input_bounds.top());
+    assert!(cursor.bottom() <= input_bounds.bottom());
 }
 
 #[gpui::test]

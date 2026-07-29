@@ -81,16 +81,17 @@ impl Editor {
             BlockEvent::RequestNewline {
                 trailing,
                 source_already_mutated,
+                insert_before,
             } => {
                 // Typing a setext underline (`=====`/`-----`) under a paragraph
                 // and pressing Enter turns that paragraph into a heading, the
                 // same way the importer treats the two adjacent lines.
-                if self.try_form_setext_heading_on_newline(&block, cx) {
+                if !*insert_before && self.try_form_setext_heading_on_newline(&block, cx) {
                     return;
                 }
                 // Typing a delimiter row under a header forms a native table,
                 // and typing further pipe rows below the table absorbs them.
-                if self.try_form_or_extend_table_on_newline(&block, cx) {
+                if !*insert_before && self.try_form_or_extend_table_on_newline(&block, cx) {
                     return;
                 }
                 let Some(location) = self.document.find_block_location(block.entity_id()) else {
@@ -103,9 +104,14 @@ impl Editor {
                     );
                 }
                 let current_kind = block.read(cx).kind();
+                let new_title = if *insert_before {
+                    InlineTextTree::plain(String::new())
+                } else {
+                    trailing.clone()
+                };
                 let new_block = Self::new_block(
                     cx,
-                    BlockRecord::new(current_kind.newline_sibling_kind(), trailing.clone()),
+                    BlockRecord::new(current_kind.newline_sibling_kind(), new_title),
                 );
                 if matches!(
                     self.view_mode,
@@ -115,7 +121,7 @@ impl Editor {
                 }
                 self.document.insert_blocks_at(
                     location.parent,
-                    location.index + 1,
+                    location.index + usize::from(!*insert_before),
                     vec![new_block.clone()],
                     cx,
                 );

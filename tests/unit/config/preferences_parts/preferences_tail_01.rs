@@ -153,6 +153,84 @@ async fn preferences_switches_share_stable_mouse_and_keyboard_focus(cx: &mut Tes
 }
 
 #[gpui::test]
+async fn preferences_dropdown_lists_open_below_their_triggers(cx: &mut TestAppContext) {
+    init_preferences_test_app(cx);
+    let handle = cx.update(|cx| {
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
+    });
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(handle.into(), cx);
+    for viewport in [size(px(720.0), px(520.0)), size(px(980.0), px(700.0))] {
+        visual.simulate_resize(viewport);
+
+        for (nav, dropdown, trigger_selector, list_selector) in [
+        (
+            PreferencesNav::File,
+            PreferencesDropdown::Startup,
+            "preferences-startup-dropdown",
+            "preferences-startup-dropdown-list",
+        ),
+        (
+            PreferencesNav::File,
+            PreferencesDropdown::AutoSave,
+            "preferences-auto-save-dropdown",
+            "preferences-auto-save-dropdown-list",
+        ),
+        (
+            PreferencesNav::Editor,
+            PreferencesDropdown::Font,
+            "preferences-editor-font-family",
+            "preferences-editor-font-list",
+        ),
+        (
+            PreferencesNav::Theme,
+            PreferencesDropdown::Language,
+            "preferences-language-dropdown",
+            "preferences-language-dropdown-list",
+        ),
+        (
+            PreferencesNav::Image,
+            PreferencesDropdown::Image,
+            "preferences-image-dropdown",
+            "preferences-image-dropdown-list",
+        ),
+        ] {
+            handle
+                .update(&mut visual, |preferences, _window, cx| {
+                    preferences.select_nav(nav, cx);
+                    preferences.set_dropdown_open(dropdown, true);
+                    cx.notify();
+                })
+                .expect("preferences window should remain updateable");
+            visual.update(|window, cx| window.draw(cx).clear());
+            visual.run_until_parked();
+
+            let trigger = visual
+                .debug_bounds(trigger_selector)
+                .unwrap_or_else(|| panic!("missing {trigger_selector}"));
+            let list = visual
+                .debug_bounds(list_selector)
+                .unwrap_or_else(|| panic!("missing {list_selector}"));
+            assert_eq!(
+                list.top() - trigger.bottom(),
+                px(4.0),
+                "{list_selector} should open directly below {trigger_selector}"
+            );
+            assert_eq!(
+                list.left(),
+                trigger.left(),
+                "{list_selector} should align with {trigger_selector}"
+            );
+            assert_eq!(
+                list.right(),
+                trigger.right(),
+                "{list_selector} should align with {trigger_selector}"
+            );
+        }
+    }
+}
+
+#[gpui::test]
 async fn preferences_search_matches_unicode_categories_and_shortcuts(cx: &mut TestAppContext) {
     cx.update(|cx| {
         I18nManager::init_with_language_id(cx, "zh-CN");
@@ -389,13 +467,13 @@ async fn theme_selection_previews_live_and_unsaved_preview_restores(cx: &mut Tes
         .update(cx, |preferences, _window, cx| {
             preferences.nav = PreferencesNav::Theme;
             preferences.preview_theme_appearance(ThemeAppearance::Light, cx);
-            preferences.preview_theme_palette(ThemePalette::JetBrains, cx);
+            preferences.preview_theme_palette(ThemePalette::Fleet, cx);
             assert_eq!(preferences.theme_appearance, ThemeAppearance::Light);
-            assert_eq!(preferences.theme_palette, ThemePalette::JetBrains);
+            assert_eq!(preferences.theme_palette, ThemePalette::Fleet);
             assert!(preferences.has_unsaved_changes());
             assert_eq!(
                 cx.global::<ThemeManager>().current_theme_id(),
-                "jetbrains-light"
+                "fleet-light"
             );
         })
         .expect("preferences window should be updateable");

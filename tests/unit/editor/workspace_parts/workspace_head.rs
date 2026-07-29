@@ -125,6 +125,55 @@
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn workspace_tree_create_and_delete_are_incremental() {
+        let root = std::env::temp_dir().join(format!(
+            "gmark-workspace-incremental-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let existing = root.join("existing.md");
+        fs::write(&existing, "existing").unwrap();
+        let mut workspace = WorkspaceState {
+            root: Some(root.clone()),
+            file_tree: Some(scan_workspace_dir(&root).unwrap()),
+            file_scan_generation: 17,
+            ..WorkspaceState::default()
+        };
+        let created = root.join("created.md");
+        fs::write(&created, "created").unwrap();
+
+        assert!(workspace.insert_created_path(
+            &root,
+            &created,
+            crate::editor::workspace_file_ops::WorkspaceCreateKind::File,
+        ));
+        assert_eq!(workspace.file_scan_generation, 17);
+        let labels = workspace
+            .file_tree
+            .as_ref()
+            .unwrap()
+            .children
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, vec!["created.md", "existing.md"]);
+
+        assert!(workspace.remove_path(&created));
+        assert_eq!(workspace.file_scan_generation, 17);
+        let labels = workspace
+            .file_tree
+            .as_ref()
+            .unwrap()
+            .children
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, vec!["existing.md"]);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[gpui::test]
     async fn binary_file_open_failure_is_rendered_in_its_tab(
         cx: &mut gpui::TestAppContext,

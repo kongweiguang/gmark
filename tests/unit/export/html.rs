@@ -64,7 +64,7 @@ fn emits_pdf_compatible_theme_css() {
 
     assert!(!html.contains("hsla("));
     assert!(html.contains("color-scheme: dark;"));
-    assert!(html.contains("--vlt-bg: rgba(31,31,36,1.000);"));
+    assert!(html.contains("--vlt-bg: rgba(41,42,48,1.000);"));
     assert!(html.contains("html { background-color: var(--vlt-bg); color: var(--vlt-text); }"));
     assert!(html.contains("background-color: var(--vlt-code-bg);"));
     assert!(html.contains("border: 1px solid;\n  border-color: var(--vlt-border);"));
@@ -80,10 +80,10 @@ fn light_theme_exports_light_color_scheme() {
     let html = render_html("# Title\n\ntext", &Theme::light_theme(), "Doc");
 
     assert!(html.contains("color-scheme: light;"));
-    assert!(html.contains("--vlt-bg: rgba(250,250,253,1.000);"));
-    assert!(html.contains("--vlt-text: rgba(29,29,31,1.000);"));
+    assert!(html.contains("--vlt-bg: rgba(255,255,255,1.000);"));
+    assert!(html.contains("--vlt-text: rgba(0,0,0,1.000);"));
     assert!(html.contains("--vlt-link: rgba(0,122,255,1.000);"));
-    assert!(html.contains("--vlt-code-bg: rgba(240,242,236,1.000);"));
+    assert!(html.contains("--vlt-code-bg: rgba(245,245,245,1.000);"));
     assert!(!html.contains("color-scheme: dark;"));
 }
 

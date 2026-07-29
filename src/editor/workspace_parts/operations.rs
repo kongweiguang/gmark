@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::editor::DocumentMenuFormat;
+use crate::editor::render::dialog_body;
 
 fn format_sidebar_byte_count(bytes: u64) -> String {
     const KIB: u64 = 1_024;
@@ -547,6 +548,9 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let dialog = self.workspace.operation_dialog.as_ref()?;
+        if dialog.kind == WorkspaceOperationKind::Delete {
+            return self.render_workspace_delete_dialog_overlay(theme, strings, cx);
+        }
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
@@ -555,6 +559,7 @@ impl Editor {
             WorkspaceOperationKind::Move => strings.workspace_move_title.clone(),
             WorkspaceOperationKind::NewFile => strings.workspace_new_file_title.clone(),
             WorkspaceOperationKind::NewFolder => strings.workspace_new_folder_title.clone(),
+            WorkspaceOperationKind::Delete => strings.workspace_delete_title.clone(),
         };
         let status = if dialog.running {
             Some((
@@ -581,6 +586,12 @@ impl Editor {
                     c.dialog_muted,
                 ),
                 WorkspacePendingPlan::Create(plan) => (
+                    plan.path.display().to_string(),
+                    CHECK_ICON,
+                    "workspace-operation-status-ready-icon",
+                    c.dialog_muted,
+                ),
+                WorkspacePendingPlan::Delete(plan) => (
                     plan.path.display().to_string(),
                     CHECK_ICON,
                     "workspace-operation-status-ready-icon",
@@ -689,6 +700,129 @@ impl Editor {
                             )
                             .child(primary),
                     ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_workspace_delete_dialog_overlay(
+        &self,
+        theme: &Theme,
+        strings: &I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.workspace.operation_dialog.as_ref()?;
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let t = &theme.typography;
+        let enabled = dialog.plan.is_some() && !dialog.running;
+        let confirm = dialog_button(
+            "confirm-workspace-delete",
+            strings.workspace_delete_confirm.clone(),
+            if enabled {
+                DialogButtonKind::Danger
+            } else {
+                DialogButtonKind::Secondary
+            },
+            theme,
+        );
+        let confirm = if enabled {
+            confirm.on_click(cx.listener(Self::on_apply_workspace_operation))
+        } else {
+            confirm.opacity(0.62)
+        };
+        let path = dialog.source.display().to_string();
+        let status = if dialog.running {
+            Some((
+                strings.workspace_operation_busy.clone(),
+                REFRESH_ICON,
+                "workspace-delete-status-progress-icon",
+                c.text_link,
+            ))
+        } else {
+            dialog.error.as_ref().map(|error| {
+                (
+                    error.clone(),
+                    WARNING_ICON,
+                    "workspace-delete-status-error-icon",
+                    c.dialog_danger_button_bg,
+                )
+            })
+        };
+
+        Some(
+            modal_overlay("workspace-delete-dialog-overlay", theme)
+                .child(
+                    dialog_panel("workspace-delete-dialog", d.dialog_width.min(520.0), theme)
+                        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                            cx.stop_propagation()
+                        })
+                        .child(
+                            div()
+                                .id("workspace-delete-dialog-content")
+                                .debug_selector(|| "workspace-delete-dialog-content".to_owned())
+                                .w_full()
+                                .flex_none()
+                                .flex()
+                                .flex_col()
+                                .gap(px(d.dialog_gap))
+                                .pb(px(2.0))
+                                .child(dialog_title_with_icon(
+                                    "workspace-delete-title",
+                                    strings.workspace_delete_title.clone(),
+                                    DialogTitleIcon::Warning,
+                                    theme,
+                                ))
+                                .child(dialog_body(
+                                    strings
+                                        .workspace_delete_message_template
+                                        .replace("{path}", &path),
+                                    theme,
+                                ))
+                                .child(
+                                    div()
+                                        .id("workspace-delete-target")
+                                        .debug_selector(|| "workspace-delete-target".to_owned())
+                                        .w_full()
+                                        .px(px(10.0))
+                                        .py(px(8.0))
+                                        .rounded(px(6.0))
+                                        .border(px(d.dialog_border_width))
+                                        .border_color(c.dialog_border)
+                                        .bg(c.dialog_secondary_button_bg)
+                                        .text_size(px(t.dialog_body_size))
+                                        .text_color(c.dialog_body)
+                                        .overflow_hidden()
+                                        .truncate()
+                                        .child(path),
+                                )
+                                .children(status.map(|(message, icon, selector, color)| {
+                                    workspace_status_row(
+                                        "workspace-delete-status",
+                                        selector,
+                                        icon,
+                                        message,
+                                        color,
+                                        t.dialog_body_size,
+                                    )
+                                    .into_any_element()
+                                })),
+                        )
+                        .child(
+                            dialog_actions(theme)
+                                .id("workspace-delete-actions")
+                                .debug_selector(|| "workspace-delete-actions".to_owned())
+                                .child(
+                                    dialog_button(
+                                        "cancel-workspace-delete",
+                                        strings.open_link_cancel.clone(),
+                                        DialogButtonKind::Secondary,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(Self::on_cancel_workspace_operation)),
+                                )
+                                .child(confirm),
+                        ),
                 )
                 .into_any_element(),
         )

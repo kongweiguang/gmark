@@ -81,6 +81,7 @@ impl Editor {
         self.close_menu_bar(cx);
         self.hide_unsaved_changes_dialog(cx);
         if had_pending_close {
+            crate::updater::UpdateCoordinator::cancel_pending_install(cx);
             self.restore_focus_after_close_dialog(cx);
         } else {
             self.close_dialog_restore_focus = None;
@@ -164,6 +165,7 @@ impl Editor {
         if self.discard_all_document_changes_for_window_close(cx) {
             self.remove_workspace_session_for_explicit_close(cx);
             window.remove_window();
+            cx.defer(crate::updater::UpdateCoordinator::continue_pending_install_quit);
         } else {
             self.show_unsaved_changes_dialog = true;
             self.close_dialog_restore_focus = None;

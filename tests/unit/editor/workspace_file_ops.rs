@@ -6,7 +6,8 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use super::{
-    WorkspaceCreateKind, markdown_destination_spans, plan_workspace_create, plan_workspace_move,
+    WorkspaceCreateKind, markdown_destination_spans, plan_workspace_create, plan_workspace_delete,
+    plan_workspace_move,
 };
 
 fn write(path: &Path, bytes: impl AsRef<[u8]>) {
@@ -341,6 +342,42 @@ fn destination_parent_symlink_cannot_escape_workspace() {
     assert!(plan_workspace_move(root, &source, &link.join("new.md")).is_err());
     assert!(source.exists());
     assert!(!outside.path().join("new.md").exists());
+}
+
+#[test]
+fn workspace_delete_plan_rejects_root_and_outside_targets() {
+    let temp = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = root.join("note.md");
+    write(&target, "# note\n");
+    let outside_target = outside.path().join("outside.md");
+    write(&outside_target, "# outside\n");
+
+    assert!(plan_workspace_delete(root, root).is_err());
+    assert!(plan_workspace_delete(root, &outside_target).is_err());
+    assert!(plan_workspace_delete(root, &target).is_ok());
+}
+
+#[test]
+fn workspace_delete_plan_revalidates_and_delegates_the_exact_target() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = root.join("folder");
+    fs::create_dir_all(&target).unwrap();
+    write(&target.join("note.md"), "# note\n");
+    let plan = plan_workspace_delete(root, &target).unwrap();
+    let expected = dunce::canonicalize(&target).unwrap();
+    let mut delegated = None;
+
+    plan.execute_with(|path| {
+        delegated = Some(path.to_path_buf());
+        fs::remove_dir_all(path).map_err(Into::into)
+    })
+    .unwrap();
+
+    assert_eq!(delegated, Some(expected));
+    assert!(!target.exists());
 }
 
 use std::collections::HashSet;

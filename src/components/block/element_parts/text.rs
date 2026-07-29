@@ -33,6 +33,22 @@ pub struct CodeLanguageInputPrepaintState {
     hitbox: Option<Hitbox>,
 }
 
+pub(super) fn code_language_cursor_bounds(
+    bounds: Bounds<Pixels>,
+    cursor_x: Pixels,
+    font_size: Pixels,
+    cursor_width: Pixels,
+) -> Bounds<Pixels> {
+    // 语言输入是紧凑控件；光标跟随字面高度并垂直居中，不能把编辑器行距
+    // 当成光标高度，否则大行距主题会让光标越过控件的视觉边界。
+    let cursor_height = font_size.min(bounds.size.height);
+    let cursor_top = bounds.top() + (bounds.size.height - cursor_height) / 2.0;
+    Bounds::new(
+        point(bounds.left() + cursor_x, cursor_top),
+        size(cursor_width, cursor_height),
+    )
+}
+
 impl IntoElement for CodeLanguageInputElement {
     type Element = Self;
 
@@ -138,7 +154,6 @@ impl Element for CodeLanguageInputElement {
         let line = window
             .text_system()
             .shape_line(display_text, font_size, &runs, None);
-        let line_height = bounds.size.height;
         let selection = if focused && !input.code_language_selected_range.is_empty() {
             let start = line.x_for_index(input.code_language_selected_range.start);
             let end = line.x_for_index(input.code_language_selected_range.end);
@@ -157,9 +172,11 @@ impl Element for CodeLanguageInputElement {
             let mut cursor_color = theme.colors.cursor;
             cursor_color.a *= input.cursor_opacity();
             Some(fill(
-                Bounds::new(
-                    point(bounds.left() + cursor_x, bounds.top()),
-                    size(px(theme.dimensions.cursor_width), line_height),
+                code_language_cursor_bounds(
+                    bounds,
+                    cursor_x,
+                    font_size,
+                    px(theme.dimensions.cursor_width),
                 ),
                 cursor_color,
             ))

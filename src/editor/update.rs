@@ -367,8 +367,11 @@ impl Editor {
             )
             .child(
                 div()
-                    .max_h(px(112.0))
-                    .overflow_hidden()
+                    .id("update-detail-scroll")
+                    .debug_selector(|| "update-detail-scroll".to_owned())
+                    // 发布说明和系统信任提示都属于关键更新信息；长内容应可滚动，不能静默裁掉。
+                    .max_h(px(220.0))
+                    .overflow_y_scroll()
                     .text_size(px(t.dialog_body_size))
                     .line_height(rems(t.text_line_height))
                     .text_color(c.dialog_body)

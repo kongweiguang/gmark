@@ -788,6 +788,31 @@ impl Editor {
             })
     }
 
+    pub(in crate::editor) fn workspace_tabs_affected_by_path(
+        &self,
+        target: &Path,
+    ) -> (Vec<usize>, bool) {
+        let active_path = self.file_path.as_deref();
+        let mut indices = Vec::new();
+        let mut has_dirty = false;
+        for (index, record) in self.tabs.records.iter().enumerate() {
+            let (candidate, dirty) = if index == self.tabs.active {
+                (active_path, self.is_document_dirty())
+            } else {
+                let snapshot = record.snapshot.as_ref();
+                (
+                    snapshot.and_then(|snapshot| snapshot.file_path.as_deref()),
+                    snapshot.is_some_and(|snapshot| snapshot.document_dirty),
+                )
+            };
+            if candidate.is_some_and(|path| path == target || path.starts_with(target)) {
+                indices.push(index);
+                has_dirty |= dirty;
+            }
+        }
+        (indices, has_dirty)
+    }
+
     pub(in crate::editor) fn open_path_in_tab(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if let Some(index) = self.tab_index_for_path(&path) {
             self.switch_to_tab_index(index, cx);

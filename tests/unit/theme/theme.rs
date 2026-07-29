@@ -7,45 +7,138 @@ use gpui::{WindowAppearance, rgba};
 fn built_in_themes_have_stable_names_and_distinct_surfaces() {
     let xcode_dark = Theme::xcode_dark();
     let xcode_light = Theme::xcode_light();
-    let jetbrains_dark = Theme::jetbrains_dark();
-    let jetbrains_light = Theme::jetbrains_light();
+    let fleet_dark = Theme::fleet_dark();
+    let fleet_light = Theme::fleet_light();
     let obsidian_dark = Theme::obsidian_dark();
     let obsidian_light = Theme::obsidian_light();
+    let claude_dark = Theme::claude_dark();
+    let claude_light = Theme::claude_light();
 
     assert_eq!(xcode_dark.name, "Xcode Dark");
     assert_eq!(xcode_light.name, "Xcode Light");
-    assert_eq!(jetbrains_dark.name, "JetBrains Dark");
-    assert_eq!(jetbrains_light.name, "JetBrains Light");
+    assert_eq!(fleet_dark.name, "Fleet Dark");
+    assert_eq!(fleet_light.name, "Fleet Light");
     assert_eq!(obsidian_dark.name, "Obsidian Dark");
     assert_eq!(obsidian_light.name, "Obsidian Light");
+    assert_eq!(claude_dark.name, "Claude Dark");
+    assert_eq!(claude_light.name, "Claude Light");
     assert_ne!(
         xcode_dark.colors.editor_background,
         xcode_light.colors.editor_background
     );
     assert_ne!(
         xcode_dark.colors.editor_background,
-        jetbrains_dark.colors.editor_background
+        fleet_dark.colors.editor_background
     );
     assert_ne!(
-        xcode_light.colors.editor_background,
-        jetbrains_light.colors.editor_background
+        xcode_light.colors.chrome_background,
+        fleet_light.colors.chrome_background
     );
     assert_ne!(
         xcode_dark.colors.code_syntax_keyword,
-        jetbrains_dark.colors.code_syntax_keyword
+        fleet_dark.colors.code_syntax_keyword
     );
     assert_ne!(
         xcode_dark.colors.editor_background,
         obsidian_dark.colors.editor_background
     );
     assert_ne!(
-        xcode_light.colors.editor_background,
-        obsidian_light.colors.editor_background
+        xcode_light.colors.chrome_background,
+        obsidian_light.colors.chrome_background
+    );
+    assert_ne!(
+        obsidian_dark.colors.editor_background,
+        claude_dark.colors.editor_background
+    );
+    assert_ne!(
+        obsidian_light.colors.editor_background,
+        claude_light.colors.editor_background
     );
 }
 
 #[test]
-fn all_user_combinations_resolve_to_the_six_concrete_ids() {
+fn built_in_themes_keep_the_official_default_palette_anchors() {
+    let xcode_dark = Theme::xcode_dark();
+    let xcode_light = Theme::xcode_light();
+    let fleet_dark = Theme::fleet_dark();
+    let fleet_light = Theme::fleet_light();
+    let obsidian_dark = Theme::obsidian_dark();
+    let obsidian_light = Theme::obsidian_light();
+    let claude_dark = Theme::claude_dark();
+    let claude_light = Theme::claude_light();
+
+    // Xcode 27 官方深浅色产品图与默认源码主题。
+    assert_eq!(xcode_dark.colors.editor_background, rgba(0x292a30ff).into());
+    assert_eq!(
+        xcode_dark.colors.code_syntax_keyword,
+        rgba(0xff7ab2ff).into()
+    );
+    assert_eq!(
+        xcode_light.colors.editor_background,
+        rgba(0xffffffff).into()
+    );
+    assert_eq!(
+        xcode_light.colors.code_syntax_keyword,
+        rgba(0xad3da4ff).into()
+    );
+
+    // Fleet 1.48 官方产品图及主题编辑器中 Fleet Dark/Light 的稳定锚点。
+    assert_eq!(fleet_dark.colors.editor_background, rgba(0x18191bff).into());
+    assert_eq!(fleet_dark.colors.chrome_background, rgba(0x090909ff).into());
+    assert_eq!(
+        fleet_dark.colors.code_syntax_keyword,
+        rgba(0x82d2ceff).into()
+    );
+    assert_eq!(
+        fleet_light.colors.editor_background,
+        rgba(0xffffffff).into()
+    );
+    assert_eq!(
+        fleet_light.colors.chrome_background,
+        rgba(0xf2f2f2ff).into()
+    );
+    assert_eq!(
+        fleet_light.colors.code_syntax_keyword,
+        rgba(0x07805fff).into()
+    );
+
+    // Obsidian 1.12.7 官方 app.css 的 base 与 code token。
+    assert_eq!(
+        obsidian_dark.colors.editor_background,
+        rgba(0x1e1e1eff).into()
+    );
+    assert_eq!(obsidian_dark.colors.text_default, rgba(0xdadadaff).into());
+    assert_eq!(
+        obsidian_dark.colors.code_syntax_keyword,
+        rgba(0xfa99cdff).into()
+    );
+    assert_eq!(
+        obsidian_light.colors.editor_background,
+        rgba(0xffffffff).into()
+    );
+    assert_eq!(obsidian_light.colors.text_default, rgba(0x222222ff).into());
+    assert_eq!(
+        obsidian_light.colors.code_syntax_keyword,
+        rgba(0xd53984ff).into()
+    );
+
+    // claude.com 当前官网 CSS 的 theme-main/theme-dark 与 clay 品牌变量。
+    assert_eq!(
+        claude_dark.colors.editor_background,
+        rgba(0x141413ff).into()
+    );
+    assert_eq!(claude_dark.colors.text_default, rgba(0xfaf9f5ff).into());
+    assert_eq!(claude_dark.colors.text_link, rgba(0xc46849ff).into());
+    assert_eq!(
+        claude_light.colors.editor_background,
+        rgba(0xfaf9f5ff).into()
+    );
+    assert_eq!(claude_light.colors.text_default, rgba(0x141413ff).into());
+    assert_eq!(claude_light.colors.text_link, rgba(0xd97757ff).into());
+}
+
+#[test]
+fn all_user_combinations_resolve_to_the_eight_concrete_ids() {
     let cases = [
         (
             ThemeAppearance::Dark,
@@ -73,27 +166,27 @@ fn all_user_combinations_resolve_to_the_six_concrete_ids() {
         ),
         (
             ThemeAppearance::Dark,
-            ThemePalette::JetBrains,
+            ThemePalette::Fleet,
             WindowAppearance::Light,
-            "jetbrains-dark",
+            "fleet-dark",
         ),
         (
             ThemeAppearance::Light,
-            ThemePalette::JetBrains,
+            ThemePalette::Fleet,
             WindowAppearance::Dark,
-            "jetbrains-light",
+            "fleet-light",
         ),
         (
             ThemeAppearance::System,
-            ThemePalette::JetBrains,
+            ThemePalette::Fleet,
             WindowAppearance::Dark,
-            "jetbrains-dark",
+            "fleet-dark",
         ),
         (
             ThemeAppearance::System,
-            ThemePalette::JetBrains,
+            ThemePalette::Fleet,
             WindowAppearance::Light,
-            "jetbrains-light",
+            "fleet-light",
         ),
         (
             ThemeAppearance::Dark,
@@ -119,6 +212,30 @@ fn all_user_combinations_resolve_to_the_six_concrete_ids() {
             WindowAppearance::Light,
             "obsidian-light",
         ),
+        (
+            ThemeAppearance::Dark,
+            ThemePalette::Claude,
+            WindowAppearance::Light,
+            "claude-dark",
+        ),
+        (
+            ThemeAppearance::Light,
+            ThemePalette::Claude,
+            WindowAppearance::Dark,
+            "claude-light",
+        ),
+        (
+            ThemeAppearance::System,
+            ThemePalette::Claude,
+            WindowAppearance::Dark,
+            "claude-dark",
+        ),
+        (
+            ThemeAppearance::System,
+            ThemePalette::Claude,
+            WindowAppearance::Light,
+            "claude-light",
+        ),
     ];
 
     for (appearance, palette, platform, expected) in cases {
@@ -139,14 +256,15 @@ fn invalid_theme_values_are_not_accepted() {
     );
     assert_eq!(ThemeAppearance::parse("gmark"), None);
     assert_eq!(ThemePalette::parse("xcode"), Some(ThemePalette::Xcode));
-    assert_eq!(
-        ThemePalette::parse("jetbrains"),
-        Some(ThemePalette::JetBrains)
-    );
+    assert_eq!(ThemePalette::parse("fleet"), Some(ThemePalette::Fleet));
+    assert_eq!(ThemePalette::Fleet.as_str(), "fleet");
+    assert_eq!(ThemePalette::parse("jetbrains"), None);
     assert_eq!(
         ThemePalette::parse("obsidian"),
         Some(ThemePalette::Obsidian)
     );
+    assert_eq!(ThemePalette::parse("claude"), Some(ThemePalette::Claude));
+    assert_eq!(ThemePalette::Claude.as_str(), "claude");
     assert_eq!(ThemePalette::parse("custom:paper"), None);
 }
 
@@ -155,20 +273,20 @@ fn manager_preserves_palette_when_appearance_changes() {
     let mut manager = ThemeManager::default();
     assert!(manager.set_theme_preference(
         ThemeAppearance::Dark,
-        ThemePalette::JetBrains,
+        ThemePalette::Fleet,
         WindowAppearance::Light,
     ));
-    assert_eq!(manager.current_theme_id(), "jetbrains-dark");
+    assert_eq!(manager.current_theme_id(), "fleet-dark");
     assert_eq!(manager.selected_appearance(), ThemeAppearance::Dark);
-    assert_eq!(manager.selected_palette(), ThemePalette::JetBrains);
+    assert_eq!(manager.selected_palette(), ThemePalette::Fleet);
 
     assert!(manager.set_theme_preference(
         ThemeAppearance::Light,
-        ThemePalette::JetBrains,
+        ThemePalette::Fleet,
         WindowAppearance::Light,
     ));
-    assert_eq!(manager.current_theme_id(), "jetbrains-light");
-    assert_eq!(manager.selected_palette(), ThemePalette::JetBrains);
+    assert_eq!(manager.current_theme_id(), "fleet-light");
+    assert_eq!(manager.selected_palette(), ThemePalette::Fleet);
 }
 
 #[test]
@@ -182,12 +300,12 @@ fn manager_preserves_appearance_when_palette_changes() {
 
     assert!(manager.set_theme_preference(
         ThemeAppearance::Light,
-        ThemePalette::JetBrains,
+        ThemePalette::Fleet,
         WindowAppearance::Dark,
     ));
-    assert_eq!(manager.current_theme_id(), "jetbrains-light");
+    assert_eq!(manager.current_theme_id(), "fleet-light");
     assert_eq!(manager.selected_appearance(), ThemeAppearance::Light);
-    assert_eq!(manager.selected_palette(), ThemePalette::JetBrains);
+    assert_eq!(manager.selected_palette(), ThemePalette::Fleet);
 }
 
 #[test]
@@ -195,20 +313,20 @@ fn system_updates_only_when_system_appearance_is_selected() {
     let mut manager = ThemeManager::default();
     manager.set_theme_preference(
         ThemeAppearance::System,
-        ThemePalette::JetBrains,
+        ThemePalette::Fleet,
         WindowAppearance::Dark,
     );
-    assert_eq!(manager.current_theme_id(), "jetbrains-dark");
+    assert_eq!(manager.current_theme_id(), "fleet-dark");
     assert!(manager.update_system_appearance(WindowAppearance::Light));
-    assert_eq!(manager.current_theme_id(), "jetbrains-light");
+    assert_eq!(manager.current_theme_id(), "fleet-light");
 
     manager.set_theme_preference(
         ThemeAppearance::Dark,
-        ThemePalette::JetBrains,
+        ThemePalette::Fleet,
         WindowAppearance::Light,
     );
     assert!(!manager.update_system_appearance(WindowAppearance::Dark));
-    assert_eq!(manager.current_theme_id(), "jetbrains-dark");
+    assert_eq!(manager.current_theme_id(), "fleet-dark");
 }
 
 #[test]
@@ -225,7 +343,7 @@ fn editor_overrides_survive_theme_changes() {
     assert_eq!(manager.current().typography.text_size, 20.0);
     assert_eq!(manager.current().typography.text_line_height, 1.8);
     assert_eq!(manager.current().dimensions.centered_max_width, 1_400.0);
-    assert_eq!(manager.current().colors.cursor, rgba(0x1d1d1fff).into());
+    assert_eq!(manager.current().colors.cursor, rgba(0x000000ff).into());
 
     assert!(!manager.set_theme_preference(
         ThemeAppearance::Light,

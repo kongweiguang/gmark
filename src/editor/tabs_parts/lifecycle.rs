@@ -523,6 +523,22 @@ impl Editor {
         true
     }
 
+    pub(in crate::editor) fn close_tabs_affected_by_deleted_path(
+        &mut self,
+        target: &Path,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (mut indices, has_dirty) = self.workspace_tabs_affected_by_path(target);
+        if has_dirty {
+            return false;
+        }
+        indices.sort_unstable_by(|left, right| right.cmp(left));
+        for index in indices {
+            self.close_tab_index_without_prompt(index, false, cx);
+        }
+        true
+    }
+
     pub(crate) fn on_close_tab_action(
         &mut self,
         _: &crate::components::CloseTab,

@@ -3,6 +3,22 @@
 use super::*;
 
 impl Editor {
+    pub(in crate::editor) fn open_table_insert_dialog_for_target(
+        &mut self,
+        target: TableInsertTarget,
+        cx: &mut Context<Self>,
+    ) {
+        self.context_menu_keyboard_item = None;
+        self.context_menu_keyboard_submenu_item = None;
+        self.context_menu_submenu_close_task = None;
+        self.table_insert_dialog = Some(TableInsertDialogState {
+            target,
+            body_rows: 2,
+            columns: 2,
+        });
+        cx.notify();
+    }
+
     pub(in crate::editor) fn on_editor_surface_mouse_down(
         &mut self,
         _event: &MouseDownEvent,
@@ -279,15 +295,7 @@ impl Editor {
         let Some(ContextMenuState::Insert { target, .. }) = self.context_menu.take() else {
             return;
         };
-        self.context_menu_keyboard_item = None;
-        self.context_menu_keyboard_submenu_item = None;
-        self.context_menu_submenu_close_task = None;
-        self.table_insert_dialog = Some(TableInsertDialogState {
-            target,
-            body_rows: 2,
-            columns: 2,
-        });
-        cx.notify();
+        self.open_table_insert_dialog_for_target(target, cx);
     }
 
     pub(in crate::editor) fn on_context_menu_insert_command(

@@ -195,6 +195,9 @@ impl Editor {
                         window.set_window_edited(false);
                         if should_close_after_save {
                             window.remove_window();
+                            cx.defer(
+                                crate::updater::UpdateCoordinator::continue_pending_install_quit,
+                            );
                         }
                     } else if conflict {
                         window.blur();
@@ -573,12 +576,13 @@ impl Editor {
                 .unwrap_or(false);
             let _ = cx.update_window(
                 window_handle,
-                move |_view: AnyView, window: &mut Window, _cx: &mut App| {
+                move |_view: AnyView, window: &mut Window, cx: &mut App| {
                     if saved_current_revision {
                         window.set_window_edited(false);
                     }
                     if should_close_after_save && saved_current_revision {
                         window.remove_window();
+                        cx.defer(crate::updater::UpdateCoordinator::continue_pending_install_quit);
                     }
                 },
             );

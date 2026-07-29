@@ -148,14 +148,19 @@ impl Block {
                     .tooltip(move |_window, cx| {
                         crate::ui::ui_tooltip(language_menu_tooltip.clone(), cx)
                     })
-                    .text_color(c.code_language_input_placeholder)
+                    .text_color(c.code_language_input_text)
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                         cx.stop_propagation();
                     })
                     .on_click(cx.listener(|block, _event, window, cx| {
                         block.toggle_code_language_menu(window, cx);
                     }))
-                    .child(svg().path(CHEVRON_DOWN_ICON).size(px(14.0))),
+                    .child(
+                        svg()
+                            .path(CHEVRON_DOWN_ICON)
+                            .size(px(14.0))
+                            .text_color(c.code_language_input_text),
+                    ),
             )
             .children(language_menu);
         let copy_button = div()

@@ -860,7 +860,7 @@ impl Editor {
                 let panel_origin = clamped_floating_panel_origin(
                     *position,
                     panel_width,
-                    compact_menu_panel_height(5, 2, d),
+                    compact_menu_panel_height(11, 6, d),
                     window.viewport_size(),
                 );
                 let item = |id: &'static str,
@@ -936,8 +936,54 @@ impl Editor {
                         cx.stop_propagation()
                     })
                     .child(item(
-                        "workspace-context-new-file",
+                        "workspace-context-open",
                         0,
+                        s.workspace_open.clone(),
+                        "icon/ui/file.svg",
+                        self.workspace_context_target_is_file(),
+                        Self::on_workspace_open_menu,
+                    ))
+                    .child(item(
+                        "workspace-context-reveal",
+                        1,
+                        s.file_reveal_in_manager.clone(),
+                        "icon/workspace/folder.svg",
+                        true,
+                        Self::on_workspace_reveal_menu,
+                    ))
+                    .child(
+                        div()
+                            .mx(px(d.menu_separator_margin_x))
+                            .my(px(d.menu_separator_margin_y))
+                            .h(px(d.menu_separator_height))
+                            .bg(c.dialog_border),
+                    )
+                    .child(item(
+                        "workspace-context-copy-path",
+                        2,
+                        s.workspace_copy_path.clone(),
+                        COPY_ICON,
+                        true,
+                        Self::on_workspace_copy_path_menu,
+                    ))
+                    .child(item(
+                        "workspace-context-copy-relative-path",
+                        3,
+                        s.workspace_copy_relative_path.clone(),
+                        COPY_ICON,
+                        !self.workspace_context_target_is_root(),
+                        Self::on_workspace_copy_relative_path_menu,
+                    ))
+                    .child(
+                        div()
+                            .mx(px(d.menu_separator_margin_x))
+                            .my(px(d.menu_separator_margin_y))
+                            .h(px(d.menu_separator_height))
+                            .bg(c.dialog_border),
+                    )
+                    .child(item(
+                        "workspace-context-new-file",
+                        4,
                         s.workspace_new_file.clone(),
                         PLUS_ICON,
                         true,
@@ -945,7 +991,7 @@ impl Editor {
                     ))
                     .child(item(
                         "workspace-context-new-folder",
-                        1,
+                        5,
                         s.workspace_new_folder.clone(),
                         "icon/workspace/folder.svg",
                         true,
@@ -960,7 +1006,7 @@ impl Editor {
                     )
                     .child(item(
                         "workspace-context-rename",
-                        2,
+                        6,
                         s.workspace_rename.clone(),
                         "icon/ui/type.svg",
                         !self.workspace_context_target_is_root(),
@@ -968,7 +1014,7 @@ impl Editor {
                     ))
                     .child(item(
                         "workspace-context-move",
-                        3,
+                        7,
                         s.workspace_move.clone(),
                         ARROW_RIGHT_ICON,
                         !self.workspace_context_target_is_root(),
@@ -982,13 +1028,80 @@ impl Editor {
                             .bg(c.dialog_border),
                     )
                     .child(item(
+                        "workspace-context-refresh",
+                        8,
+                        s.workspace_refresh.clone(),
+                        "icon/ui/refresh.svg",
+                        true,
+                        Self::on_workspace_refresh_menu,
+                    ))
+                    .child(
+                        div()
+                            .mx(px(d.menu_separator_margin_x))
+                            .my(px(d.menu_separator_margin_y))
+                            .h(px(d.menu_separator_height))
+                            .bg(c.dialog_border),
+                    )
+                    .child(item(
                         "workspace-context-undo",
-                        4,
+                        9,
                         s.workspace_undo_file_operation.clone(),
                         "icon/ui/undo.svg",
                         self.workspace_can_undo_file_operation(),
                         Self::on_workspace_undo_file_operation,
-                    ));
+                    ))
+                    .child(
+                        div()
+                            .mx(px(d.menu_separator_margin_x))
+                            .my(px(d.menu_separator_margin_y))
+                            .h(px(d.menu_separator_height))
+                            .bg(c.dialog_border),
+                    )
+                    .child({
+                        let enabled = !self.workspace_context_target_is_root();
+                        let color = if enabled {
+                            c.dialog_danger_button_bg
+                        } else {
+                            c.dialog_muted
+                        };
+                        let row = div()
+                            .id("workspace-context-delete")
+                            .debug_selector(|| "workspace-context-delete".to_owned())
+                            .h(px(d.menu_item_height))
+                            .px(px(d.menu_item_padding_x))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .rounded(px(d.menu_item_radius))
+                            .bg(if self.context_menu_keyboard_item == Some(10) {
+                                c.dialog_secondary_button_hover
+                            } else {
+                                c.dialog_surface
+                            })
+                            .text_size(px(d.menu_text_size))
+                            .text_color(color)
+                            .child(
+                                menu_icon_slot(Some(TRASH_ICON), color)
+                                    .debug_selector(|| "workspace-context-delete-icon".to_owned()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
+                                    .truncate()
+                                    .child(s.workspace_delete.clone()),
+                            )
+                            .on_hover(cx.listener(Self::on_context_menu_pointer_hover));
+                        if enabled {
+                            row.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                .cursor_pointer()
+                                .on_click(cx.listener(Self::on_workspace_delete_menu))
+                                .into_any_element()
+                        } else {
+                            row.into_any_element()
+                        }
+                    });
                 Some(
                     div()
                         .id("workspace-context-menu-overlay")

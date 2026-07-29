@@ -252,7 +252,7 @@ pub(crate) struct PreferencesWindow {
     nav_focus_handles: [FocusHandle; 6],
     dropdown_focus_handles: [FocusHandle; PreferencesDropdown::COUNT],
     theme_appearance_focus_handles: [FocusHandle; 3],
-    theme_palette_focus_handles: [FocusHandle; 3],
+    theme_palette_focus_handles: [FocusHandle; 4],
     dropdown_selected_indices: [usize; PreferencesDropdown::COUNT],
     switch_focus_handles: [FocusHandle; PreferencesSwitch::COUNT],
     stepper_focus_handles: [FocusHandle; PreferencesStepperControl::COUNT],

@@ -400,11 +400,13 @@ pub enum BlockEvent {
     /// Hosts with their own document model use this to translate the local
     /// block range into a stable source anchor without waiting for an edit.
     SelectionChanged,
-    /// The user pressed Enter; a new block should be created after this
-    /// one with the given trailing text.
+    /// The user pressed Enter; a new sibling should be created with the given
+    /// trailing text. At block start the sibling is inserted before the intact
+    /// current block so its semantic kind moves together with its content.
     RequestNewline {
         trailing: InlineTextTree,
         source_already_mutated: bool,
+        insert_before: bool,
     },
     /// The user pressed Enter on a callout header; the editor should ensure
     /// the callout owns a body entry and move focus into it.

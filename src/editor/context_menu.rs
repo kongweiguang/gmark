@@ -100,9 +100,15 @@ enum ContextMenuCommand {
     DeleteTable,
     WorkspaceNewFile,
     WorkspaceNewFolder,
+    WorkspaceOpen,
+    WorkspaceReveal,
+    WorkspaceCopyPath,
+    WorkspaceCopyRelativePath,
     WorkspaceRename,
     WorkspaceMove,
+    WorkspaceRefresh,
     WorkspaceUndo,
+    WorkspaceDelete,
     ResourceOpen,
     ResourceReveal,
     ResourceEditTitle,
@@ -251,6 +257,16 @@ impl Editor {
             }
             ContextMenuState::Workspace { .. } => ContextMenuCommandModel {
                 main: vec![
+                    entry(
+                        ContextMenuCommand::WorkspaceOpen,
+                        self.workspace_context_target_is_file(),
+                    ),
+                    entry(ContextMenuCommand::WorkspaceReveal, true),
+                    entry(ContextMenuCommand::WorkspaceCopyPath, true),
+                    entry(
+                        ContextMenuCommand::WorkspaceCopyRelativePath,
+                        !self.workspace_context_target_is_root(),
+                    ),
                     entry(ContextMenuCommand::WorkspaceNewFile, true),
                     entry(ContextMenuCommand::WorkspaceNewFolder, true),
                     entry(
@@ -261,9 +277,14 @@ impl Editor {
                         ContextMenuCommand::WorkspaceMove,
                         !self.workspace_context_target_is_root(),
                     ),
+                    entry(ContextMenuCommand::WorkspaceRefresh, true),
                     entry(
                         ContextMenuCommand::WorkspaceUndo,
                         self.workspace_can_undo_file_operation(),
+                    ),
+                    entry(
+                        ContextMenuCommand::WorkspaceDelete,
+                        !self.workspace_context_target_is_root(),
                     ),
                 ],
                 submenu: Vec::new(),
@@ -394,13 +415,29 @@ impl Editor {
             ContextMenuCommand::WorkspaceNewFolder => {
                 self.open_workspace_operation_dialog(WorkspaceOperationKind::NewFolder, window, cx)
             }
+            ContextMenuCommand::WorkspaceOpen => self.on_workspace_open_menu(&click, window, cx),
+            ContextMenuCommand::WorkspaceReveal => {
+                self.on_workspace_reveal_menu(&click, window, cx)
+            }
+            ContextMenuCommand::WorkspaceCopyPath => {
+                self.on_workspace_copy_path_menu(&click, window, cx)
+            }
+            ContextMenuCommand::WorkspaceCopyRelativePath => {
+                self.on_workspace_copy_relative_path_menu(&click, window, cx)
+            }
             ContextMenuCommand::WorkspaceRename => {
                 self.open_workspace_operation_dialog(WorkspaceOperationKind::Rename, window, cx)
             }
             ContextMenuCommand::WorkspaceMove => {
                 self.open_workspace_operation_dialog(WorkspaceOperationKind::Move, window, cx)
             }
+            ContextMenuCommand::WorkspaceRefresh => {
+                self.on_workspace_refresh_menu(&click, window, cx)
+            }
             ContextMenuCommand::WorkspaceUndo => self.undo_workspace_file_operation(cx),
+            ContextMenuCommand::WorkspaceDelete => {
+                self.on_workspace_delete_menu(&click, window, cx)
+            }
             ContextMenuCommand::ResourceOpen => {
                 self.open_resource_from_context_menu(&click, window, cx)
             }

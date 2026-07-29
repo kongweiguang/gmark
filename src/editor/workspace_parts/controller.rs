@@ -351,6 +351,13 @@ impl Editor {
         )
     }
 
+    pub(in crate::editor) fn workspace_context_target_is_file(&self) -> bool {
+        matches!(
+            self.context_menu.as_ref(),
+            Some(ContextMenuState::Workspace { path, .. }) if path.is_file()
+        )
+    }
+
     pub(crate) fn toggle_workspace_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let compact = workspace_uses_overlay(f32::from(window.viewport_size().width));
         if self.workspace.is_open {

@@ -227,6 +227,7 @@
         let menu_source = source.clone();
         editor.update(visual, |editor, cx| {
             editor.workspace.is_open = true;
+            editor.workspace.root = Some(root.clone());
             editor.context_menu = Some(super::ContextMenuState::Workspace {
                 position: gpui::point(gpui::px(710.0), gpui::px(510.0)),
                 path: menu_source,
@@ -247,18 +248,63 @@
         );
         assert!(visual.debug_bounds("workspace-context-rename").is_some());
         assert!(visual.debug_bounds("workspace-context-move").is_some());
+        assert!(visual.debug_bounds("workspace-context-delete").is_some());
         assert!(visual.debug_bounds("workspace-context-undo").is_some());
         for selector in [
+            "workspace-context-open-icon",
+            "workspace-context-reveal-icon",
+            "workspace-context-copy-path-icon",
+            "workspace-context-copy-relative-path-icon",
             "workspace-context-new-file-icon",
             "workspace-context-new-folder-icon",
             "workspace-context-rename-icon",
             "workspace-context-move-icon",
+            "workspace-context-refresh-icon",
             "workspace-context-undo-icon",
+            "workspace-context-delete-icon",
         ] {
             let icon = visual.debug_bounds(selector).unwrap();
             assert_eq!(f32::from(icon.size.width), 18.0, "{selector}");
             assert_eq!(f32::from(icon.size.height), 18.0, "{selector}");
         }
+
+        let delete_target = source.clone();
+        editor.update_in(visual, |editor, window, cx| {
+            editor.workspace.root = Some(root.clone());
+            editor.context_menu = Some(super::ContextMenuState::Workspace {
+                position: gpui::point(gpui::px(40.0), gpui::px(40.0)),
+                path: delete_target,
+            });
+            editor.on_workspace_delete_menu(&gpui::ClickEvent::default(), window, cx);
+            assert!(editor.workspace.operation_dialog.is_some());
+        });
+        visual.update(|window, cx| window.draw(cx).clear());
+        assert!(visual.debug_bounds("workspace-delete-dialog").is_some());
+        assert!(visual.debug_bounds("workspace-delete-target").is_some());
+        assert!(visual.debug_bounds("workspace-delete-actions").is_some());
+        assert!(visual.debug_bounds("cancel-workspace-delete").is_some());
+        assert!(visual.debug_bounds("confirm-workspace-delete").is_some());
+        let delete_dialog = visual.debug_bounds("workspace-delete-dialog").unwrap();
+        let delete_overlay = visual
+            .debug_bounds("workspace-delete-dialog-overlay")
+            .unwrap();
+        assert!(delete_dialog.left() >= delete_overlay.left());
+        assert!(delete_dialog.right() <= delete_overlay.right());
+        assert!(delete_dialog.top() >= delete_overlay.top());
+        assert!(delete_dialog.bottom() <= delete_overlay.bottom());
+        let delete_content = visual
+            .debug_bounds("workspace-delete-dialog-content")
+            .unwrap();
+        let delete_target = visual.debug_bounds("workspace-delete-target").unwrap();
+        let delete_actions = visual.debug_bounds("workspace-delete-actions").unwrap();
+        assert!(
+            delete_target.bottom() <= delete_content.bottom(),
+            "target={delete_target:?} content={delete_content:?}"
+        );
+        assert!(
+            delete_content.bottom() <= delete_actions.top(),
+            "content={delete_content:?} actions={delete_actions:?}"
+        );
 
         editor.update(visual, |editor, cx| {
             let input = cx.new(|cx| {
@@ -375,14 +421,19 @@
                 path: root.clone(),
             });
             assert!(editor.handle_context_menu_key(&key_event("down"), window, cx));
-            assert_eq!(editor.context_menu_keyboard_item, Some(0));
-            editor.context_menu_keyboard_item = Some(1);
+            assert_eq!(
+                editor.context_menu_keyboard_item,
+                Some(1),
+                "opening the root is disabled, so reveal is the first command"
+            );
+            editor.context_menu_keyboard_item = Some(9);
             assert!(editor.handle_context_menu_key(&key_event("down"), window, cx));
             assert_eq!(
                 editor.context_menu_keyboard_item,
-                Some(0),
-                "rename, move, and undo are unavailable for the root"
+                Some(1),
+                "open, relative path, rename, move, undo, and delete are unavailable for the root"
             );
+            editor.context_menu_keyboard_item = Some(4);
             assert!(editor.handle_context_menu_key(&key_event("enter"), window, cx));
             assert!(editor.context_menu.is_none());
             assert_eq!(editor.context_menu_keyboard_item, None);
@@ -395,6 +446,107 @@
             assert_eq!(dialog.input.read(cx).display_text(), "untitled.txt");
             assert!(dialog.input.read(cx).focus_handle.is_focused(window));
         });
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[gpui::test]
+    async fn workspace_context_menu_copies_absolute_and_relative_paths(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_workspace_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "gmark-workspace-copy-path-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let folder = root.join("notes");
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("daily.md");
+        fs::write(&path, "# Daily\n").unwrap();
+        let (editor, visual) =
+            cx.add_window_view(|_window, cx| super::Editor::from_markdown(cx, String::new(), None));
+
+        let relative_target = path.clone();
+        editor.update_in(visual, |editor, window, cx| {
+            editor.workspace.root = Some(root.clone());
+            editor.context_menu = Some(super::ContextMenuState::Workspace {
+                position: gpui::point(gpui::px(40.0), gpui::px(40.0)),
+                path: relative_target,
+            });
+            editor.on_workspace_copy_relative_path_menu(
+                &gpui::ClickEvent::default(),
+                window,
+                cx,
+            );
+        });
+        visual.update(|_window, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("notes/daily.md".to_owned())
+            );
+        });
+
+        let absolute_target = path.clone();
+        editor.update_in(visual, |editor, window, cx| {
+            editor.context_menu = Some(super::ContextMenuState::Workspace {
+                position: gpui::point(gpui::px(40.0), gpui::px(40.0)),
+                path: absolute_target,
+            });
+            editor.on_workspace_copy_path_menu(&gpui::ClickEvent::default(), window, cx);
+        });
+        visual.update(|_window, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some(path.to_string_lossy().into_owned())
+            );
+        });
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[gpui::test]
+    async fn workspace_delete_confirmation_blocks_dirty_open_file(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_workspace_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "gmark-workspace-delete-dirty-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("dirty.md");
+        fs::write(&path, "# dirty\n").unwrap();
+        let editor_path = path.clone();
+        let (editor, visual) = cx.add_window_view(move |_window, cx| {
+            super::Editor::from_markdown(cx, "# dirty\n".to_owned(), Some(editor_path))
+        });
+
+        editor.update_in(visual, |editor, window, cx| {
+            editor.workspace.root = Some(root.clone());
+            editor.set_document_dirty_for_test(true);
+            editor.context_menu = Some(super::ContextMenuState::Workspace {
+                position: gpui::point(gpui::px(40.0), gpui::px(40.0)),
+                path: path.clone(),
+            });
+            editor.on_workspace_delete_menu(&gpui::ClickEvent::default(), window, cx);
+            let dialog = editor
+                .workspace
+                .operation_dialog
+                .as_ref()
+                .expect("delete confirmation");
+            assert_eq!(dialog.kind, super::WorkspaceOperationKind::Delete);
+            assert!(dialog.plan.is_none());
+            assert_eq!(
+                dialog.error.as_deref(),
+                Some(
+                    cx.global::<crate::i18n::I18nManager>()
+                        .strings()
+                        .workspace_delete_dirty_error
+                        .as_str()
+                )
+            );
+        });
+
+        assert!(path.exists());
         let _ = fs::remove_dir_all(root);
     }
 

@@ -306,6 +306,18 @@ impl I18nStrings {
             file_open_failed_message: "该文件可能是二进制文件、编码不受支持，或当前无法读取。".into(),
             file_open_with_system: "使用系统默认程序打开".into(),
             file_reveal_in_manager: "在文件资源管理器中显示".into(),
+            workspace_open: "打开".into(),
+            workspace_copy_path: "复制路径".into(),
+            workspace_copy_relative_path: "复制相对路径".into(),
+            workspace_refresh: "刷新".into(),
+            workspace_delete: "删除…".into(),
+            workspace_delete_title: "删除文件或文件夹？".into(),
+            workspace_delete_confirm: "移到回收站".into(),
+            workspace_delete_message_template:
+                "“{path}”将被移到系统回收站。你可以稍后从回收站恢复。".into(),
+            workspace_delete_dirty_error: "目标中有未保存的文件，请先保存或关闭相关标签。".into(),
+            workspace_delete_completed_dirty_error:
+                "目标已移到回收站；操作期间产生未保存更改的标签已保留，请另存为。".into(),
             workspace_rename: "重命名".into(),
             workspace_move: "移动".into(),
             workspace_new_file: "新建文件…".into(),
@@ -820,6 +832,21 @@ impl I18nStrings {
             file_open_failed_message: "The file may be binary, use an unsupported encoding, or be unreadable right now.".into(),
             file_open_with_system: "Open with Default App".into(),
             file_reveal_in_manager: "Show in File Manager".into(),
+            workspace_open: "Open".into(),
+            workspace_copy_path: "Copy Path".into(),
+            workspace_copy_relative_path: "Copy Relative Path".into(),
+            workspace_refresh: "Refresh".into(),
+            workspace_delete: "Delete…".into(),
+            workspace_delete_title: "Delete File or Folder?".into(),
+            workspace_delete_confirm: "Move to Trash".into(),
+            workspace_delete_message_template:
+                "“{path}” will be moved to the system trash, where it can be restored later."
+                    .into(),
+            workspace_delete_dirty_error:
+                "The target contains unsaved files. Save or close the affected tabs first.".into(),
+            workspace_delete_completed_dirty_error:
+                "The target was moved to the trash. Tabs edited during deletion were kept; save them to a new path."
+                    .into(),
             workspace_rename: "Rename".into(),
             workspace_move: "Move".into(),
             workspace_new_file: "New File…".into(),

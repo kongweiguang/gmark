@@ -1,59 +1,6 @@
 // @author kongweiguang
 
 use super::*;
-use anyhow::Context as _;
-use std::path::Path;
-use std::process::Command;
-
-fn open_with_system(path: &Path) -> anyhow::Result<()> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("explorer.exe");
-        command.arg(path);
-        command
-    };
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg("--").arg(path);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(path);
-        command
-    };
-    command
-        .spawn()
-        .with_context(|| format!("failed to open '{}' with the system", path.display()))?;
-    Ok(())
-}
-
-fn reveal_in_file_manager(path: &Path) -> anyhow::Result<()> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("explorer.exe");
-        command.arg("/select,").arg(path);
-        command
-    };
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg("-R").arg(path);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(path.parent().unwrap_or(path));
-        command
-    };
-    command
-        .spawn()
-        .with_context(|| format!("failed to reveal '{}'", path.display()))?;
-    Ok(())
-}
 
 impl Editor {
     fn run_file_open_failure_action(&mut self, reveal: bool, cx: &mut Context<Self>) {
@@ -65,9 +12,9 @@ impl Editor {
             return;
         };
         let result = if reveal {
-            reveal_in_file_manager(&path)
+            crate::editor::system_file::reveal_in_file_manager(&path)
         } else {
-            open_with_system(&path)
+            crate::editor::system_file::open_with_system(&path)
         };
         if let Some(failure) = self.file_open_failure.as_mut() {
             failure.action_error = result.err().map(|error| error.to_string());

@@ -46,7 +46,10 @@ impl PreferencesWindow {
                 cx,
             ));
         if self.image_dropdown_open {
-            let mut list = Self::dropdown_list(theme).left_0();
+            let mut list = Self::dropdown_list(theme)
+                .left_0()
+                .id("preferences-image-dropdown-list")
+                .debug_selector(|| "preferences-image-dropdown-list".to_owned());
             for (index, behavior) in options.into_iter().enumerate() {
                 let selected = behavior == self.image_paste_behavior;
                 let label = Self::image_paste_behavior_label(behavior, strings);

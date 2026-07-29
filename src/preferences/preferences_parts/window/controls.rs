@@ -656,6 +656,8 @@ impl PreferencesWindow {
             let last_file_label = strings.preferences_startup_last_opened_file.clone();
             let list = Self::dropdown_list(theme)
                 .right_0()
+                .id("preferences-startup-dropdown-list")
+                .debug_selector(|| "preferences-startup-dropdown-list".to_owned())
                 .child(Self::dropdown_item(
                     "preferences-startup-new-file",
                     new_file_label,
@@ -699,7 +701,11 @@ impl PreferencesWindow {
                 cx,
             ));
         let auto_save_list = if self.auto_save_dropdown_open {
-            let mut list = Self::dropdown_list(theme).top(px(88.0)).right_0();
+            let mut list = Self::dropdown_list(theme)
+                .top(px(88.0))
+                .right_0()
+                .id("preferences-auto-save-dropdown-list")
+                .debug_selector(|| "preferences-auto-save-dropdown-list".to_owned());
             for (index, option) in [AutoSavePreference::Off, AutoSavePreference::AfterDelay]
                 .into_iter()
                 .enumerate()
@@ -836,8 +842,9 @@ impl PreferencesWindow {
         let light_label = strings.preferences_theme_light.clone();
         let system_label = strings.preferences_follow_system_theme.clone();
         let xcode_label = "Xcode";
-        let jetbrains_label = "JetBrains";
+        let fleet_label = "Fleet";
         let obsidian_label = "Obsidian";
+        let claude_label = "Claude";
         let appearance_control = div().w(px(280.0)).flex().gap(px(4.0));
         let appearance_dark = self.theme_appearance_option(
             "preferences-theme-appearance-dark",
@@ -868,7 +875,7 @@ impl PreferencesWindow {
         );
         let appearance_control =
             appearance_control.children([appearance_dark, appearance_light, appearance_system]);
-        let palette_control = div().w(px(280.0)).flex().gap(px(4.0));
+        let palette_control = div().w(px(360.0)).flex().gap(px(4.0));
         let palette_xcode = self.theme_palette_option(
             "preferences-theme-palette-xcode",
             0,
@@ -878,12 +885,12 @@ impl PreferencesWindow {
             theme,
             cx,
         );
-        let palette_jetbrains = self.theme_palette_option(
-            "preferences-theme-palette-jetbrains",
+        let palette_fleet = self.theme_palette_option(
+            "preferences-theme-palette-fleet",
             1,
-            jetbrains_label.into(),
-            ThemePalette::JetBrains,
-            self.theme_palette == ThemePalette::JetBrains,
+            fleet_label.into(),
+            ThemePalette::Fleet,
+            self.theme_palette == ThemePalette::Fleet,
             theme,
             cx,
         );
@@ -896,8 +903,21 @@ impl PreferencesWindow {
             theme,
             cx,
         );
-        let palette_control =
-            palette_control.children([palette_xcode, palette_jetbrains, palette_obsidian]);
+        let palette_claude = self.theme_palette_option(
+            "preferences-theme-palette-claude",
+            3,
+            claude_label.into(),
+            ThemePalette::Claude,
+            self.theme_palette == ThemePalette::Claude,
+            theme,
+            cx,
+        );
+        let palette_control = palette_control.children([
+            palette_xcode,
+            palette_fleet,
+            palette_obsidian,
+            palette_claude,
+        ]);
         let language_dropdown = div()
             .relative()
             .w(px(280.0))
@@ -917,10 +937,12 @@ impl PreferencesWindow {
                 ),
             );
         let language_list = if self.language_dropdown_open {
+            // 前两行控件各高 34px、行间距 12px；语言菜单必须从第三行按钮底部再留 4px。
             let mut list = Self::dropdown_list(theme)
-                .top(px(80.0))
+                .top(px(128.0))
                 .right_0()
                 .id("preferences-language-dropdown-list")
+                .debug_selector(|| "preferences-language-dropdown-list".to_owned())
                 .max_h(px(240.0))
                 .overflow_y_scroll();
             for (index, entry) in self.language_options.clone().into_iter().enumerate() {

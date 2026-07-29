@@ -7,10 +7,12 @@ use gpui::{App, Global, WindowAppearance};
 
 const XCODE_DARK_ID: &str = "xcode-dark";
 const XCODE_LIGHT_ID: &str = "xcode-light";
-const JETBRAINS_DARK_ID: &str = "jetbrains-dark";
-const JETBRAINS_LIGHT_ID: &str = "jetbrains-light";
+const FLEET_DARK_ID: &str = "fleet-dark";
+const FLEET_LIGHT_ID: &str = "fleet-light";
 const OBSIDIAN_DARK_ID: &str = "obsidian-dark";
 const OBSIDIAN_LIGHT_ID: &str = "obsidian-light";
+const CLAUDE_DARK_ID: &str = "claude-dark";
+const CLAUDE_LIGHT_ID: &str = "claude-light";
 
 /// The requested relationship between the application and the platform appearance.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,24 +60,27 @@ impl ThemeAppearance {
 pub enum ThemePalette {
     #[default]
     Xcode,
-    JetBrains,
+    Fleet,
     Obsidian,
+    Claude,
 }
 
 impl ThemePalette {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Xcode => "xcode",
-            Self::JetBrains => "jetbrains",
+            Self::Fleet => "fleet",
             Self::Obsidian => "obsidian",
+            Self::Claude => "claude",
         }
     }
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "xcode" => Some(Self::Xcode),
-            "jetbrains" => Some(Self::JetBrains),
+            "fleet" => Some(Self::Fleet),
             "obsidian" => Some(Self::Obsidian),
+            "claude" => Some(Self::Claude),
             _ => None,
         }
     }
@@ -108,12 +113,17 @@ pub(crate) fn resolved_theme_id(
     match (palette, appearance) {
         (ThemePalette::Xcode, ThemeAppearance::Dark) => XCODE_DARK_ID,
         (ThemePalette::Xcode, ThemeAppearance::Light) => XCODE_LIGHT_ID,
-        (ThemePalette::JetBrains, ThemeAppearance::Dark) => JETBRAINS_DARK_ID,
-        (ThemePalette::JetBrains, ThemeAppearance::Light) => JETBRAINS_LIGHT_ID,
+        (ThemePalette::Fleet, ThemeAppearance::Dark) => FLEET_DARK_ID,
+        (ThemePalette::Fleet, ThemeAppearance::Light) => FLEET_LIGHT_ID,
         (ThemePalette::Obsidian, ThemeAppearance::Dark) => OBSIDIAN_DARK_ID,
         (ThemePalette::Obsidian, ThemeAppearance::Light) => OBSIDIAN_LIGHT_ID,
+        (ThemePalette::Claude, ThemeAppearance::Dark) => CLAUDE_DARK_ID,
+        (ThemePalette::Claude, ThemeAppearance::Light) => CLAUDE_LIGHT_ID,
         (
-            ThemePalette::Xcode | ThemePalette::JetBrains | ThemePalette::Obsidian,
+            ThemePalette::Xcode
+            | ThemePalette::Fleet
+            | ThemePalette::Obsidian
+            | ThemePalette::Claude,
             ThemeAppearance::System,
         ) => {
             unreachable!("system appearance must be resolved before selecting a theme")
@@ -130,20 +140,21 @@ fn build_theme(
     let (id, theme) = match (palette, resolved_appearance) {
         (ThemePalette::Xcode, ThemeAppearance::Dark) => (XCODE_DARK_ID, Theme::xcode_dark()),
         (ThemePalette::Xcode, ThemeAppearance::Light) => (XCODE_LIGHT_ID, Theme::xcode_light()),
-        (ThemePalette::JetBrains, ThemeAppearance::Dark) => {
-            (JETBRAINS_DARK_ID, Theme::jetbrains_dark())
-        }
-        (ThemePalette::JetBrains, ThemeAppearance::Light) => {
-            (JETBRAINS_LIGHT_ID, Theme::jetbrains_light())
-        }
+        (ThemePalette::Fleet, ThemeAppearance::Dark) => (FLEET_DARK_ID, Theme::fleet_dark()),
+        (ThemePalette::Fleet, ThemeAppearance::Light) => (FLEET_LIGHT_ID, Theme::fleet_light()),
         (ThemePalette::Obsidian, ThemeAppearance::Dark) => {
             (OBSIDIAN_DARK_ID, Theme::obsidian_dark())
         }
         (ThemePalette::Obsidian, ThemeAppearance::Light) => {
             (OBSIDIAN_LIGHT_ID, Theme::obsidian_light())
         }
+        (ThemePalette::Claude, ThemeAppearance::Dark) => (CLAUDE_DARK_ID, Theme::claude_dark()),
+        (ThemePalette::Claude, ThemeAppearance::Light) => (CLAUDE_LIGHT_ID, Theme::claude_light()),
         (
-            ThemePalette::Xcode | ThemePalette::JetBrains | ThemePalette::Obsidian,
+            ThemePalette::Xcode
+            | ThemePalette::Fleet
+            | ThemePalette::Obsidian
+            | ThemePalette::Claude,
             ThemeAppearance::System,
         ) => {
             unreachable!("system appearance must be resolved before building a theme")

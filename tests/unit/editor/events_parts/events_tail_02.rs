@@ -1,6 +1,35 @@
 // @author kongweiguang
 
     #[gpui::test]
+    async fn enter_at_heading_start_inserts_paragraph_before_intact_heading(
+        cx: &mut TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "# Heading\n\nAfter".to_string(), None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let heading = editor.document.visible_blocks()[0].entity.clone();
+                heading.update(cx, |block, block_cx| {
+                    block.move_to(0, block_cx);
+                    block.on_newline(&Newline, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 3);
+            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(visible[0].entity.read(cx).display_text(), "");
+            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Heading { level: 1 });
+            assert_eq!(visible[1].entity.read(cx).display_text(), "Heading");
+            assert_eq!(visible[2].entity.read(cx).display_text(), "After");
+            assert_eq!(editor.pending_focus, Some(visible[0].entity.entity_id()));
+        });
+    }
+
+    #[gpui::test]
     async fn deleting_focused_mermaid_preview_removes_the_whole_block(
         cx: &mut TestAppContext,
     ) {

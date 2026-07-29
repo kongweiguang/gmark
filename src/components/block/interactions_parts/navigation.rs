@@ -776,6 +776,7 @@ impl Block {
             cx.emit(BlockEvent::RequestNewline {
                 trailing: InlineTextTree::plain(String::new()),
                 source_already_mutated: false,
+                insert_before: false,
             });
         } else if self.callout_depth > 0 {
             cx.emit(BlockEvent::RequestCalloutBreak);

@@ -2,7 +2,7 @@
 
 [package]
 name = "gmark"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 rust-version = "1.95"
 authors = ["kongweiguang"]
@@ -111,6 +111,7 @@ schemars = "1"
 futures = "0.3"
 semver = "1"
 toml = "1"
+trash = "5.2.6"
 chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 url = "2"

@@ -116,6 +116,60 @@ pub(super) fn plan_workspace_create(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct WorkspaceDeletePlan {
+    pub(super) root: PathBuf,
+    pub(super) path: PathBuf,
+}
+
+impl WorkspaceDeletePlan {
+    pub(super) fn execute(&self) -> Result<()> {
+        self.execute_with(|path| trash::delete(path).map_err(Into::into))
+    }
+
+    fn execute_with(&self, delete: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+        let root = dunce::canonicalize(&self.root).with_context(|| {
+            format!("failed to resolve workspace root '{}'", self.root.display())
+        })?;
+        let path = dunce::canonicalize(&self.path).with_context(|| {
+            format!(
+                "failed to resolve deletion target '{}'",
+                self.path.display()
+            )
+        })?;
+        ensure_within_root(&root, &path, "deletion target")?;
+        if path == root {
+            bail!("the workspace root cannot be deleted");
+        }
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to inspect deletion target '{}'", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            bail!("symbolic links cannot be deleted from the workspace");
+        }
+        delete(&path).with_context(|| format!("failed to move '{}' to the trash", path.display()))
+    }
+}
+
+pub(super) fn plan_workspace_delete(root: &Path, path: &Path) -> Result<WorkspaceDeletePlan> {
+    let root = dunce::canonicalize(root)
+        .with_context(|| format!("failed to resolve workspace root '{}'", root.display()))?;
+    let path = dunce::canonicalize(path)
+        .with_context(|| format!("failed to resolve deletion target '{}'", path.display()))?;
+    ensure_within_root(&root, &path, "deletion target")?;
+    if path == root {
+        bail!("the workspace root cannot be deleted");
+    }
+    let metadata = fs::symlink_metadata(&path)
+        .with_context(|| format!("failed to inspect deletion target '{}'", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        bail!("symbolic links cannot be deleted from the workspace");
+    }
+    if !metadata.is_file() && !metadata.is_dir() {
+        bail!("deletion target is not a regular file or directory");
+    }
+    Ok(WorkspaceDeletePlan { root, path })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct WorkspaceFileRewrite {
     pub(super) before_path: PathBuf,
     pub(super) after_path: PathBuf,
