@@ -193,6 +193,89 @@ fn resident_host_session_keeps_probe_limits_and_only_marks_runtime_growth() {
 }
 
 #[test]
+fn resident_recovery_contract_records_the_resulting_undo_snapshot() {
+    let temp = tempfile::tempdir().expect("resident recovery tempdir");
+    let path = temp.path().join("recovery.csv");
+    fs::write(&path, "one").expect("resident recovery fixture");
+    let source = FileSource::open(&path).expect("resident recovery source");
+    let probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
+            .expect("resident recovery probe");
+    assert_eq!(probe.strategy, OpenStrategy::Resident);
+    let index = LineIndex::build(&source).expect("resident recovery index");
+    let mut document = build_document_session(&probe, &source, source.clone(), index, false)
+        .expect("resident recovery session");
+    let mut journal =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)
+            .expect("resident recovery journal");
+    assert!(matches!(&journal, DocumentRecoveryJournal::Resident(_)));
+
+    document
+        .replace_text(0..3, "two")
+        .expect("replace resident source");
+    journal
+        .record_after_change(
+            &document,
+            &RecoveryRecord {
+                action: RecoveryAction::Transaction(Transaction::new(
+                    gmark_document_core::DocumentRevision(0),
+                    vec![SourceEdit::new(0..3, "two")],
+                )),
+                selection: Some(SourceSelection::collapsed(3, SourceAffinity::After)),
+                view_id: DocumentViewId::source(),
+            },
+        )
+        .expect("record resident replacement");
+    assert!(document.undo(), "resident edit must be undoable");
+    journal
+        .record_after_change(
+            &document,
+            &RecoveryRecord {
+                action: RecoveryAction::Undo,
+                selection: Some(SourceSelection::collapsed(0, SourceAffinity::Before)),
+                view_id: DocumentViewId::source(),
+            },
+        )
+        .expect("record resident undo snapshot");
+
+    let recovered = gmark_document_runtime::replay_resident_recovery_journal(journal.path())
+        .expect("replay resident runtime journal");
+    assert_eq!(recovered.source, "one");
+    assert_eq!(
+        recovered.selection,
+        SourceSelection::collapsed(0, SourceAffinity::Before)
+    );
+}
+
+#[test]
+fn paged_recovery_contract_keeps_the_large_journal_path() {
+    let temp = tempfile::tempdir().expect("paged recovery tempdir");
+    let path = temp.path().join("paged.txt");
+    fs::write(&path, "paged source").expect("paged recovery fixture");
+    let source = FileSource::open(&path).expect("paged recovery source");
+    let mut probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
+            .expect("paged recovery probe");
+    probe.strategy = OpenStrategy::Paged;
+    let identity = source.identity().expect("paged recovery identity");
+    let index = LineIndex::build(&source).expect("paged recovery index");
+    let piece = PieceDocument::open(source.clone(), index).expect("paged recovery document");
+    let document = build_paged_session(&probe, piece, identity).expect("paged recovery session");
+    let journal =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)
+            .expect("paged recovery journal");
+
+    assert!(matches!(&journal, DocumentRecoveryJournal::Paged(_)));
+    assert_eq!(
+        journal
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("large-journal")
+    );
+}
+
+#[test]
 fn far_single_line_window_is_bounded_and_keeps_search_anchor_visible() {
     let target = MAX_RENDERED_LINE_BYTES + 12_345;
     let mut text = "a".repeat(target as usize);

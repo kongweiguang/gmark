@@ -20,7 +20,7 @@ use gmark_document_core::{
     SourceAffinity, SourceAnchor, SourceEdit, SourceLocator, SourceSelection, TextEncoding,
     Transaction, ViewDescriptor, ViewFormat,
 };
-use gmark_document_runtime::DocumentSession;
+use gmark_document_runtime::{DocumentSession, ResidentRecoveryError, ResidentRecoveryJournal};
 #[cfg(test)]
 use gmark_json_graph::JsonGraphEdgeKind;
 use gmark_json_graph::{
@@ -32,11 +32,10 @@ use gmark_paged_document::{
     DelimitedEdit, DelimitedFilterOptions, DelimitedIndex, DelimitedIndexOptions, EncodedSavePlan,
     ExternalChange, FileSource, JsonIndex, JsonIndexOptions, LineIndex, MarkdownTableIndex,
     OpenProbe, OpenStrategy, PagedDocument as PagedDocumentAdapter, PagedDocumentError,
-    PagedRecoveryJournal, PagedRecoverySelection, PieceDocument, PreparedUtf8Source,
-    SearchCancellation, SearchMatch, SearchOptions, SelectionTransfer, ViewportRequest,
-    prepare_utf8_source, replay_paged_recovery, search_file_source, selection_transfer_for_len,
-    serialize_delimited_record, validate_json_lines_cancellable,
-    validate_json_lines_from_cancellable,
+    PagedRecoveryJournal, PieceDocument, PreparedUtf8Source, SearchCancellation, SearchMatch,
+    SearchOptions, SelectionTransfer, ViewportRequest, prepare_utf8_source, replay_paged_recovery,
+    search_file_source, selection_transfer_for_len, serialize_delimited_record,
+    validate_json_lines_cancellable, validate_json_lines_from_cancellable,
 };
 use gpui::prelude::*;
 use gpui::{
@@ -54,7 +53,6 @@ use crate::components::{
     SourceLayoutIdentity, Undo, source_line_number_gutter_width,
 };
 use crate::document_runtime::DocumentCoordinator;
-use crate::editor::DocumentMenuFormat;
 use crate::source_tools::{FoldProjectionIndex, ResidentFoldParser, SourceLanguageId};
 
 use crate::i18n::{I18nManager, I18nStrings};
@@ -258,22 +256,138 @@ fn recovery_view_id(mode: DocumentHostViewMode) -> DocumentViewId {
     }
 }
 
+/// Recovery backend selection follows the installed document store, not the file's
+/// most recent probe. This keeps a resident session on the runtime journal contract
+/// even when its on-disk file later grows past the open threshold.
+pub(crate) enum DocumentRecoveryJournal {
+    Resident(ResidentRecoveryJournal),
+    Paged(PagedRecoveryJournal),
+}
+
+impl DocumentRecoveryJournal {
+    fn create(
+        recovery_dir: &Path,
+        source: &FileSource,
+        encoding: TextEncoding,
+        document: &DocumentSession,
+    ) -> Result<Self, PagedDocumentError> {
+        match document.store.kind() {
+            gmark_document_core::DocumentBackendKind::Resident => {
+                let source_document = document.resident_source_document().ok_or_else(|| {
+                    PagedDocumentError::Recovery(
+                        "resident recovery requires a resident source document".to_owned(),
+                    )
+                })?;
+                ResidentRecoveryJournal::create_formatted(
+                    recovery_dir,
+                    Some(source.path().to_path_buf()),
+                    source_document.text(),
+                    source_document.source_format(),
+                )
+                .map(Self::Resident)
+                .map_err(map_resident_recovery_error)
+            }
+            gmark_document_core::DocumentBackendKind::Paged => {
+                PagedRecoveryJournal::create(recovery_dir, source, encoding).map(Self::Paged)
+            }
+        }
+    }
+
+    /// Resident journals receive the resulting source snapshot so undo/redo and
+    /// formatting-only changes retain the same journal semantics as direct edits.
+    fn record_after_change(
+        &mut self,
+        document: &DocumentSession,
+        record: &RecoveryRecord,
+    ) -> Result<(), gmark_document_core::PersistenceError> {
+        match self {
+            Self::Resident(journal) => {
+                let source_document = document.resident_source_document().ok_or_else(|| {
+                    gmark_document_core::PersistenceError::Recovery(
+                        "resident recovery requires a resident source document".to_owned(),
+                    )
+                })?;
+                journal
+                    .record_formatted(
+                        &source_document.text(),
+                        source_document.source_format(),
+                        record
+                            .selection
+                            .unwrap_or_else(|| document.source_selection()),
+                        record.view_id.as_str(),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        gmark_document_core::PersistenceError::Recovery(error.to_string())
+                    })
+            }
+            Self::Paged(journal) => journal.record(record),
+        }
+    }
+
+    /// A successful save/discard removes the old durable session. Resident
+    /// journals additionally refresh their in-memory clean baseline so a failed
+    /// removal remains retryable through the existing error path.
+    fn checkpoint(&mut self, document: &DocumentSession) -> Result<(), PagedDocumentError> {
+        match self {
+            Self::Resident(journal) => {
+                let source_document = document.resident_source_document().ok_or_else(|| {
+                    PagedDocumentError::Recovery(
+                        "resident recovery requires a resident source document".to_owned(),
+                    )
+                })?;
+                journal
+                    .checkpoint_formatted(
+                        Some(document.file_identity.canonical_path.clone()),
+                        source_document.text(),
+                        source_document.source_format(),
+                    )
+                    .map_err(map_resident_recovery_error)
+            }
+            Self::Paged(journal) => journal.checkpoint(),
+        }
+    }
+
+    fn discard(self) -> Result<(), PagedDocumentError> {
+        match self {
+            Self::Resident(journal) => journal.discard().map_err(map_resident_recovery_error),
+            Self::Paged(journal) => journal.checkpoint(),
+        }
+    }
+
+    #[cfg(test)]
+    fn path(&self) -> &Path {
+        match self {
+            Self::Resident(journal) => journal.path(),
+            Self::Paged(journal) => journal.path(),
+        }
+    }
+}
+
+fn map_resident_recovery_error(error: ResidentRecoveryError) -> PagedDocumentError {
+    PagedDocumentError::Recovery(error.to_string())
+}
+
 fn record_recovery_transaction(
-    backend: &mut dyn RecoveryBackend,
+    journal: &mut DocumentRecoveryJournal,
+    document: &DocumentSession,
     base_revision: u64,
     range: Range<u64>,
     replacement: impl Into<Arc<str>>,
     selection: Option<SourceSelection>,
     view_id: DocumentViewId,
 ) -> Result<(), gmark_document_core::PersistenceError> {
-    backend.record(&RecoveryRecord {
-        action: RecoveryAction::Transaction(Transaction::new(
-            gmark_document_core::DocumentRevision(base_revision),
-            vec![SourceEdit::new(range, replacement)],
-        )),
-        selection,
-        view_id,
-    })
+    journal.record_after_change(
+        document,
+        &RecoveryRecord {
+            action: RecoveryAction::Transaction(Transaction::new(
+                gmark_document_core::DocumentRevision(base_revision),
+                vec![SourceEdit::new(range, replacement)],
+            )),
+            selection,
+            view_id,
+        },
+    )
 }
 
 fn derived_views_enabled(strategy: OpenStrategy) -> bool {
@@ -339,6 +453,42 @@ pub(crate) enum DocumentHostMode {
     Source,
     Preview,
     Split,
+}
+
+/// DocumentHost 与 Editor 菜单共享的中立格式契约；宿主不能反向依赖 Editor 类型。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentMenuFormat {
+    Markdown,
+    Json,
+    JsonLines,
+    Csv,
+    Tsv,
+    Text,
+}
+
+impl DocumentMenuFormat {
+    pub(crate) fn from_document_format(format: &DocumentFormat) -> Self {
+        match format {
+            DocumentFormat::Markdown => Self::Markdown,
+            DocumentFormat::Json => Self::Json,
+            DocumentFormat::JsonLines => Self::JsonLines,
+            DocumentFormat::Delimited { delimiter: b'\t' } => Self::Tsv,
+            DocumentFormat::Delimited { .. } => Self::Csv,
+            DocumentFormat::PlainText => Self::Text,
+        }
+    }
+
+    pub(crate) fn label(self, chinese: bool) -> &'static str {
+        match (self, chinese) {
+            (Self::Markdown, _) => "Markdown",
+            (Self::Json, _) => "JSON",
+            (Self::JsonLines, _) => "JSONL",
+            (Self::Csv, _) => "CSV",
+            (Self::Tsv, _) => "TSV",
+            (Self::Text, true) => "文本",
+            (Self::Text, false) => "Text",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1657,9 +1807,13 @@ impl Drop for DocumentHost {
         }
         // 未编辑的预建日志只有身份帧，不应在下次启动伪装成恢复文档。
         if !document_dirty_state(&self.document, &self.pending_dirty)
-            && let Some(journal) = self.coordinator.recovery_journal.take()
+            && let Some(mut journal) = self.coordinator.recovery_journal.take()
         {
-            let _ = journal.checkpoint();
+            if let Some(document) = self.document.as_ref() {
+                let _ = journal.checkpoint(document);
+            } else {
+                let _ = journal.discard();
+            }
         }
     }
 }

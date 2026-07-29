@@ -12,6 +12,24 @@ fn selection(offset: usize) -> RecoverySelection {
     }
 }
 
+fn crc_valid_frame_counts(path: &std::path::Path) -> (usize, usize) {
+    let bytes = std::fs::read(path).expect("read compacted recovery journal");
+    let mut cursor = 0usize;
+    let mut bases = 0usize;
+    let mut edits = 0usize;
+    while cursor < bytes.len() {
+        let record = gmark_recovery_codec::decode_record(&bytes, cursor)
+            .expect("decode CRC-valid recovery frame")
+            .expect("complete recovery frame");
+        match record.kind {
+            gmark_recovery_codec::RecordKind::Base => bases += 1,
+            gmark_recovery_codec::RecordKind::Edit => edits += 1,
+        }
+        cursor = record.next;
+    }
+    (bases, edits)
+}
+
 #[test]
 fn recovery_journal_preserves_source_anchor_affinity_and_direction() {
     let temp = tempfile::tempdir().unwrap();
@@ -366,7 +384,9 @@ fn long_session_compacts_atomically_and_preserves_latest_mode_and_selection() {
     assert_eq!(recovered.source, source);
     assert_eq!(recovered.selection, selection(source.len()));
     assert_eq!(recovered.view_mode, "rendered");
-    assert!(journal.edit_count < 20);
+    let (bases, edits) = crc_valid_frame_counts(journal.path());
+    assert_eq!(bases, 1);
+    assert!(edits < 20);
 }
 
 #[test]

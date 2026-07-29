@@ -267,7 +267,8 @@ impl DocumentHost {
                         view.prepared_source = Some(recovered.prepared_source);
                         view.provisional_source = None;
                         view.invalidate_source_rows();
-                        view.coordinator.recovery_journal = Some(recovered.journal);
+                        view.coordinator.recovery_journal =
+                            Some(DocumentRecoveryJournal::Paged(recovered.journal));
                         view.coordinator.recovery_error = (recovered.read_status
                             == gmark_paged_document::PagedRecoveryReadStatus::TruncatedTail)
                             .then(|| strings.large_document_text("recovered_tail").into());
@@ -346,12 +347,16 @@ impl DocumentHost {
 
     /// “不保存”是终止当前恢复会话，不只是隐藏窗口级 dirty 标记。
     pub(crate) fn discard_unsaved_changes(&mut self, cx: &mut Context<Self>) {
-        if let Some(journal) = self.coordinator.recovery_journal.take()
-            && let Err(error) = journal.checkpoint()
-        {
-            self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
-            // 保留句柄，让 Drop 在窗口销毁时按 clean 状态再尝试一次 checkpoint。
-            self.coordinator.recovery_journal = Some(journal);
+        if let Some(mut journal) = self.coordinator.recovery_journal.take() {
+            if let Some(document) = self.document.as_ref() {
+                if let Err(error) = journal.checkpoint(document) {
+                    self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
+                    // 保留句柄，让 Drop 在窗口销毁时按 clean 状态再尝试一次 checkpoint。
+                    self.coordinator.recovery_journal = Some(journal);
+                }
+            } else if let Err(error) = journal.discard() {
+                self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
+            }
         }
         set_document_dirty_state(&mut self.document, &mut self.pending_dirty, false);
         cx.emit(DocumentHostEvent::StateChanged);

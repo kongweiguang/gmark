@@ -907,13 +907,11 @@ impl DocumentHost {
             );
         }
         let caret = range.start.saturating_add(replacement.len() as u64);
-        let selection = Some(PagedRecoverySelection::collapsed(
-            caret,
-            SourceAffinity::After,
-        ));
+        let selection = Some(SourceSelection::collapsed(caret, SourceAffinity::After));
         if let Some(journal) = self.coordinator.recovery_journal.as_mut()
             && let Err(error) = record_recovery_transaction(
                 journal,
+                &next_document,
                 next_document.revision().saturating_sub(1),
                 range.clone(),
                 replacement,
@@ -1225,12 +1223,12 @@ impl DocumentHost {
                     SourceAnchor::new(range.start.checked_add(start)?, SourceAffinity::Before);
                 let end = SourceAnchor::new(range.start.checked_add(end)?, SourceAffinity::After);
                 Some(if block.read(cx).selection_reversed {
-                    PagedRecoverySelection {
+                    SourceSelection {
                         anchor: end,
                         head: start,
                     }
                 } else {
-                    PagedRecoverySelection {
+                    SourceSelection {
                         anchor: start,
                         head: end,
                     }
@@ -1257,6 +1255,7 @@ impl DocumentHost {
                 if let Some(journal) = self.coordinator.recovery_journal.as_mut()
                     && let Err(error) = record_recovery_transaction(
                         journal,
+                        &next_document,
                         next_document.revision().saturating_sub(1),
                         range.clone(),
                         replacement.as_str(),
@@ -1376,13 +1375,17 @@ impl DocumentHost {
                 .document
                 .as_ref()
                 .map(DocumentSession::source_selection);
-            if let Some(journal) = self.coordinator.recovery_journal.as_mut()
-                && let Err(error) = journal.record(&RecoveryRecord {
+            if let (Some(journal), Some(document)) = (
+                self.coordinator.recovery_journal.as_mut(),
+                self.document.as_ref(),
+            ) && let Err(error) = journal.record_after_change(
+                document,
+                &RecoveryRecord {
                     action: RecoveryAction::Undo,
                     selection: restored_selection,
                     view_id: DocumentViewId::source(),
-                })
-            {
+                },
+            ) {
                 self.coordinator.recovery_error = Some(error.to_string().into());
             }
             self.active_edit = None;
@@ -1437,13 +1440,17 @@ impl DocumentHost {
                 .document
                 .as_ref()
                 .map(DocumentSession::source_selection);
-            if let Some(journal) = self.coordinator.recovery_journal.as_mut()
-                && let Err(error) = journal.record(&RecoveryRecord {
+            if let (Some(journal), Some(document)) = (
+                self.coordinator.recovery_journal.as_mut(),
+                self.document.as_ref(),
+            ) && let Err(error) = journal.record_after_change(
+                document,
+                &RecoveryRecord {
                     action: RecoveryAction::Redo,
                     selection: restored_selection,
                     view_id: DocumentViewId::source(),
-                })
-            {
+                },
+            ) {
                 self.coordinator.recovery_error = Some(error.to_string().into());
             }
             self.active_edit = None;
@@ -1576,9 +1583,6 @@ impl DocumentHost {
                         probe.encoding = encoding;
                     }
                     let reopened_encoding = text_encoding_label(&probe.encoding);
-                    let recovery = recovery_dir.map(|dir| {
-                        PagedRecoveryJournal::create(dir, &original, probe.encoding.clone())
-                    });
                     let original_for_session = original.clone();
                     let prepared = prepare_utf8_source(original, probe.encoding.clone())?;
                     let index = LineIndex::build_cancellable(prepared.source(), &cancellation)?;
@@ -1589,6 +1593,14 @@ impl DocumentHost {
                         index.clone(),
                         false,
                     )?;
+                    let recovery = recovery_dir.as_ref().map(|dir| {
+                        DocumentRecoveryJournal::create(
+                            dir,
+                            &original_for_session,
+                            probe.encoding.clone(),
+                            &document,
+                        )
+                    });
                     let (structure_source, structure_index, structure_bytes) =
                         structure_input_for_session(&document, &prepared, &index, &cancellation)?;
                     let structured = if derived_views_enabled(probe.strategy) {
@@ -1631,8 +1643,8 @@ impl DocumentHost {
                         recovery,
                         reopened_encoding,
                     )) => {
-                        if let Some(journal) = view.coordinator.recovery_journal.take()
-                            && let Err(error) = journal.checkpoint()
+                        if let Some(mut journal) = view.coordinator.recovery_journal.take()
+                            && let Err(error) = journal.checkpoint(&document)
                         {
                             view.coordinator.recovery_error =
                                 Some(localized_document_error(&error, cx));
@@ -1828,9 +1840,6 @@ impl DocumentHost {
                         // 当前会话不因保存后的大小变化热迁移；重新打开时才重新执行策略。
                         probe.strategy = open_strategy;
                         probe.force_safe_source = force_safe_source;
-                        let recovery = recovery_dir.map(|dir| {
-                            PagedRecoveryJournal::create(dir, &original, probe.encoding.clone())
-                        });
                         let original_for_session = original.clone();
                         let prepared = prepare_utf8_source(original, probe.encoding.clone())?;
                         let index = LineIndex::build_cancellable(prepared.source(), &cancellation)?;
@@ -1841,6 +1850,14 @@ impl DocumentHost {
                             index.clone(),
                             true,
                         )?;
+                        let recovery = recovery_dir.as_ref().map(|dir| {
+                            DocumentRecoveryJournal::create(
+                                dir,
+                                &original_for_session,
+                                probe.encoding.clone(),
+                                &clean_document,
+                            )
+                        });
                         verify_saved_session_readback(&document, &clean_document, &cancellation)?;
                         let (structure_source, structure_index, structure_bytes) =
                             structure_input_for_session(
@@ -1899,8 +1916,8 @@ impl DocumentHost {
                         // 开始，也不能接受旧基线上的搜索、复制或派生 projection 结果。
                         view.document_epoch = view.document_epoch.wrapping_add(1);
                         view.cancel_selection_transfers();
-                        if let Some(journal) = view.coordinator.recovery_journal.take()
-                            && let Err(error) = journal.checkpoint()
+                        if let Some(mut journal) = view.coordinator.recovery_journal.take()
+                            && let Err(error) = journal.checkpoint(&document)
                         {
                             view.coordinator.recovery_error =
                                 Some(localized_document_error(&error, cx));

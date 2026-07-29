@@ -44,6 +44,17 @@ pub struct RecoveredResidentDocument {
     pub base_fingerprint: Option<ResidentFileFingerprint>,
 }
 
+/// One completed resident-journal scan, including legacy selection-affinity
+/// presence that cannot be recovered from the normalized selection alone.
+#[derive(Clone, Debug)]
+pub struct RecoveredResidentJournal {
+    pub document: RecoveredResidentDocument,
+    /// `None` means the corresponding affinity field was absent on disk.
+    pub anchor_affinity: Option<SourceAffinity>,
+    /// `None` means the corresponding affinity field was absent on disk.
+    pub head_affinity: Option<SourceAffinity>,
+}
+
 /// Resident recovery 的文件、帧和 schema 错误。
 #[derive(Debug, Error)]
 pub enum ResidentRecoveryError {
@@ -105,14 +116,18 @@ pub(super) struct StoredSelection {
 }
 
 impl StoredSelection {
-    pub(super) fn from_source_selection(selection: SourceSelection) -> Self {
+    pub(super) fn from_source_selection_with_affinities(
+        selection: SourceSelection,
+        anchor_affinity: Option<SourceAffinity>,
+        head_affinity: Option<SourceAffinity>,
+    ) -> Self {
         let range = selection.range();
         Self {
             start: range.start.min(usize::MAX as u64) as usize,
             end: range.end.min(usize::MAX as u64) as usize,
             reversed: selection.reversed(),
-            anchor_affinity: Some(selection.anchor.affinity.into()),
-            head_affinity: Some(selection.head.affinity.into()),
+            anchor_affinity: anchor_affinity.map(Into::into),
+            head_affinity: head_affinity.map(Into::into),
         }
     }
 

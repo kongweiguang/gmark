@@ -448,10 +448,11 @@ impl DocumentHost {
                                     &index_worker_cancellation,
                                 )?;
                             let recovery = recovery_dir.as_ref().map(|dir| {
-                                PagedRecoveryJournal::create(
+                                DocumentRecoveryJournal::create(
                                     dir,
                                     &recovery_source,
                                     encoding.clone(),
+                                    &document,
                                 )
                             });
                             Ok::<_, PagedDocumentError>((

@@ -14,47 +14,8 @@ use crate::components::{
     FocusStructuredFilter, InsertResource, NoRecentFiles, ShowDocumentInfo, ShowDocumentOutline,
     ShowStructureView, ShowStructuredInspector,
 };
+pub(crate) use crate::document_host::DocumentMenuFormat;
 use crate::i18n::I18nManager;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DocumentMenuFormat {
-    Markdown,
-    Json,
-    JsonLines,
-    Csv,
-    Tsv,
-    Text,
-}
-
-impl DocumentMenuFormat {
-    pub(crate) fn from_document_format(format: &gmark_document_core::DocumentFormat) -> Self {
-        match format {
-            gmark_document_core::DocumentFormat::Markdown => Self::Markdown,
-            gmark_document_core::DocumentFormat::Json => Self::Json,
-            gmark_document_core::DocumentFormat::JsonLines => Self::JsonLines,
-            gmark_document_core::DocumentFormat::Delimited { delimiter: b'\t' } => Self::Tsv,
-            gmark_document_core::DocumentFormat::Delimited { .. } => Self::Csv,
-            gmark_document_core::DocumentFormat::PlainText => Self::Text,
-        }
-    }
-
-    pub(crate) fn label(self, chinese: bool) -> &'static str {
-        match (self, chinese) {
-            (Self::Markdown, true) => "Markdown",
-            (Self::Markdown, false) => "Markdown",
-            (Self::Json, true) => "JSON",
-            (Self::Json, false) => "JSON",
-            (Self::JsonLines, true) => "JSONL",
-            (Self::JsonLines, false) => "JSONL",
-            (Self::Csv, true) => "CSV",
-            (Self::Csv, false) => "CSV",
-            (Self::Tsv, true) => "TSV",
-            (Self::Tsv, false) => "TSV",
-            (Self::Text, true) => "文本",
-            (Self::Text, false) => "Text",
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FormatMenuItemKind {

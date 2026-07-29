@@ -1,10 +1,10 @@
 // @author kongweiguang
 
 use gmark_document_core::PersistenceError;
-use gmark_paged_document::{
-    ExternalChange, PagedDocumentError, PagedRecoveryJournal, SearchCancellation,
-};
+use gmark_paged_document::{ExternalChange, PagedDocumentError, SearchCancellation};
 use gpui::{SharedString, Task};
+
+use crate::document_host::DocumentRecoveryJournal;
 
 pub(crate) struct SaveCoordinator {
     pub(crate) generation: u64,
@@ -45,7 +45,7 @@ pub(crate) struct DocumentCoordinator {
     pub(crate) index_generation: u64,
     pub(crate) index_cancellation: Option<SearchCancellation>,
     pub(crate) save: SaveCoordinator,
-    pub(crate) recovery_journal: Option<PagedRecoveryJournal>,
+    pub(crate) recovery_journal: Option<DocumentRecoveryJournal>,
     pub(crate) recovery_error: Option<SharedString>,
     pub(crate) lifetime_cancellation: SearchCancellation,
     pub(crate) index_task: Task<()>,

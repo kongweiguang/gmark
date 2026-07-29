@@ -11,17 +11,17 @@ use gmark_recovery_codec::{DecodedRecord, RecordKind, decode_record};
 use super::format::{apply_format_patch, default_source_format, validate_source_format};
 use super::types::{StoredBaseRecord, StoredEditRecord, StoredSelection};
 use super::{
-    RecoveredResidentDocument, ResidentFileFingerprint, ResidentRecoveryError,
-    ResidentRecoveryReadStatus,
+    RecoveredResidentDocument, RecoveredResidentJournal, ResidentFileFingerprint,
+    ResidentRecoveryError, ResidentRecoveryReadStatus,
 };
 
-/// Replays every readable resident journal in lexical path order.
+/// Scans every readable resident journal in lexical path order exactly once.
 ///
 /// Unsupported versions and hard schema errors are quarantined as `.journal.invalid`;
 /// a valid CRC prefix with a damaged tail is returned with `TruncatedTail` instead.
-pub fn load_resident_recovery_documents(
+pub fn load_resident_recovery_journals(
     recovery_dir: impl AsRef<Path>,
-) -> Result<Vec<RecoveredResidentDocument>, ResidentRecoveryError> {
+) -> Result<Vec<RecoveredResidentJournal>, ResidentRecoveryError> {
     let recovery_dir = recovery_dir.as_ref();
     let entries = match fs::read_dir(recovery_dir) {
         Ok(entries) => entries,
@@ -37,16 +37,28 @@ pub fn load_resident_recovery_documents(
         })
         .collect::<Vec<_>>();
     paths.sort();
-    let mut documents = Vec::new();
+    let mut journals = Vec::new();
     for path in paths {
-        match replay_resident_recovery_journal(&path) {
-            Ok(document) => documents.push(document),
+        match replay_resident_recovery_journal_with_metadata(&path) {
+            Ok(journal) => journals.push(journal),
             Err(_) => {
                 let _ = quarantine_journal(&path);
             }
         }
     }
-    Ok(documents)
+    Ok(journals)
+}
+
+/// Compatibility projection of the one-pass resident-journal scan.
+pub fn load_resident_recovery_documents(
+    recovery_dir: impl AsRef<Path>,
+) -> Result<Vec<RecoveredResidentDocument>, ResidentRecoveryError> {
+    load_resident_recovery_journals(recovery_dir).map(|journals| {
+        journals
+            .into_iter()
+            .map(|journal| journal.document)
+            .collect()
+    })
 }
 
 /// Removes quarantined resident-recovery artifacts while retaining every live journal.
@@ -83,6 +95,14 @@ pub fn cleanup_resident_recovery_artifacts(
 pub fn replay_resident_recovery_journal(
     journal_path: impl AsRef<Path>,
 ) -> Result<RecoveredResidentDocument, ResidentRecoveryError> {
+    replay_resident_recovery_journal_with_metadata(journal_path).map(|journal| journal.document)
+}
+
+/// Replays one resident journal and retains the wire-level selection-affinity
+/// presence required by legacy root adapters.
+pub fn replay_resident_recovery_journal_with_metadata(
+    journal_path: impl AsRef<Path>,
+) -> Result<RecoveredResidentJournal, ResidentRecoveryError> {
     let journal_path = journal_path.as_ref();
     let bytes = fs::read(journal_path)
         .map_err(|source| ResidentRecoveryError::io("read", journal_path, source))?;
@@ -213,17 +233,21 @@ pub fn replay_resident_recovery_journal(
         (Some(_), None) => true,
         (None, _) => false,
     };
-    Ok(RecoveredResidentDocument {
-        document_id: base.document_id,
-        journal_path: journal_path.to_path_buf(),
-        file_path,
-        source,
-        source_format,
-        selection: selection.source_selection(),
-        view_mode,
-        read_status: status,
-        base_file_changed,
-        base_fingerprint,
+    Ok(RecoveredResidentJournal {
+        document: RecoveredResidentDocument {
+            document_id: base.document_id,
+            journal_path: journal_path.to_path_buf(),
+            file_path,
+            source,
+            source_format,
+            selection: selection.source_selection(),
+            view_mode,
+            read_status: status,
+            base_file_changed,
+            base_fingerprint,
+        },
+        anchor_affinity: selection.anchor_affinity.map(Into::into),
+        head_affinity: selection.head_affinity.map(Into::into),
     })
 }
 

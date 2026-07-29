@@ -11,7 +11,8 @@ use gmark_document_core::{
 };
 use gmark_document_runtime::{
     ResidentRecoveryJournal, ResidentRecoveryReadStatus, cleanup_resident_recovery_artifacts,
-    load_resident_recovery_documents, replay_resident_recovery_journal,
+    load_resident_recovery_documents, load_resident_recovery_journals,
+    replay_resident_recovery_journal,
 };
 use gmark_recovery_codec::{RecordKind, decode_record, encode_record_payload};
 use serde_json::json;
@@ -65,6 +66,36 @@ fn recovery_preserves_source_anchor_affinity_and_direction() {
 
     let recovered = replay_resident_recovery_journal(journal.path()).unwrap();
     assert_eq!(recovered.selection, source_selection);
+}
+
+#[test]
+fn directory_loader_retains_absent_legacy_selection_affinities() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut journal = ResidentRecoveryJournal::create(temporary.path(), None, "base").unwrap();
+    let source = SourceDocument::new("edited");
+    journal
+        .record_formatted_with_affinities(
+            &source.text(),
+            source.source_format(),
+            selection(6),
+            None,
+            None,
+            "source",
+        )
+        .unwrap();
+
+    let recovered = load_resident_recovery_journals(temporary.path()).unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].document.source, "edited");
+    assert_eq!(recovered[0].anchor_affinity, None);
+    assert_eq!(recovered[0].head_affinity, None);
+
+    let bytes = fs::read(journal.path()).unwrap();
+    let base = decode_record(&bytes, 0).unwrap().unwrap();
+    let edit = decode_record(&bytes, base.next).unwrap().unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(edit.payload).unwrap();
+    assert!(payload["selection"].get("anchor_affinity").is_none());
+    assert!(payload["selection"].get("head_affinity").is_none());
 }
 
 #[test]
@@ -329,7 +360,7 @@ fn fingerprint_marks_external_base_change_without_losing_recovery() {
 }
 
 #[test]
-fn load_quarantines_unreadable_versions_and_cleanup_keeps_live_sessions() {
+fn directory_loader_quarantines_bad_neighbor_and_keeps_live_sessions() {
     let temporary = tempfile::tempdir().unwrap();
     let mut valid = ResidentRecoveryJournal::create(temporary.path(), None, "").unwrap();
     valid.record("valid", selection(5), "rendered").unwrap();
@@ -338,12 +369,15 @@ fn load_quarantines_unreadable_versions_and_cleanup_keeps_live_sessions() {
     bytes[4..6].copy_from_slice(&99u16.to_le_bytes());
     fs::write(&invalid, bytes).unwrap();
 
-    let recovered = load_resident_recovery_documents(temporary.path()).unwrap();
+    let recovered = load_resident_recovery_journals(temporary.path()).unwrap();
     assert_eq!(recovered.len(), 1);
-    assert_eq!(recovered[0].source, "valid");
+    assert_eq!(recovered[0].document.source, "valid");
     let quarantined = temporary.path().join("old.journal.invalid");
     assert!(!invalid.exists());
     assert!(quarantined.exists());
+    let projected = load_resident_recovery_documents(temporary.path()).unwrap();
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0].source, "valid");
     assert_eq!(
         cleanup_resident_recovery_artifacts(temporary.path()).unwrap(),
         1

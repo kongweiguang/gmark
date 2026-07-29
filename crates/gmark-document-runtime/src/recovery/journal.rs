@@ -5,7 +5,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use gmark_document::{SourceDocument, SourceFormatSnapshot, TextEdit, Transaction};
-use gmark_document_core::{PersistenceError, RecoveryAction, RecoveryBackend, RecoveryRecord};
+use gmark_document_core::{
+    PersistenceError, RecoveryAction, RecoveryBackend, RecoveryRecord, SourceAffinity,
+};
 use gmark_recovery_codec::{RecordKind, encode_record_payload};
 use serde::Serialize;
 
@@ -119,6 +121,27 @@ impl ResidentRecoveryJournal {
         selection: ResidentRecoverySelection,
         view_mode: impl AsRef<str>,
     ) -> Result<bool, ResidentRecoveryError> {
+        self.record_formatted_with_affinities(
+            source,
+            source_format,
+            selection,
+            Some(selection.anchor.affinity),
+            Some(selection.head.affinity),
+            view_mode,
+        )
+    }
+
+    /// Records a source snapshot while retaining whether each selection affinity
+    /// was absent in a legacy journal frame.
+    pub fn record_formatted_with_affinities(
+        &mut self,
+        source: &str,
+        source_format: SourceFormatSnapshot,
+        selection: ResidentRecoverySelection,
+        anchor_affinity: Option<SourceAffinity>,
+        head_affinity: Option<SourceAffinity>,
+        view_mode: impl AsRef<str>,
+    ) -> Result<bool, ResidentRecoveryError> {
         validate_source_format(source, &source_format)?;
         let text_edit = minimal_edit(&self.last_source, source);
         if text_edit.is_none() && self.last_format == source_format {
@@ -130,7 +153,14 @@ impl ResidentRecoveryJournal {
             self.initialized = true;
         }
         if self.should_compact(source.len()) {
-            self.write_compacted_base(source, &source_format, selection, view_mode.as_ref())?;
+            self.write_compacted_base(
+                source,
+                &source_format,
+                selection,
+                anchor_affinity,
+                head_affinity,
+                view_mode.as_ref(),
+            )?;
             self.base_source.clear();
             self.base_source.push_str(source);
             self.last_source.clear();
@@ -144,7 +174,11 @@ impl ResidentRecoveryJournal {
             start: range.start,
             end: range.end,
             replacement: replacement.to_owned(),
-            selection: StoredSelection::from_source_selection(selection),
+            selection: StoredSelection::from_source_selection_with_affinities(
+                selection,
+                anchor_affinity,
+                head_affinity,
+            ),
             view_mode: view_mode.as_ref().to_owned(),
             format_patch: Some(build_format_patch(&self.last_format, &source_format)),
         };
@@ -238,6 +272,8 @@ impl ResidentRecoveryJournal {
         source: &str,
         source_format: &SourceFormatSnapshot,
         selection: ResidentRecoverySelection,
+        anchor_affinity: Option<SourceAffinity>,
+        head_affinity: Option<SourceAffinity>,
         view_mode: &str,
     ) -> Result<(), ResidentRecoveryError> {
         let base = StoredBaseRecord {
@@ -249,7 +285,11 @@ impl ResidentRecoveryJournal {
             fingerprint: self.base_fingerprint.clone(),
             source: source.to_owned(),
             source_format: Some(stored_format(source_format)),
-            selection: Some(StoredSelection::from_source_selection(selection)),
+            selection: Some(StoredSelection::from_source_selection_with_affinities(
+                selection,
+                anchor_affinity,
+                head_affinity,
+            )),
             view_mode: Some(view_mode.to_owned()),
         };
         let bytes = encode_record(RecordKind::Base, &base)?;

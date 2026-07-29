@@ -22,10 +22,11 @@ mod recovery;
 mod resident;
 
 pub use recovery::{
-    RecoveredResidentDocument, ResidentFileFingerprint, ResidentRecoveryError,
-    ResidentRecoveryJournal, ResidentRecoveryReadStatus, ResidentRecoverySelection,
-    cleanup_resident_recovery_artifacts, fingerprint_resident_file,
-    load_resident_recovery_documents, replay_resident_recovery_journal,
+    RecoveredResidentDocument, RecoveredResidentJournal, ResidentFileFingerprint,
+    ResidentRecoveryError, ResidentRecoveryJournal, ResidentRecoveryReadStatus,
+    ResidentRecoverySelection, cleanup_resident_recovery_artifacts, fingerprint_resident_file,
+    load_resident_recovery_documents, load_resident_recovery_journals,
+    replay_resident_recovery_journal, replay_resident_recovery_journal_with_metadata,
 };
 pub use resident::ResidentDocument;
 

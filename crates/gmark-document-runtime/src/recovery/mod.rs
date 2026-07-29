@@ -13,9 +13,10 @@ mod types;
 pub use journal::ResidentRecoveryJournal;
 pub use replay::{
     cleanup_resident_recovery_artifacts, fingerprint_resident_file,
-    load_resident_recovery_documents, replay_resident_recovery_journal,
+    load_resident_recovery_documents, load_resident_recovery_journals,
+    replay_resident_recovery_journal, replay_resident_recovery_journal_with_metadata,
 };
 pub use types::{
-    RecoveredResidentDocument, ResidentFileFingerprint, ResidentRecoveryError,
-    ResidentRecoveryReadStatus, ResidentRecoverySelection,
+    RecoveredResidentDocument, RecoveredResidentJournal, ResidentFileFingerprint,
+    ResidentRecoveryError, ResidentRecoveryReadStatus, ResidentRecoverySelection,
 };
