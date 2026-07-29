@@ -11,10 +11,10 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use gmark_update_core::{
     ApplyPlanV1, ApplyResultV1, BoundedTransferOutcome, CancellationV1, HelperSignalV1,
     PartialMetadata, Platform, StartupAcknowledgementV1, UpdateCoreError, clear_helper_signal,
-    copy_bounded, helper_signal_present, read_apply_plan, read_apply_result, read_partial_metadata,
-    resume_request, validate_apply_plan, validate_apply_plan_files, verify_apply_plan_artifact,
-    verify_artifact_file, write_apply_plan, write_apply_result, write_helper_signal,
-    write_partial_metadata,
+    copy_and_verify_bounded, copy_bounded, helper_signal_present, read_apply_plan,
+    read_apply_result, read_partial_metadata, resume_request, validate_apply_plan,
+    validate_apply_plan_files, verify_apply_plan_artifact, verify_artifact_file, write_apply_plan,
+    write_apply_result, write_helper_signal, write_partial_metadata,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -145,6 +145,27 @@ fn bounded_copy_and_resume_metadata_preserve_resume_contract() {
 }
 
 #[test]
+fn bounded_hash_copy_rejects_oversize_and_tampering() {
+    let payload = b"verified legacy installer";
+    let hash = digest(payload);
+    let mut output = Vec::new();
+    assert_eq!(
+        copy_and_verify_bounded(&mut &payload[..], &mut output, 512, &hash).unwrap(),
+        payload.len() as u64
+    );
+    assert_eq!(output, payload);
+
+    assert!(matches!(
+        copy_and_verify_bounded(&mut &payload[..], &mut Vec::new(), 4, &hash),
+        Err(UpdateCoreError::TooLarge)
+    ));
+    assert!(matches!(
+        copy_and_verify_bounded(&mut &payload[..], &mut Vec::new(), 512, &"00".repeat(32)),
+        Err(UpdateCoreError::HashMismatch { .. })
+    ));
+}
+
+#[test]
 fn apply_plan_round_trip_rejects_unknown_fields_and_validates_paths() {
     let root = tempfile::tempdir().unwrap();
     let plan = fixture_plan(root.path());
@@ -168,6 +189,22 @@ fn apply_plan_round_trip_rejects_unknown_fields_and_validates_paths() {
         .unwrap()
         .insert("unknown".to_owned(), serde_json::json!(true));
     assert!(serde_json::from_value::<ApplyPlanV1>(value).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_plan_is_persisted_with_private_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    let plan_path = root.path().join("v0.2.0/apply-plan.json");
+    write_apply_plan(&plan_path, &plan).unwrap();
+
+    assert_eq!(
+        fs::metadata(plan_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }
 
 #[test]
@@ -203,6 +240,56 @@ fn helper_markers_and_result_json_remain_compatible() {
     assert_eq!(json["status"], "succeeded");
     assert_eq!(json["from_version"], "0.1.0");
     assert_eq!(json["to_version"], "0.2.0");
+
+    fs::write(
+        &plan.result_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "status": "succeeded",
+            "to_version": "0.2.0",
+            "message": "legacy result"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let legacy = read_apply_result(&plan.result_path).unwrap();
+    assert!(legacy.from_version.is_empty());
+}
+
+#[test]
+fn apply_result_reader_accepts_legacy_extra_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("last-result.json");
+    fs::write(
+        &path,
+        br#"{"schema_version":1,"status":"failed","to_version":"0.2.0","message":"legacy result","legacy_extra":true}"#,
+    )
+    .unwrap();
+
+    let result = read_apply_result(&path).unwrap();
+    assert!(result.from_version.is_empty());
+    assert_eq!(result.status, "failed");
+    assert_eq!(result.to_version, "0.2.0");
+    assert_eq!(result.message, "legacy result");
+}
+
+#[test]
+fn apply_result_writer_rejects_unknown_statuses() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("last-result.json");
+    let result = ApplyResultV1 {
+        schema_version: ApplyResultV1::SCHEMA_VERSION,
+        status: "interrupted".to_owned(),
+        from_version: "0.1.0".to_owned(),
+        to_version: "0.2.0".to_owned(),
+        message: "legacy result".to_owned(),
+    };
+
+    assert!(matches!(
+        write_apply_result(&path, &result),
+        Err(UpdateCoreError::Protocol(message)) if message == "update result has an unsupported status"
+    ));
+    assert!(!path.exists());
 }
 
 #[test]

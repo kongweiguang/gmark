@@ -125,7 +125,25 @@ fn pending_install_cancellation_restores_the_ready_payload() {
     service.pending_install = Some(PendingInstall {
         release: release.clone(),
         artifact_path: artifact_path.clone(),
-        cancellation_path: cancellation_path.clone(),
+        plan: ApplyPlanV1 {
+            schema_version: ApplyPlanV1::SCHEMA_VERSION,
+            parent_pid: 0,
+            current_version: release.current_version.clone(),
+            target_version: release.version.clone(),
+            artifact_path: artifact_path.clone(),
+            artifact_url: release.artifact_url.clone(),
+            artifact_size: release.artifact_size,
+            artifact_sha256: release.artifact_sha256.clone(),
+            artifact_format: release.artifact_format.as_protocol_name().to_owned(),
+            signed_envelope_path: root.path().join("manifest.envelope.json"),
+            target_path: root.path().join("gmark.AppImage"),
+            backup_path: root.path().join("gmark.AppImage.gmark-update-backup"),
+            relaunch_path: root.path().join("gmark.AppImage"),
+            acknowledgement_path: root.path().join("startup-ack"),
+            cancellation_path: cancellation_path.clone(),
+            result_path: root.path().join("last-result.json"),
+            helper_log_path: root.path().join("last-helper.log"),
+        },
     });
     service.state = UpdateState::Installing {
         release: release.clone(),
@@ -135,6 +153,7 @@ fn pending_install_cancellation_restores_the_ready_payload() {
     assert!(!service.restore_ready_after_cancel());
 
     assert!(cancellation_path.is_file());
+    assert_eq!(std::fs::read(&cancellation_path).unwrap(), b"cancelled\n");
     assert!(matches!(
         service.state,
         UpdateState::Ready {
@@ -159,6 +178,25 @@ fn apply_result_is_presented_once_without_deleting_diagnostics() {
     ));
     assert!(restored_startup_state(root.path()).is_none());
     assert!(result_path.is_file());
+}
+
+#[test]
+fn unknown_legacy_apply_result_status_is_presented_as_failed() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("last-result.json"),
+        br#"{"schema_version":1,"status":"interrupted","to_version":"1.1.0","message":"legacy result","extra":true}"#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        restored_startup_state(root.path()),
+        Some(UpdateState::Failed {
+            release: None,
+            message,
+            retryable: false,
+        }) if message == "legacy result"
+    ));
 }
 
 fn release_fixture() -> UpdateRelease {

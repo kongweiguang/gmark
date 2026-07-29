@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -224,24 +225,6 @@ fn public_key_parser_requires_exact_ed25519_length() {
     );
     assert!(verifying_key_from_base64(&BASE64.encode([0_u8; 31])).is_err());
     assert!(verifying_key_from_base64("not base64").is_err());
-}
-
-#[test]
-fn sha256_matches_standard_vectors_across_chunk_boundaries() {
-    let mut empty = Sha256::new();
-    empty.update(b"");
-    assert_eq!(
-        hex_sha256(empty.finalize().into()),
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
-
-    let mut abc = Sha256::new();
-    abc.update(b"a");
-    abc.update(b"bc");
-    assert_eq!(
-        hex_sha256(abc.finalize().into()),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
 }
 
 #[test]

@@ -124,15 +124,10 @@ impl StagingPaths {
                 "failed to commit verified update artifact: {error}"
             ))
         })?;
-        match fs::remove_file(&self.partial_metadata_path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(UpdateCoreError::Io(format!(
-                    "failed to remove partial update metadata: {error}"
-                )));
-            }
-        }
+        // A stale sidecar cannot change a committed artifact. Keep legacy
+        // cache-recovery behavior by not failing a successful promotion when
+        // its best-effort cleanup cannot be completed.
+        let _ = fs::remove_file(&self.partial_metadata_path);
         sync_parent(&self.ready_path)
     }
 }
@@ -211,6 +206,54 @@ pub fn copy_bounded(
         });
     }
     Ok(BoundedTransferOutcome::Complete { downloaded })
+}
+
+/// Copies an artifact with a hard size limit and verifies its SHA-256 digest.
+///
+/// Legacy update manifests do not carry an expected artifact length, so their
+/// HTTP adapter uses this bounded variant rather than the resumable transfer
+/// primitive above. The caller still owns response and file lifecycle policy.
+pub fn copy_and_verify_bounded(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    max_bytes: u64,
+    expected_sha256: &str,
+) -> Result<u64> {
+    if max_bytes == 0 || max_bytes > MAX_ARTIFACT_BYTES {
+        return Err(UpdateCoreError::TooLarge);
+    }
+    validate_sha256(expected_sha256, "update artifact")?;
+
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|error| {
+            UpdateCoreError::Download(format!("failed while reading update artifact: {error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        total = total
+            .checked_add(read as u64)
+            .ok_or(UpdateCoreError::TooLarge)?;
+        if total > max_bytes || total > MAX_ARTIFACT_BYTES {
+            return Err(UpdateCoreError::TooLarge);
+        }
+        writer.write_all(&buffer[..read]).map_err(|error| {
+            UpdateCoreError::Io(format!("failed to write update artifact: {error}"))
+        })?;
+        hasher.update(&buffer[..read]);
+    }
+
+    let actual = hex_sha256(hasher.finalize().into());
+    if !actual.eq_ignore_ascii_case(expected_sha256) {
+        return Err(UpdateCoreError::HashMismatch {
+            expected: expected_sha256.to_ascii_lowercase(),
+            actual,
+        });
+    }
+    Ok(total)
 }
 
 /// Rechecks a complete staged artifact before it can be exposed to a helper.

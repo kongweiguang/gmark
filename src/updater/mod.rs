@@ -11,14 +11,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
+use gmark_update_core::{
+    ApplyPlanV1, CancellationV1, HelperSignalV1, clear_helper_signal, parse_apply_result,
+    write_apply_plan,
+};
 use gpui::{App, AppContext as _, AsyncApp, Context, Entity, Global, Task};
-use serde::Deserialize;
 
 use crate::net::update_v2::{
     self, CheckOrigin, CheckOutcome, DownloadControl, DownloadEvent, UpdateRelease,
 };
-
-mod protocol;
 
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(10);
 const AUTO_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -533,7 +534,7 @@ impl UpdateService {
             return false;
         };
         match self.write_apply_plan(&release, &artifact_path) {
-            Ok((plan_path, helper_path, cancellation_path)) => {
+            Ok((plan_path, helper_path, plan)) => {
                 let mut command = Command::new(&helper_path);
                 command.arg("--apply-plan").arg(&plan_path);
                 #[cfg(target_os = "windows")]
@@ -549,7 +550,7 @@ impl UpdateService {
                         self.pending_install = Some(PendingInstall {
                             release: release.clone(),
                             artifact_path,
-                            cancellation_path,
+                            plan,
                         });
                         self.state = UpdateState::Installing { release };
                         self.refresh(cx);
@@ -588,7 +589,10 @@ impl UpdateService {
         let Some(pending) = self.pending_install.take() else {
             return false;
         };
-        let _ = std::fs::write(&pending.cancellation_path, b"cancelled\n");
+        let _ = std::fs::write(
+            &pending.plan.cancellation_path,
+            CancellationV1::MARKER_BYTES,
+        );
         self.state = UpdateState::Ready {
             release: pending.release,
             artifact_path: pending.artifact_path,
@@ -600,9 +604,7 @@ impl UpdateService {
         &self,
         release: &UpdateRelease,
         artifact_path: &std::path::Path,
-    ) -> Result<(PathBuf, PathBuf, PathBuf), String> {
-        use protocol::ApplyPlanV1;
-
+    ) -> Result<(PathBuf, PathBuf, ApplyPlanV1), String> {
         let transaction_dir = artifact_path
             .parent()
             .ok_or_else(|| "verified update has no transaction directory".to_owned())?;
@@ -629,16 +631,11 @@ impl UpdateService {
             return Err("verified update manifest is missing from the cache".to_owned());
         }
         let plan_path = transaction_dir.join("apply-plan.json");
-        let cancellation_path = transaction_dir.join("cancel-install");
-        let acknowledgement_path = transaction_dir.join("startup-ack");
         let result_path = self.updates_root.join("last-result.json");
         let helper_log_path = self.updates_root.join("last-helper.log");
         let displayed_result_path = self.updates_root.join("last-result-displayed");
         for stale in [&result_path, &displayed_result_path] {
             let _ = std::fs::remove_file(stale);
-        }
-        for path in [&cancellation_path, &acknowledgement_path] {
-            let _ = std::fs::remove_file(path);
         }
         let plan = ApplyPlanV1 {
             schema_version: ApplyPlanV1::SCHEMA_VERSION,
@@ -649,30 +646,25 @@ impl UpdateService {
             artifact_url: release.artifact_url.clone(),
             artifact_size: release.artifact_size,
             artifact_sha256: release.artifact_sha256.clone(),
-            artifact_format: artifact_format_name(&release.artifact_format).to_owned(),
+            artifact_format: release.artifact_format.as_protocol_name().to_owned(),
             signed_envelope_path: envelope_path,
             target_path,
             backup_path,
             relaunch_path,
-            acknowledgement_path,
-            cancellation_path: cancellation_path.clone(),
+            acknowledgement_path: transaction_dir.join("startup-ack"),
+            cancellation_path: transaction_dir.join("cancel-install"),
             result_path,
             helper_log_path,
         };
-        let bytes = serde_json::to_vec_pretty(&plan)
-            .map_err(|error| format!("failed to serialize update apply plan: {error}"))?;
-        let mut temporary = tempfile::NamedTempFile::new_in(transaction_dir)
-            .map_err(|error| format!("failed to create update apply plan: {error}"))?;
-        use std::io::Write as _;
-        temporary
-            .write_all(&bytes)
-            .and_then(|()| temporary.as_file().sync_all())
+        for signal in [
+            HelperSignalV1::Cancellation,
+            HelperSignalV1::Acknowledgement,
+        ] {
+            let _ = clear_helper_signal(&plan, signal);
+        }
+        write_apply_plan(&plan_path, &plan)
             .map_err(|error| format!("failed to write update apply plan: {error}"))?;
-        set_private(temporary.path())?;
-        temporary
-            .persist(&plan_path)
-            .map_err(|error| format!("failed to commit update apply plan: {}", error.error))?;
-        Ok((plan_path, helper_path, cancellation_path))
+        Ok((plan_path, helper_path, plan))
     }
 
     fn apply_worker_event(&mut self, event: WorkerEvent, cx: &mut Context<Self>) {
@@ -756,16 +748,9 @@ enum WorkerEvent {
     Failed { message: String, retryable: bool },
 }
 
-#[derive(Deserialize)]
-struct LastApplyResult {
-    schema_version: u8,
-    status: String,
-    to_version: String,
-    message: String,
-}
-
 fn restored_startup_state(updates_root: &std::path::Path) -> Option<UpdateState> {
-    let bytes = std::fs::read(updates_root.join("last-result.json")).ok()?;
+    let result_path = updates_root.join("last-result.json");
+    let bytes = std::fs::read(&result_path).ok()?;
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&bytes);
     let fingerprint = format!("{:08x}\n", hasher.finalize());
@@ -773,10 +758,7 @@ fn restored_startup_state(updates_root: &std::path::Path) -> Option<UpdateState>
     if std::fs::read_to_string(&displayed_path).ok().as_deref() == Some(fingerprint.as_str()) {
         return None;
     }
-    let result: LastApplyResult = serde_json::from_slice(&bytes).ok()?;
-    if result.schema_version != 1 {
-        return None;
-    }
+    let result = parse_apply_result(&bytes).ok()?;
     let _ = std::fs::write(displayed_path, fingerprint);
     Some(if result.status == "succeeded" {
         UpdateState::Succeeded {
@@ -821,15 +803,7 @@ fn cleanup_update_cache(updates_root: &std::path::Path) {
 struct PendingInstall {
     release: UpdateRelease,
     artifact_path: PathBuf,
-    cancellation_path: PathBuf,
-}
-
-fn artifact_format_name(format: &update_v2::ArtifactFormat) -> &'static str {
-    match format {
-        update_v2::ArtifactFormat::WindowsSetupExe => "windows-setup-exe",
-        update_v2::ArtifactFormat::MacosAppTarGz => "macos-app-tar-gz",
-        update_v2::ArtifactFormat::LinuxAppImage => "linux-app-image",
-    }
+    plan: ApplyPlanV1,
 }
 
 fn installed_helper_path() -> Result<PathBuf, String> {
@@ -931,22 +905,6 @@ fn set_executable(path: &std::path::Path) -> Result<(), String> {
 
 #[cfg(not(unix))]
 fn set_executable(_path: &std::path::Path) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_private(path: &std::path::Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut permissions = std::fs::metadata(path)
-        .map_err(|error| format!("failed to inspect update plan: {error}"))?
-        .permissions();
-    permissions.set_mode(0o600);
-    std::fs::set_permissions(path, permissions)
-        .map_err(|error| format!("failed to secure update plan: {error}"))
-}
-
-#[cfg(not(unix))]
-fn set_private(_path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 

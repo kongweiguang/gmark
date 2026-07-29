@@ -2,12 +2,11 @@
 
 #![allow(dead_code)]
 
-//! Signed update-manifest verification and online version checks.
+//! Legacy update-manifest HTTP adapter and installer launcher.
 //!
-//! 远端内容在 Ed25519 验证前不参与版本、URL 或 rollout 决策。签名覆盖 payload 的原始
-//! JSON bytes，envelope 只负责传输 base64，避免跨语言 JSON canonicalization 分歧。
+//! Trust, manifest parsing, version comparison, rollout, and artifact hashing
+//! live in `gmark-update-core`; this module keeps only HTTP and process work.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -15,14 +14,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use ed25519_dalek::{Signature, VerifyingKey};
-use reqwest::Url;
+use ed25519_dalek::VerifyingKey;
+use gmark_update_core::{
+    MAX_ARTIFACT_BYTES, MAX_ENVELOPE_BYTES, Platform, SignedManifest, UpdateCheckOutcome,
+    UpdateCoreError, copy_and_verify_bounded, evaluate_update, parse_verified_manifest,
+    select_artifact, verifying_key_from_base64 as core_verifying_key_from_base64,
+};
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
-use semver::Version;
-use serde::Deserialize;
-use sha2::{Digest as _, Sha256};
 
 pub(crate) const GITHUB_UPDATE_MANIFEST_URL: &str =
     "https://github.com/kongweiguang/gmark/releases/latest/download/update-manifest.json";
@@ -31,9 +29,7 @@ pub(crate) const GITEE_UPDATE_MANIFEST_URL: &str =
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_ENVELOPE_BYTES: usize = 128 * 1024;
-const MAX_PAYLOAD_BYTES: usize = 96 * 1024;
-const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_INSTALLER_BYTES: u64 = MAX_ARTIFACT_BYTES;
 const INSTALLER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const STALE_UPDATE_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const UPDATE_ACCEPT: &str = "application/json,*/*;q=0.5";
@@ -186,34 +182,6 @@ impl fmt::Display for UpdateInstallError {
 
 impl std::error::Error for UpdateInstallError {}
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SignedEnvelope {
-    schema_version: u8,
-    algorithm: String,
-    payload: String,
-    signature: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct UpdateManifest {
-    schema_version: u8,
-    version: String,
-    published_at: String,
-    paused: bool,
-    rollout_percent: u8,
-    release_url: String,
-    artifacts: BTreeMap<String, UpdateArtifact>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct UpdateArtifact {
-    url: String,
-    sha256: String,
-}
-
 pub(crate) fn check_latest_version(
     current_version: &str,
 ) -> Result<UpdateCheckResult, UpdateCheckError> {
@@ -267,36 +235,32 @@ fn compare_signed_manifest(
     source: UpdateSource,
     key: &VerifyingKey,
 ) -> Result<UpdateCheckResult, UpdateCheckError> {
-    let current = parse_semver(current_version, "current app version")?;
-    let manifest = verify_signed_manifest(envelope, key)?;
-    let latest = parse_semver(&manifest.version, "signed update manifest version")?;
-    validate_manifest(&manifest)?;
-    let artifact_key = current_artifact_key().ok_or_else(|| {
-        UpdateCheckError::Manifest("this platform has no update artifact mapping".to_owned())
-    })?;
-    let artifact = manifest.artifacts.get(artifact_key).ok_or_else(|| {
-        UpdateCheckError::Manifest(format!(
-            "signed update manifest has no '{artifact_key}' artifact"
-        ))
-    })?;
-
-    let eligible = !manifest.paused
-        && rollout_bucket(installation_id, &manifest.version) < manifest.rollout_percent as u32;
-    let (latest_version, available) = if latest > current && eligible {
-        (manifest.version, true)
-    } else if latest > current {
-        // 未命中 rollout 的客户端不泄露尚未开放的版本，也不会错误打开下载页。
-        (current_version.to_owned(), false)
-    } else {
-        (manifest.version, false)
+    let verified = parse_verified_manifest(envelope, key).map_err(map_core_check_error)?;
+    let SignedManifest::V1(manifest) = &verified.manifest else {
+        return Err(UpdateCheckError::Manifest(
+            "signed update manifest is not schema v1".to_owned(),
+        ));
+    };
+    let artifact =
+        select_artifact(&verified.manifest, &Platform::current()).map_err(map_core_check_error)?;
+    let outcome = evaluate_update(
+        &verified,
+        current_version,
+        installation_id,
+        &Platform::current(),
+    )
+    .map_err(map_core_check_error)?;
+    let (latest_version, available) = match outcome {
+        UpdateCheckOutcome::Available(_) => (manifest.version.clone(), true),
+        UpdateCheckOutcome::UpToDate { latest_version, .. } => (latest_version, false),
     };
     let info = UpdateVersionInfo {
         current_version: current_version.to_owned(),
         latest_version,
         source,
-        release_url: manifest.release_url,
-        artifact_url: artifact.url.clone(),
-        artifact_sha256: artifact.sha256.to_ascii_lowercase(),
+        release_url: manifest.release_url.clone(),
+        artifact_url: artifact.url,
+        artifact_sha256: artifact.sha256,
     };
     Ok(if available {
         UpdateCheckResult::UpdateAvailable(info)
@@ -305,24 +269,18 @@ fn compare_signed_manifest(
     })
 }
 
-/// 下载已签名清单指定的当前平台安装包，校验后用固定参数启动平台安装流程。
-///
-/// 安装包在独占创建的临时目录中落盘；URL、大小和摘要任一校验失败时都不会执行文件。
+/// Downloads a legacy signed-manifest artifact and starts the platform installer.
 pub(crate) fn download_and_launch_update(
     info: &UpdateVersionInfo,
 ) -> Result<PathBuf, UpdateInstallError> {
-    validate_release_url(&info.artifact_url, "update artifact URL")
-        .map_err(|error| UpdateInstallError::Metadata(error.to_string()))?;
-    if info.artifact_sha256.len() != 64
-        || !info
-            .artifact_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(UpdateInstallError::Metadata(
-            "update artifact has an invalid SHA-256".to_owned(),
-        ));
-    }
+    gmark_update_core::policy::validate_official_release_url(
+        &info.artifact_url,
+        "update artifact URL",
+    )
+    .map_err(|error| UpdateInstallError::Metadata(error.to_string()))?;
+    gmark_update_core::policy::validate_sha256(&info.artifact_sha256, "update artifact").map_err(
+        |_| UpdateInstallError::Metadata("update artifact has an invalid SHA-256".to_owned()),
+    )?;
 
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -341,7 +299,7 @@ pub(crate) fn download_and_launch_update(
         .map_err(|error| {
             UpdateInstallError::Network(format!("failed to build update HTTP client: {error}"))
         })?;
-    let response = client.get(&info.artifact_url).send().map_err(|error| {
+    let mut response = client.get(&info.artifact_url).send().map_err(|error| {
         UpdateInstallError::Network(format!("failed to download update installer: {error}"))
     })?;
     if !response.status().is_success() {
@@ -372,7 +330,7 @@ pub(crate) fn download_and_launch_update(
             UpdateInstallError::Io(format!("failed to create update installer file: {error}"))
         })?;
     if let Err(error) = copy_and_verify(
-        response,
+        &mut response,
         &mut installer,
         MAX_INSTALLER_BYTES,
         &info.artifact_sha256,
@@ -425,7 +383,7 @@ fn create_update_directory() -> Result<PathBuf, UpdateInstallError> {
     ))
 }
 
-/// 清理七天前的 gmark updater 暂存目录；只匹配固定前缀，绝不扫描或删除其他临时数据。
+/// Cleans only stale updater directories from the system temporary root.
 fn cleanup_stale_update_directories(root: &Path) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -511,45 +469,8 @@ fn copy_and_verify(
     max_bytes: u64,
     expected_sha256: &str,
 ) -> Result<u64, UpdateInstallError> {
-    let mut hasher = Sha256::new();
-    let mut total = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = reader.read(&mut buffer).map_err(|error| {
-            UpdateInstallError::Network(format!("failed while reading update installer: {error}"))
-        })?;
-        if read == 0 {
-            break;
-        }
-        total = total
-            .checked_add(read as u64)
-            .ok_or(UpdateInstallError::TooLarge)?;
-        if total > max_bytes {
-            return Err(UpdateInstallError::TooLarge);
-        }
-        hasher.update(&buffer[..read]);
-        writer.write_all(&buffer[..read]).map_err(|error| {
-            UpdateInstallError::Io(format!("failed to write update installer: {error}"))
-        })?;
-    }
-    let actual = hex_sha256(hasher.finalize().into());
-    if !actual.eq_ignore_ascii_case(expected_sha256) {
-        return Err(UpdateInstallError::HashMismatch {
-            expected: expected_sha256.to_ascii_lowercase(),
-            actual,
-        });
-    }
-    Ok(total)
-}
-
-fn hex_sha256(bytes: [u8; 32]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(64);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
+    copy_and_verify_bounded(&mut reader, writer, max_bytes, expected_sha256)
+        .map_err(map_core_install_error)
 }
 
 fn embedded_verifying_key() -> Result<VerifyingKey, UpdateCheckError> {
@@ -562,151 +483,56 @@ fn embedded_verifying_key() -> Result<VerifyingKey, UpdateCheckError> {
 }
 
 fn verifying_key_from_base64(encoded: &str) -> Result<VerifyingKey, UpdateCheckError> {
-    let bytes = BASE64.decode(encoded).map_err(|error| {
-        UpdateCheckError::Configuration(format!("invalid update public key base64: {error}"))
-    })?;
-    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-        UpdateCheckError::Configuration(format!(
-            "update public key must be 32 bytes, got {}",
-            bytes.len()
-        ))
-    })?;
-    VerifyingKey::from_bytes(&bytes).map_err(|error| {
-        UpdateCheckError::Configuration(format!("invalid Ed25519 update public key: {error}"))
-    })
+    core_verifying_key_from_base64(encoded).map_err(map_core_check_error)
 }
 
 fn verify_signed_manifest(
     envelope_bytes: &[u8],
     key: &VerifyingKey,
-) -> Result<UpdateManifest, UpdateCheckError> {
-    if envelope_bytes.len() > MAX_ENVELOPE_BYTES {
-        return Err(UpdateCheckError::Envelope(format!(
-            "signed update envelope exceeds {MAX_ENVELOPE_BYTES} bytes"
-        )));
+) -> Result<gmark_update_core::ManifestV1, UpdateCheckError> {
+    let verified = parse_verified_manifest(envelope_bytes, key).map_err(map_core_check_error)?;
+    match verified.manifest {
+        SignedManifest::V1(manifest) => Ok(manifest),
+        SignedManifest::V2(_) => Err(UpdateCheckError::Manifest(
+            "signed update manifest is not schema v1".to_owned(),
+        )),
     }
-    let envelope: SignedEnvelope = serde_json::from_slice(envelope_bytes).map_err(|error| {
-        UpdateCheckError::Envelope(format!("invalid signed update envelope: {error}"))
-    })?;
-    if envelope.schema_version != 1 {
-        return Err(UpdateCheckError::Envelope(format!(
-            "unsupported update envelope schema {}",
-            envelope.schema_version
-        )));
-    }
-    if envelope.algorithm != "Ed25519" {
-        return Err(UpdateCheckError::Envelope(format!(
-            "unsupported update signature algorithm '{}'",
-            envelope.algorithm
-        )));
-    }
-    let payload = BASE64.decode(&envelope.payload).map_err(|error| {
-        UpdateCheckError::Envelope(format!("invalid update payload base64: {error}"))
-    })?;
-    if payload.len() > MAX_PAYLOAD_BYTES {
-        return Err(UpdateCheckError::Envelope(format!(
-            "signed update payload exceeds {MAX_PAYLOAD_BYTES} bytes"
-        )));
-    }
-    let signature = BASE64.decode(&envelope.signature).map_err(|error| {
-        UpdateCheckError::Envelope(format!("invalid update signature base64: {error}"))
-    })?;
-    let signature = Signature::from_slice(&signature).map_err(|error| {
-        UpdateCheckError::Signature(format!("invalid Ed25519 signature bytes: {error}"))
-    })?;
-    key.verify_strict(&payload, &signature).map_err(|_| {
-        UpdateCheckError::Signature("update manifest signature verification failed".to_owned())
-    })?;
-    serde_json::from_slice(&payload).map_err(|error| {
-        UpdateCheckError::Manifest(format!("invalid signed update manifest: {error}"))
-    })
-}
-
-fn validate_manifest(manifest: &UpdateManifest) -> Result<(), UpdateCheckError> {
-    if manifest.schema_version != 1 {
-        return Err(UpdateCheckError::Manifest(format!(
-            "unsupported update manifest schema {}",
-            manifest.schema_version
-        )));
-    }
-    if manifest.published_at.trim().is_empty() {
-        return Err(UpdateCheckError::Manifest(
-            "signed update manifest has no publication time".to_owned(),
-        ));
-    }
-    if manifest.rollout_percent > 100 {
-        return Err(UpdateCheckError::Manifest(format!(
-            "rollout_percent {} exceeds 100",
-            manifest.rollout_percent
-        )));
-    }
-    validate_release_url(&manifest.release_url, "release_url")?;
-    if manifest.artifacts.is_empty() {
-        return Err(UpdateCheckError::Manifest(
-            "signed update manifest contains no artifacts".to_owned(),
-        ));
-    }
-    for (name, artifact) in &manifest.artifacts {
-        validate_release_url(&artifact.url, &format!("artifact '{name}' URL"))?;
-        if artifact.sha256.len() != 64
-            || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err(UpdateCheckError::Manifest(format!(
-                "artifact '{name}' has an invalid SHA-256"
-            )));
-        }
-    }
-    let current_artifact = current_artifact_key().ok_or_else(|| {
-        UpdateCheckError::Manifest("this platform has no update artifact mapping".to_owned())
-    })?;
-    if !manifest.artifacts.contains_key(current_artifact) {
-        return Err(UpdateCheckError::Manifest(format!(
-            "signed update manifest has no '{current_artifact}' artifact"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_release_url(value: &str, label: &str) -> Result<(), UpdateCheckError> {
-    let url = Url::parse(value)
-        .map_err(|error| UpdateCheckError::Manifest(format!("invalid {label}: {error}")))?;
-    if url.scheme() != "https"
-        || url.host_str() != Some("github.com")
-        || !url.path().starts_with("/kongweiguang/gmark/releases/")
-        || url.username() != ""
-        || url.password().is_some()
-    {
-        return Err(UpdateCheckError::Manifest(format!(
-            "{label} must be an official HTTPS gmark release URL"
-        )));
-    }
-    Ok(())
 }
 
 fn current_artifact_key() -> Option<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => Some("windows-x86_64"),
-        ("windows", "aarch64") => Some("windows-aarch64"),
-        ("macos", "x86_64") => Some("macos-x86_64"),
-        ("macos", "aarch64") => Some("macos-aarch64"),
-        ("linux", "x86_64") => Some("linux-x86_64"),
-        ("linux", "aarch64") => Some("linux-aarch64"),
-        _ => None,
+    Platform::current().artifact_key_v1()
+}
+
+fn map_core_check_error(error: UpdateCoreError) -> UpdateCheckError {
+    match error {
+        UpdateCoreError::Configuration(message) => UpdateCheckError::Configuration(message),
+        UpdateCoreError::Envelope(message) => UpdateCheckError::Envelope(message),
+        UpdateCoreError::Signature(message) => UpdateCheckError::Signature(message),
+        UpdateCoreError::Manifest(message) if message.starts_with("current app version") => {
+            UpdateCheckError::ParseVersion(message)
+        }
+        UpdateCoreError::Manifest(message) if message.starts_with("signed update version") => {
+            UpdateCheckError::ParseVersion(message.replacen(
+                "signed update version",
+                "signed update manifest version",
+                1,
+            ))
+        }
+        UpdateCoreError::Manifest(message) => UpdateCheckError::Manifest(message),
+        other => UpdateCheckError::Manifest(other.to_string()),
     }
 }
 
-fn rollout_bucket(installation_id: uuid::Uuid, version: &str) -> u32 {
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(installation_id.as_bytes());
-    hasher.update(&[0]);
-    hasher.update(version.as_bytes());
-    hasher.finalize() % 100
-}
-
-fn parse_semver(version: &str, label: &str) -> Result<Version, UpdateCheckError> {
-    Version::parse(version).map_err(|error| {
-        UpdateCheckError::ParseVersion(format!("{label} '{version}' is not valid SemVer: {error}"))
-    })
+fn map_core_install_error(error: UpdateCoreError) -> UpdateInstallError {
+    match error {
+        UpdateCoreError::Download(message) => UpdateInstallError::Network(message),
+        UpdateCoreError::Io(message) => UpdateInstallError::Io(message),
+        UpdateCoreError::TooLarge => UpdateInstallError::TooLarge,
+        UpdateCoreError::HashMismatch { expected, actual } => {
+            UpdateInstallError::HashMismatch { expected, actual }
+        }
+        other => UpdateInstallError::Metadata(other.to_string()),
+    }
 }
 
 fn fetch_remote_signed_manifest(source: UpdateSource) -> Result<Vec<u8>, RemoteFetchFailure> {

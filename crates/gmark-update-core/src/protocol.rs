@@ -106,9 +106,22 @@ impl CancellationV1 {
 pub struct ApplyResultV1 {
     pub schema_version: u8,
     pub status: String,
+    /// Older helper result files omitted this display-only field; retain their
+    /// cache-recovery compatibility while always writing it in new results.
+    #[serde(default)]
     pub from_version: String,
     pub to_version: String,
     pub message: String,
+}
+
+#[derive(Deserialize)]
+struct ApplyResultReadV1 {
+    schema_version: u8,
+    status: String,
+    #[serde(default)]
+    from_version: String,
+    to_version: String,
+    message: String,
 }
 
 impl ApplyResultV1 {
@@ -158,7 +171,7 @@ pub fn write_apply_plan(path: impl AsRef<Path>, plan: &ApplyPlanV1) -> Result<()
             "apply plan exceeds its size limit".to_owned(),
         ));
     }
-    write_atomic(path.as_ref(), &bytes, "update apply plan")
+    write_apply_plan_atomic(path.as_ref(), &bytes)
 }
 
 /// Validates pure helper-protocol invariants without replacing an installed binary.
@@ -192,12 +205,12 @@ pub fn validate_apply_plan(plan: &ApplyPlanV1, platform: &Platform) -> Result<()
 
 /// Performs the helper's filesystem checks after the pure plan checks succeed.
 pub fn validate_apply_plan_files(plan: &ApplyPlanV1, platform: &Platform) -> Result<()> {
-    validate_apply_plan(plan, platform)?;
     if !plan.artifact_path.is_file() || !plan.signed_envelope_path.is_file() {
         return Err(UpdateCoreError::Protocol(
             "verified update files are missing".to_owned(),
         ));
     }
+    validate_apply_plan(plan, platform)?;
     validate_platform_target_on_disk(plan, platform)
 }
 
@@ -245,18 +258,36 @@ pub fn verify_apply_plan_artifact(
     Ok(verified)
 }
 
-/// Reads the atomically-written helper result in its exact v1 schema.
+/// Reads a bounded helper result while retaining legacy display compatibility.
 pub fn read_apply_result(path: impl AsRef<Path>) -> Result<ApplyResultV1> {
     let bytes = read_bounded(path.as_ref(), MAX_APPLY_RESULT_BYTES, "update result")?;
-    let result: ApplyResultV1 = serde_json::from_slice(&bytes)
+    parse_apply_result(&bytes)
+}
+
+/// Parses the exact bounded bytes used by a caller for fingerprinting or display.
+/// This avoids observing two different result-file revisions across separate reads.
+pub fn parse_apply_result(bytes: &[u8]) -> Result<ApplyResultV1> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_APPLY_RESULT_BYTES {
+        return Err(UpdateCoreError::Protocol(
+            "update result exceeds its size limit".to_owned(),
+        ));
+    }
+    let result: ApplyResultReadV1 = serde_json::from_slice(bytes)
         .map_err(|error| UpdateCoreError::Protocol(format!("invalid update result: {error}")))?;
-    validate_apply_result(&result)?;
+    let result = ApplyResultV1 {
+        schema_version: result.schema_version,
+        status: result.status,
+        from_version: result.from_version,
+        to_version: result.to_version,
+        message: result.message,
+    };
+    validate_apply_result_schema(&result)?;
     Ok(result)
 }
 
 /// Atomically writes the result JSON that the next app process consumes.
 pub fn write_apply_result(path: impl AsRef<Path>, result: &ApplyResultV1) -> Result<()> {
-    validate_apply_result(result)?;
+    validate_apply_result_for_write(result)?;
     let bytes = serde_json::to_vec_pretty(result).map_err(|error| {
         UpdateCoreError::Protocol(format!("failed to serialize update result: {error}"))
     })?;
@@ -412,18 +443,60 @@ fn is_regular_non_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn validate_apply_result(result: &ApplyResultV1) -> Result<()> {
-    if result.schema_version != ApplyResultV1::SCHEMA_VERSION {
-        return Err(UpdateCoreError::Protocol(
-            "unsupported update result schema".to_owned(),
-        ));
-    }
+fn validate_apply_result_for_write(result: &ApplyResultV1) -> Result<()> {
+    validate_apply_result_schema(result)?;
     if !matches!(result.status.as_str(), "succeeded" | "failed") {
         return Err(UpdateCoreError::Protocol(
             "update result has an unsupported status".to_owned(),
         ));
     }
     Ok(())
+}
+
+fn validate_apply_result_schema(result: &ApplyResultV1) -> Result<()> {
+    if result.schema_version != ApplyResultV1::SCHEMA_VERSION {
+        return Err(UpdateCoreError::Protocol(
+            "unsupported update result schema".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_apply_plan_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let label = "update apply plan";
+    let parent = path.parent().ok_or_else(|| {
+        UpdateCoreError::Protocol(format!("{label} path has no parent directory"))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        UpdateCoreError::Io(format!("failed to create {label} directory: {error}"))
+    })?;
+    let mut temporary = NamedTempFile::new_in(parent)
+        .map_err(|error| UpdateCoreError::Io(format!("failed to create {label}: {error}")))?;
+    temporary
+        .write_all(bytes)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| UpdateCoreError::Io(format!("failed to write {label}: {error}")))?;
+    set_apply_plan_private(temporary.as_file())?;
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| UpdateCoreError::Io(format!("failed to commit {label}: {}", error.error)))
+}
+
+#[cfg(not(unix))]
+fn write_apply_plan_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(path, bytes, "update apply plan")
+}
+
+#[cfg(unix)]
+fn set_apply_plan_private(file: &File) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| {
+            UpdateCoreError::Io(format!("failed to secure update apply plan: {error}"))
+        })
 }
 
 fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>> {

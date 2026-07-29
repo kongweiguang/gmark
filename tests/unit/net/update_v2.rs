@@ -1,9 +1,13 @@
 // @author kongweiguang
 
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
+use std::io::Write as _;
 use std::net::TcpListener;
+use std::sync::Arc;
 
 fn signing_key() -> SigningKey {
     SigningKey::from_bytes(&[19; 32])
@@ -15,6 +19,14 @@ fn platform_format() -> ArtifactFormat {
         "macos" => ArtifactFormat::MacosAppTarGz,
         "linux" => ArtifactFormat::LinuxAppImage,
         other => panic!("unsupported test platform {other}"),
+    }
+}
+
+fn platform_system_trust() -> SystemTrust {
+    if cfg!(target_os = "linux") {
+        SystemTrust::NotApplicable
+    } else {
+        SystemTrust::Unsigned
     }
 }
 
@@ -35,7 +47,7 @@ fn manifest(version: &str) -> Value {
                 "size": 16,
                 "sha256": "ab".repeat(32),
                 "format": platform_format(),
-                "system_trust": SystemTrust::Unsigned
+                "system_trust": platform_system_trust()
             }
         }
     })
@@ -120,10 +132,26 @@ fn content_range_parser_is_strict_about_unit_and_start() {
 fn atomic_metadata_commit_replaces_an_existing_file() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("partial.json");
-    write_json_atomic(&path, &json!({ "etag": "old" })).unwrap();
-    write_json_atomic(&path, &json!({ "etag": "new" })).unwrap();
-    let value: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert_eq!(value["etag"], "new");
+    write_partial_metadata(
+        &path,
+        &gmark_update_core::PartialMetadata {
+            etag: Some("old".to_owned()),
+            last_modified: None,
+        },
+    )
+    .unwrap();
+    write_partial_metadata(
+        &path,
+        &gmark_update_core::PartialMetadata {
+            etag: Some("new".to_owned()),
+            last_modified: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        read_partial_metadata(&path).unwrap().etag.as_deref(),
+        Some("new")
+    );
 }
 
 #[test]
@@ -161,7 +189,7 @@ fn download_fixture_release(url: String, payload: &[u8]) -> UpdateRelease {
         release_url: "https://github.com/kongweiguang/gmark/releases/tag/v0.2.0".into(),
         artifact_url: url,
         artifact_size: payload.len() as u64,
-        artifact_sha256: hex_sha256(hasher.finalize().into()),
+        artifact_sha256: format!("{:x}", hasher.finalize()),
         artifact_format: platform_format(),
         system_trust: SystemTrust::Unsigned,
         signed_envelope: Arc::from(b"signed-envelope".as_slice()),

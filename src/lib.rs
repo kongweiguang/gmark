@@ -512,7 +512,13 @@ fn run_app() {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Err(error) = std::fs::write(path, format!("{}\n", env!("CARGO_PKG_VERSION"))) {
+            if let Err(error) = std::fs::write(
+                path,
+                gmark_update_core::StartupAcknowledgementV1::for_target_version(env!(
+                    "CARGO_PKG_VERSION"
+                ))
+                .marker_bytes(),
+            ) {
                 eprintln!("failed to acknowledge applied update: {error}");
             }
         }

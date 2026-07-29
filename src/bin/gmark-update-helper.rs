@@ -2,92 +2,25 @@
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-//! Out-of-process installer used only by signed gmark update transactions.
+//! Out-of-process installer for a core-verified GMark update transaction.
 
-use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read as _, Write as _};
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use ed25519_dalek::{Signature, VerifyingKey};
 #[cfg(target_os = "macos")]
 use flate2::read::GzDecoder;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
+use gmark_update_core::{
+    ApplyPlanV1, ApplyResultV1, HelperSignalV1, Platform, clear_helper_signal,
+    helper_signal_present, read_apply_plan, validate_apply_plan_files, verify_apply_plan_artifact,
+    verifying_key_from_base64, write_apply_result,
+};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::fs::File;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-
-const MAX_PLAN_BYTES: u64 = 64 * 1024;
-const MAX_ENVELOPE_BYTES: usize = 128 * 1024;
-const MAX_PAYLOAD_BYTES: usize = 96 * 1024;
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ApplyPlanV1 {
-    schema_version: u8,
-    parent_pid: u32,
-    current_version: String,
-    target_version: String,
-    artifact_path: PathBuf,
-    artifact_url: String,
-    artifact_size: u64,
-    artifact_sha256: String,
-    artifact_format: String,
-    signed_envelope_path: PathBuf,
-    target_path: PathBuf,
-    backup_path: PathBuf,
-    relaunch_path: PathBuf,
-    acknowledgement_path: PathBuf,
-    cancellation_path: PathBuf,
-    result_path: PathBuf,
-    helper_log_path: PathBuf,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SignedEnvelope {
-    schema_version: u8,
-    algorithm: String,
-    payload: String,
-    signature: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Manifest {
-    schema_version: u8,
-    channel: String,
-    version: String,
-    published_at: String,
-    notes: String,
-    paused: bool,
-    rollout_percent: u8,
-    release_url: String,
-    artifacts: BTreeMap<String, Artifact>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Artifact {
-    url: String,
-    size: u64,
-    sha256: String,
-    format: String,
-    system_trust: String,
-}
-
-#[derive(Serialize)]
-struct ApplyResult<'a> {
-    schema_version: u8,
-    status: &'a str,
-    from_version: &'a str,
-    to_version: &'a str,
-    message: String,
-}
 
 fn main() -> ExitCode {
     let args = std::env::args_os().collect::<Vec<_>>();
@@ -171,129 +104,11 @@ fn append_log(plan: &ApplyPlanV1, message: &str) {
 }
 
 fn read_plan(path: &Path) -> Result<ApplyPlanV1, String> {
-    let length = fs::metadata(path)
-        .map_err(|error| format!("failed to inspect apply plan: {error}"))?
-        .len();
-    if length == 0 || length > MAX_PLAN_BYTES {
-        return Err("apply plan exceeds its size limit".to_owned());
-    }
-    let bytes = fs::read(path).map_err(|error| format!("failed to read apply plan: {error}"))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("invalid apply plan: {error}"))
+    read_apply_plan(path).map_err(|error| error.to_string())
 }
 
 fn validate_plan(plan: &ApplyPlanV1) -> Result<(), String> {
-    if plan.schema_version != 1 {
-        return Err("unsupported apply plan schema".to_owned());
-    }
-    if semver::Version::parse(&plan.target_version)
-        .map_err(|error| format!("invalid target version: {error}"))?
-        <= semver::Version::parse(&plan.current_version)
-            .map_err(|error| format!("invalid current version: {error}"))?
-    {
-        return Err("target version must be newer than current version".to_owned());
-    }
-    if !plan.artifact_path.is_file() || !plan.signed_envelope_path.is_file() {
-        return Err("verified update files are missing".to_owned());
-    }
-    let transaction_dir = plan
-        .artifact_path
-        .parent()
-        .ok_or_else(|| "update artifact has no transaction directory".to_owned())?;
-    let updates_root = transaction_dir
-        .parent()
-        .ok_or_else(|| "update transaction has no cache root".to_owned())?;
-    if plan.artifact_path != transaction_dir.join("artifact.ready")
-        || plan.signed_envelope_path != transaction_dir.join("manifest.envelope.json")
-        || plan.acknowledgement_path != transaction_dir.join("startup-ack")
-        || plan.cancellation_path != transaction_dir.join("cancel-install")
-        || plan.result_path != updates_root.join("last-result.json")
-        || plan.helper_log_path != updates_root.join("last-helper.log")
-    {
-        return Err("apply plan paths do not match the versioned update protocol".to_owned());
-    }
-    if plan.artifact_size == 0
-        || plan.artifact_size > 512 * 1024 * 1024
-        || plan.artifact_sha256.len() != 64
-        || !plan
-            .artifact_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err("apply plan has invalid artifact bounds or digest".to_owned());
-    }
-    let artifact_url = url::Url::parse(&plan.artifact_url)
-        .map_err(|error| format!("invalid artifact URL: {error}"))?;
-    if artifact_url.scheme() != "https"
-        || artifact_url.host_str() != Some("github.com")
-        || !artifact_url
-            .path()
-            .starts_with("/kongweiguang/gmark/releases/download/")
-    {
-        return Err("apply plan artifact URL is not an official GitHub release URL".to_owned());
-    }
-    validate_platform_plan(plan)?;
-    Ok(())
-}
-
-fn validate_platform_plan(plan: &ApplyPlanV1) -> Result<(), String> {
-    let expected_format = if cfg!(target_os = "windows") {
-        "windows-setup-exe"
-    } else if cfg!(target_os = "macos") {
-        "macos-app-tar-gz"
-    } else if cfg!(target_os = "linux") {
-        "linux-app-image"
-    } else {
-        return Err("this platform cannot apply gmark updates".to_owned());
-    };
-    if plan.artifact_format != expected_format {
-        return Err(format!(
-            "artifact format '{}' is invalid for this platform",
-            plan.artifact_format
-        ));
-    }
-    let target_parent = plan
-        .target_path
-        .parent()
-        .ok_or_else(|| "update target has no parent directory".to_owned())?;
-    let target_name = plan
-        .target_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "update target has no valid file name".to_owned())?;
-    if plan.backup_path != target_parent.join(format!("{target_name}.gmark-update-backup")) {
-        return Err("backup path is not the required sibling of the update target".to_owned());
-    }
-    #[cfg(target_os = "windows")]
-    if plan.relaunch_path != plan.target_path
-        || !target_name.eq_ignore_ascii_case("gmark.exe")
-        || !is_regular_non_symlink(&plan.target_path)
-    {
-        return Err("Windows update target is not the installed gmark executable".to_owned());
-    }
-    #[cfg(target_os = "macos")]
-    if target_name != "gmark.app"
-        || plan
-            .target_path
-            .extension()
-            .and_then(|value| value.to_str())
-            != Some("app")
-        || plan.relaunch_path != plan.target_path.join("Contents/MacOS/gmark")
-        || !plan.target_path.is_dir()
-    {
-        return Err("macOS update target is not a gmark application bundle".to_owned());
-    }
-    #[cfg(target_os = "linux")]
-    if plan.relaunch_path != plan.target_path || !is_regular_non_symlink(&plan.target_path) {
-        return Err("Linux update target is not a regular AppImage file".to_owned());
-    }
-    Ok(())
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-fn is_regular_non_symlink(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
-        .unwrap_or(false)
+    validate_apply_plan_files(plan, &Platform::current()).map_err(|error| error.to_string())
 }
 
 fn wait_for_parent_or_cancel(plan: &ApplyPlanV1) -> Result<(), String> {
@@ -323,121 +138,19 @@ fn verify_signed_artifact(plan: &ApplyPlanV1) -> Result<(), String> {
     verify_signed_artifact_with_key(plan, &key)
 }
 
-fn verify_signed_artifact_with_key(plan: &ApplyPlanV1, key: &VerifyingKey) -> Result<(), String> {
-    let envelope_bytes = fs::read(&plan.signed_envelope_path)
-        .map_err(|error| format!("failed to read signed manifest: {error}"))?;
-    if envelope_bytes.is_empty() || envelope_bytes.len() > MAX_ENVELOPE_BYTES {
-        return Err("signed manifest envelope exceeds its size limit".to_owned());
-    }
-    let envelope: SignedEnvelope = serde_json::from_slice(&envelope_bytes)
-        .map_err(|error| format!("invalid signed manifest envelope: {error}"))?;
-    if envelope.schema_version != 1 || envelope.algorithm != "Ed25519" {
-        return Err("unsupported signed manifest envelope".to_owned());
-    }
-    let payload = BASE64
-        .decode(envelope.payload)
-        .map_err(|error| format!("invalid manifest payload base64: {error}"))?;
-    if payload.is_empty() || payload.len() > MAX_PAYLOAD_BYTES {
-        return Err("signed manifest payload exceeds its size limit".to_owned());
-    }
-    let signature = BASE64
-        .decode(envelope.signature)
-        .map_err(|error| format!("invalid manifest signature base64: {error}"))?;
-    let signature = Signature::from_slice(&signature)
-        .map_err(|error| format!("invalid manifest signature: {error}"))?;
-    key.verify_strict(&payload, &signature)
-        .map_err(|_| "manifest signature verification failed".to_owned())?;
-    let manifest: Manifest = serde_json::from_slice(&payload)
-        .map_err(|error| format!("invalid signed manifest: {error}"))?;
-    if manifest.schema_version != 2
-        || manifest.channel != "stable"
-        || manifest.version != plan.target_version
-        || manifest.paused
-        || manifest.rollout_percent > 100
-        || !is_rfc3339_utc(&manifest.published_at)
-        || manifest.notes.len() > 32 * 1024
-        || !is_official_release_url(&manifest.release_url)
-    {
-        return Err("signed manifest does not match the apply plan".to_owned());
-    }
-    let artifact = manifest
-        .artifacts
-        .values()
-        .find(|artifact| artifact.url == plan.artifact_url)
-        .ok_or_else(|| "apply artifact is absent from signed manifest".to_owned())?;
-    if artifact.size != plan.artifact_size
-        || !artifact.sha256.eq_ignore_ascii_case(&plan.artifact_sha256)
-        || artifact.format != plan.artifact_format
-        || !system_trust_matches_platform(&artifact.system_trust)
-    {
-        return Err("signed artifact metadata does not match the apply plan".to_owned());
-    }
-    let metadata = fs::metadata(&plan.artifact_path)
-        .map_err(|error| format!("failed to inspect update artifact: {error}"))?;
-    if metadata.len() != plan.artifact_size {
-        return Err("update artifact size changed after verification".to_owned());
-    }
-    let actual = sha256_file(&plan.artifact_path)?;
-    if !actual.eq_ignore_ascii_case(&plan.artifact_sha256) {
-        return Err("update artifact hash changed after verification".to_owned());
-    }
-    Ok(())
+fn verify_signed_artifact_with_key(
+    plan: &ApplyPlanV1,
+    key: &ed25519_dalek::VerifyingKey,
+) -> Result<(), String> {
+    verify_apply_plan_artifact(plan, key, &Platform::current())
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
-fn is_official_release_url(value: &str) -> bool {
-    url::Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.host_str() == Some("github.com")
-            && url.path().starts_with("/kongweiguang/gmark/releases/")
-    })
-}
-
-fn is_rfc3339_utc(value: &str) -> bool {
-    value.ends_with('Z')
-        && value.len() >= 20
-        && value.as_bytes().get(4) == Some(&b'-')
-        && value.as_bytes().get(7) == Some(&b'-')
-        && value.as_bytes().get(10) == Some(&b'T')
-        && value.as_bytes().get(13) == Some(&b':')
-        && value.as_bytes().get(16) == Some(&b':')
-}
-
-fn system_trust_matches_platform(value: &str) -> bool {
-    match std::env::consts::OS {
-        "windows" => matches!(value, "unsigned" | "authenticode"),
-        "macos" => matches!(value, "unsigned" | "developer-id-notarized"),
-        "linux" => value == "not-applicable",
-        _ => false,
-    }
-}
-
-fn embedded_verifying_key() -> Result<VerifyingKey, String> {
+fn embedded_verifying_key() -> Result<ed25519_dalek::VerifyingKey, String> {
     let encoded = option_env!("GMARK_UPDATE_PUBLIC_KEY_BASE64")
         .ok_or_else(|| "update helper has no embedded verification key".to_owned())?;
-    let bytes = BASE64
-        .decode(encoded)
-        .map_err(|error| format!("invalid embedded verification key: {error}"))?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|bytes: Vec<u8>| format!("verification key has {} bytes", bytes.len()))?;
-    VerifyingKey::from_bytes(&bytes)
-        .map_err(|error| format!("invalid embedded verification key: {error}"))
-}
-
-fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|error| format!("failed to hash artifact: {error}"))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("failed to hash artifact: {error}"))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+    verifying_key_from_base64(encoded).map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -563,7 +276,7 @@ fn apply_update(plan: &ApplyPlanV1) -> Result<(), String> {
 }
 
 fn launch_and_confirm(plan: &ApplyPlanV1) -> Result<(), String> {
-    let _ = fs::remove_file(&plan.acknowledgement_path);
+    let _ = clear_helper_signal(plan, HelperSignalV1::Acknowledgement);
     let mut child = Command::new(&plan.relaunch_path)
         .arg("--update-ack")
         .arg(&plan.acknowledgement_path)
@@ -571,7 +284,7 @@ fn launch_and_confirm(plan: &ApplyPlanV1) -> Result<(), String> {
         .map_err(|error| format!("failed to relaunch updated gmark: {error}"))?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if plan.acknowledgement_path.is_file() {
+        if helper_signal_present(plan, HelperSignalV1::Acknowledgement).unwrap_or(false) {
             return Ok(());
         }
         if let Some(status) = child
@@ -593,10 +306,9 @@ fn launch_and_confirm(plan: &ApplyPlanV1) -> Result<(), String> {
 }
 
 fn rollback(plan: &ApplyPlanV1) {
-    if !plan.backup_path.exists() {
-        return;
+    if plan.backup_path.exists() {
+        rollback_paths(plan);
     }
-    rollback_paths(plan);
 }
 
 #[cfg(target_os = "macos")]
@@ -628,36 +340,27 @@ fn rollback_paths(plan: &ApplyPlanV1) {
 }
 
 fn write_result(plan: &ApplyPlanV1, status: &str, message: String) -> Result<(), String> {
-    if let Some(parent) = plan.result_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create result directory: {error}"))?;
+    if !matches!(status, "succeeded" | "failed") {
+        return Err("unsupported update result status".to_owned());
     }
-    let bytes = serde_json::to_vec_pretty(&ApplyResult {
-        schema_version: 1,
-        status,
-        from_version: &plan.current_version,
-        to_version: &plan.target_version,
+    let result = ApplyResultV1 {
+        schema_version: ApplyResultV1::SCHEMA_VERSION,
+        status: status.to_owned(),
+        from_version: plan.current_version.clone(),
+        to_version: plan.target_version.clone(),
         message,
-    })
-    .map_err(|error| format!("failed to serialize update result: {error}"))?;
-    let parent = plan.result_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|error| format!("failed to create update result: {error}"))?;
-    temporary
-        .write_all(&bytes)
-        .and_then(|()| temporary.as_file().sync_all())
-        .map_err(|error| format!("failed to persist update result: {error}"))?;
-    temporary
-        .persist(&plan.result_path)
-        .map(|_| ())
-        .map_err(|error| format!("failed to commit update result: {}", error.error))
+    };
+    write_apply_result(&plan.result_path, &result).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use ed25519_dalek::{Signer as _, SigningKey};
+    use gmark_update_core::MAX_APPLY_PLAN_BYTES;
     use serde_json::json;
+    use sha2::{Digest as _, Sha256};
 
     fn fixture_plan(root: &Path) -> ApplyPlanV1 {
         let transaction = root.join("v0.2.0");
@@ -686,7 +389,7 @@ mod tests {
             target.clone()
         };
         ApplyPlanV1 {
-            schema_version: 1,
+            schema_version: ApplyPlanV1::SCHEMA_VERSION,
             parent_pid: u32::MAX,
             current_version: "0.1.0".into(),
             target_version: "0.2.0".into(),
@@ -759,17 +462,6 @@ mod tests {
     }
 
     #[test]
-    fn sha256_file_matches_standard_vector() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("abc");
-        fs::write(&path, b"abc").unwrap();
-        assert_eq!(
-            sha256_file(&path).unwrap(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-    }
-
-    #[test]
     fn apply_result_atomically_replaces_a_previous_result() {
         let root = tempfile::tempdir().unwrap();
         let plan = fixture_plan(root.path());
@@ -797,7 +489,7 @@ mod tests {
     fn oversized_apply_plan_is_rejected_before_deserialization() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("apply-plan.json");
-        fs::write(&path, vec![b' '; MAX_PLAN_BYTES as usize + 1]).unwrap();
+        fs::write(&path, vec![b' '; MAX_APPLY_PLAN_BYTES as usize + 1]).unwrap();
         assert!(read_plan(&path).unwrap_err().contains("size limit"));
     }
 
@@ -805,7 +497,10 @@ mod tests {
     fn helper_reverifies_manifest_signature_and_artifact_bytes() {
         let root = tempfile::tempdir().unwrap();
         let mut plan = fixture_plan(root.path());
-        plan.artifact_sha256 = sha256_file(&plan.artifact_path).unwrap();
+        plan.artifact_sha256 = format!(
+            "{:x}",
+            Sha256::digest(fs::read(&plan.artifact_path).unwrap())
+        );
         let signing_key = SigningKey::from_bytes(&[31; 32]);
         let system_trust = if cfg!(target_os = "linux") {
             "not-applicable"

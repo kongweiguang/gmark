@@ -26,12 +26,12 @@ pub use policy::{
 };
 pub use protocol::{
     ApplyPlanV1, ApplyResultV1, CancellationV1, HelperSignalV1, MAX_APPLY_PLAN_BYTES,
-    StartupAcknowledgementV1, clear_helper_signal, helper_signal_present, read_apply_plan,
-    read_apply_result, validate_apply_plan, validate_apply_plan_files, verify_apply_plan_artifact,
-    write_apply_plan, write_apply_result, write_helper_signal,
+    StartupAcknowledgementV1, clear_helper_signal, helper_signal_present, parse_apply_result,
+    read_apply_plan, read_apply_result, validate_apply_plan, validate_apply_plan_files,
+    verify_apply_plan_artifact, write_apply_plan, write_apply_result, write_helper_signal,
 };
 pub use staging::{
     BoundedTransferOutcome, DownloadControl, DownloadEvent, PartialMetadata, ResumeRequest,
-    StagingPaths, copy_bounded, read_partial_metadata, resume_request, verify_artifact_file,
-    write_partial_metadata,
+    StagingPaths, copy_and_verify_bounded, copy_bounded, parse_content_range_start,
+    read_partial_metadata, resume_request, verify_artifact_file, write_partial_metadata,
 };

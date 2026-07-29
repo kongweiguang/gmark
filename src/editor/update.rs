@@ -2,11 +2,12 @@
 
 //! Editor presentation and commands for the application-wide updater.
 
+use gmark_update_core::SystemTrust;
 use gpui::*;
 
 use super::Editor;
 use crate::i18n::I18nManager;
-use crate::net::update_v2::{CheckOrigin, SystemTrust};
+use crate::net::update_v2::CheckOrigin;
 use crate::theme::Theme;
 use crate::updater::{UpdateCoordinator, UpdateState};
 
