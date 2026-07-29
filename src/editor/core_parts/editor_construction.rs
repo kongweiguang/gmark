@@ -37,8 +37,12 @@ impl Editor {
         let requires_conversion = !opened.encoding.is_utf8();
         let mut editor = Self::from_markdown_internal(cx, opened.text, file_path, false);
         editor.source_encoding = opened.encoding;
-        if requires_conversion {
+        // SVG 的源码是真值，但首次打开应直接展示派生预览；在构造阶段确定模式，
+        // 避免窗口创建后的补偿更新与首帧/平台启动时序竞争。
+        if requires_conversion || editor.is_svg_document() {
             editor.set_view_mode(ViewMode::Preview, cx);
+        }
+        if requires_conversion {
             editor.show_encoding_conversion_dialog = true;
         }
         editor
@@ -400,6 +404,7 @@ impl Editor {
             file_path,
             image_preview_path: None,
             image_preview_zoom: 1.0,
+            svg_preview_cache: None,
             file_open_failure: None,
             saved_file_fingerprint,
             file_watch_guard: None,

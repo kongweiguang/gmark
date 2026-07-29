@@ -59,6 +59,7 @@ mod source_mapping;
 mod source_tools;
 mod spellcheck;
 mod status_bar;
+mod svg_preview;
 mod system_file;
 mod table_edit;
 mod table_fragment;
@@ -255,6 +256,8 @@ pub struct Editor {
     image_preview_path: Option<PathBuf>,
     /// 图片缩放相对“适合可用宽度”的倍率；属于标签视图状态，不进入文档事务。
     image_preview_zoom: f32,
+    /// SVG 派生预览按文档路径与 revision 缓存原始字节，避免每帧复制整份 XML。
+    svg_preview_cache: Option<svg_preview::SvgPreviewCache>,
     /// 打不开的文件仍占用真实 Tab；错误与后续动作必须留在内容区，不能污染工作区扫描状态。
     file_open_failure: Option<FileOpenFailure>,
     saved_file_fingerprint: Option<crate::recovery::FileFingerprint>,

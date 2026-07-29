@@ -68,9 +68,9 @@ fn extended_graphemes_count_as_one_visible_character() {
 }
 
 #[test]
-fn regular_external_conflict_is_visible_without_recovery_session() {
+fn external_conflict_is_visible_but_recovered_session_is_silent() {
     assert!(should_render_file_status(false, true));
-    assert!(should_render_file_status(true, false));
+    assert!(!should_render_file_status(true, false));
     assert!(!should_render_file_status(false, false));
 }
 

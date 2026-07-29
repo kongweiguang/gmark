@@ -121,10 +121,11 @@ pub(super) fn render_source_format_overflow_button(
 }
 
 pub(super) fn should_render_file_status(
-    recovered_session: bool,
+    _recovered_session: bool,
     external_file_conflict: bool,
 ) -> bool {
-    recovered_session || external_file_conflict
+    // 启动恢复是自动完成的正常流程，保持静默；这里只保留需要用户处理的外部冲突入口。
+    external_file_conflict
 }
 
 pub(super) fn render_recovery_status(

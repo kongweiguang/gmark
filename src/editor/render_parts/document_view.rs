@@ -211,6 +211,9 @@ impl Editor {
         if self.file_open_failure.is_some() {
             return self.render_file_open_failure(&theme, &strings, cx);
         }
+        if self.is_svg_document() && self.view_mode == super::ViewMode::Preview {
+            return self.render_svg_document_preview(&theme, &strings, false, cx);
+        }
 
         let d = &theme.dimensions;
         let editor = cx.entity().downgrade();

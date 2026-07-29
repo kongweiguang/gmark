@@ -13,25 +13,22 @@ impl Editor {
         let d = &theme.dimensions;
         let t = &theme.typography;
         let s = cx.global::<I18nManager>().strings().clone();
+        let panel_padding_y = d.table_insert_stepper_gap + 4.0;
         let dialog_min_height = (
             // GPUI 的自动高度不会稳定计入横向操作行中的定高按钮，因此由组成 token
             // 明确给出单行文案下的固有高度；较长本地化文案仍可继续撑高面板。
-            (d.table_insert_stepper_gap + 4.0) * 2.0
+            panel_padding_y * 2.0
                 + 22.0
                 + t.dialog_body_size * t.text_line_height
                 + d.table_insert_stepper_button_size * 2.0
                 + d.table_insert_stepper_gap * 3.0
                 + d.table_insert_stepper_gap * 0.5
-                + d.table_insert_stepper_gap
                 + d.dialog_button_height
-                // 按钮下方与分隔线上方使用同一档紧凑间距，保持操作区垂直居中。
-                + d.table_insert_stepper_gap
-                // 为文字行高和 1px 边框的设备像素取整保留半个紧凑间距。
-                + d.table_insert_stepper_gap * 0.5
-                // GPUI 会把定高操作行放到面板固有高度之外；补足上下动作区留白。
-                + d.table_insert_stepper_gap * 2.5
-                // 边框设备像素取整会压缩底部空隙，补齐后与操作区顶部间距对称。
-                + d.dialog_border_width * 6.0
+                + panel_padding_y
+                // GPUI 的横向定高按钮不完整参与父级固有高度；补回底部 padding，
+                // 并预留面板与分隔线的设备像素取整。
+                + panel_padding_y
+                + d.dialog_border_width * 3.0
         )
         .ceil();
 
@@ -147,7 +144,7 @@ impl Editor {
                             )
                             .min_h(px(dialog_min_height))
                             // 紧凑弹窗在低高度窗口中仍需为操作按钮保留完整底部内边距。
-                            .py(px(d.table_insert_stepper_gap + 4.0))
+                            .py(px(panel_padding_y))
                             .gap(px(d.table_insert_stepper_gap * 0.5))
                             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                                 cx.stop_propagation()
@@ -188,7 +185,8 @@ impl Editor {
                                 dialog_actions(theme)
                                     .id("table-insert-dialog-actions")
                                     .debug_selector(|| "table-insert-dialog-actions".to_owned())
-                                    .pt(px(d.table_insert_stepper_gap))
+                                    .min_h(px(d.dialog_button_height + panel_padding_y))
+                                    .pt(px(panel_padding_y))
                                     .child(
                                         dialog_button(
                                             "cancel-table-insert-dialog",

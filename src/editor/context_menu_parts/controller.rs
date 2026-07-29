@@ -25,7 +25,12 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.dismiss_active_contextual_editing_popovers(cx) {
+        let had_menu = self.menu_bar_open.is_some();
+        if had_menu {
+            self.dismiss_menu_bar_from_body(cx);
+        }
+        let had_contextual_editing = self.dismiss_active_contextual_editing_popovers(cx);
+        if had_menu || had_contextual_editing {
             cx.notify();
         }
     }

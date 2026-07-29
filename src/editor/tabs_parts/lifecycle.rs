@@ -203,7 +203,7 @@ impl Editor {
             file_open_failure: None,
             saved_file_fingerprint: crate::recovery::fingerprint_file(&path).ok(),
             document_dirty: false,
-            view_mode: if requires_conversion {
+            view_mode: if requires_conversion || crate::document_io::is_svg_path(&path) {
                 ViewMode::Preview
             } else {
                 ViewMode::Rendered

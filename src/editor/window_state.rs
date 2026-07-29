@@ -370,12 +370,19 @@ impl Editor {
             .document_host
             .as_ref()
             .is_some_and(|view| view.read(cx).supports_tabular_modes());
-        let target = match self.view_mode {
-            ViewMode::Rendered | ViewMode::Preview => ViewMode::Source,
-            ViewMode::Source if tabular_document => ViewMode::Preview,
-            ViewMode::Source => ViewMode::Rendered,
-            ViewMode::Split if tabular_document => ViewMode::Source,
-            ViewMode::Split => ViewMode::Rendered,
+        let target = if self.is_svg_document() {
+            match self.view_mode {
+                ViewMode::Source => ViewMode::Preview,
+                ViewMode::Preview | ViewMode::Split | ViewMode::Rendered => ViewMode::Source,
+            }
+        } else {
+            match self.view_mode {
+                ViewMode::Rendered | ViewMode::Preview => ViewMode::Source,
+                ViewMode::Source if tabular_document => ViewMode::Preview,
+                ViewMode::Source => ViewMode::Rendered,
+                ViewMode::Split if tabular_document => ViewMode::Source,
+                ViewMode::Split => ViewMode::Rendered,
+            }
         };
         self.set_view_mode(target, cx);
     }
@@ -383,6 +390,9 @@ impl Editor {
     pub(crate) fn set_view_mode(&mut self, target: ViewMode, cx: &mut Context<Self>) {
         // 模式改变会替换内容坐标空间；父编辑器的菜单也不能跨视图继续存在。
         self.dismiss_contextual_overlays(cx);
+        if self.is_svg_document() && target == ViewMode::Rendered {
+            return;
+        }
         if let Some(document_host) = self.document_host.clone() {
             let json_document = document_host.read(cx).is_json_document();
             let delimited_document = document_host.read(cx).is_delimited_document();
@@ -466,7 +476,11 @@ impl Editor {
                     // 切换视图不能触发源码规范化；Source 视图直接读取 Rope 真值。
                     let markdown = self.source_document.text();
                     let block = Self::new_block(cx, BlockRecord::paragraph(markdown));
-                    let language = self.document_kind.source_syntax_language();
+                    let language = if self.is_svg_document() {
+                        Some("html")
+                    } else {
+                        self.document_kind.source_syntax_language()
+                    };
                     block.update(cx, move |block, _cx| {
                         block.set_source_document_mode_with_language(language)
                     });
@@ -533,7 +547,11 @@ impl Editor {
 
     fn source_view_document(&self, cx: &mut Context<Self>) -> DocumentTree {
         let block = Self::new_block(cx, BlockRecord::paragraph(self.source_document.text()));
-        let language = self.document_kind.source_syntax_language();
+        let language = if self.is_svg_document() {
+            Some("html")
+        } else {
+            self.document_kind.source_syntax_language()
+        };
         block.update(cx, move |block, _cx| {
             block.set_source_document_mode_with_language(language)
         });

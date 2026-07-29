@@ -20,7 +20,7 @@
 
 gmark 使用 Rust 与 GPUI 构建。文档始终是磁盘上的普通文件，不需要账号，也不会为了编辑而上传内容。你可以用它写一篇临时笔记、维护整个文档工作区，也可以直接查看 JSON、JSONL、CSV、TSV 和超大文本文件。
 
-当前版本：**v0.1.4**
+当前版本：**v0.1.5**
 
 ## 为什么选择 gmark
 
@@ -163,6 +163,7 @@ sudo xattr -rd com.apple.quarantine /Applications/gmark.app
 | JSON | 交互式 Graph、Live 编辑、源码和分栏 |
 | JSONL / NDJSON | 源码、记录结构与导航 |
 | CSV / TSV / TAB | 可编辑表格、筛选预览和源码分栏 |
+| SVG | 可编辑源码、实时预览和分栏 |
 | 纯文本与代码 | Source、语法高亮、折叠与外部格式化器 |
 | 超过阈值的文件 | Paged Source，按可见区域读取 |
 

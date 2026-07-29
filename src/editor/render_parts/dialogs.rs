@@ -36,6 +36,8 @@ impl Editor {
                         )
                         .child(
                             dialog_actions(theme)
+                                .id("unsaved-changes-actions")
+                                .debug_selector(|| "unsaved-changes-actions".to_owned())
                                 .child(
                                     dialog_button(
                                         "cancel-close-dialog",

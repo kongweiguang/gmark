@@ -2,6 +2,8 @@
 
 use super::*;
 
+const MENU_POINTER_LEAVE_CLOSE_DELAY: Duration = Duration::from_millis(180);
+
 impl Editor {
     /// 复用 Editor 现有 runtime 构建器初始化 Split 右侧 mounted 文档，随后恢复左侧 Source。
     pub(super) fn refresh_split_virtual_preview_runtime(&mut self, cx: &mut Context<Self>) {
@@ -574,20 +576,19 @@ impl Editor {
         }
     }
 
-    pub(crate) fn set_menu_bar_hovered(&mut self, hovered: bool, _cx: &mut Context<Self>) {
+    pub(crate) fn set_menu_bar_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.menu_bar_hovered = hovered;
+        self.refresh_menu_pointer_close(cx);
     }
 
-    pub(crate) fn set_menu_panel_hovered(&mut self, hovered: bool, _cx: &mut Context<Self>) {
+    pub(crate) fn set_menu_panel_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.menu_panel_hovered = hovered;
+        self.refresh_menu_pointer_close(cx);
     }
 
-    pub(crate) fn set_menu_submenu_panel_hovered(
-        &mut self,
-        hovered: bool,
-        _cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn set_menu_submenu_panel_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.menu_submenu_panel_hovered = hovered;
+        self.refresh_menu_pointer_close(cx);
     }
 
     /// Hover handler for the invisible gap bridge. The bridge and the submenu
@@ -598,9 +599,39 @@ impl Editor {
     pub(crate) fn set_menu_submenu_bridge_hovered(
         &mut self,
         hovered: bool,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         self.menu_submenu_bridge_hovered = hovered;
+        self.refresh_menu_pointer_close(cx);
+    }
+
+    fn refresh_menu_pointer_close(&mut self, cx: &mut Context<Self>) {
+        let pointer_inside = self.menu_bar_hovered
+            || self.menu_panel_hovered
+            || self.menu_submenu_panel_hovered
+            || self.menu_submenu_bridge_hovered;
+        if pointer_inside || self.menu_bar_open.is_none() {
+            self.menu_close_task = None;
+            return;
+        }
+
+        // 菜单栏、主面板与子菜单之间存在窄缝；短暂延迟既允许指针跨越缝隙，
+        // 又保证真正离开整组菜单后面板会自行收起。
+        self.menu_close_task = Some(cx.spawn(async move |editor, cx| {
+            cx.background_executor()
+                .timer(MENU_POINTER_LEAVE_CLOSE_DELAY)
+                .await;
+            let _ = editor.update(cx, |editor, cx| {
+                editor.menu_close_task = None;
+                let pointer_inside = editor.menu_bar_hovered
+                    || editor.menu_panel_hovered
+                    || editor.menu_submenu_panel_hovered
+                    || editor.menu_submenu_bridge_hovered;
+                if !pointer_inside {
+                    editor.close_menu_panels(cx);
+                }
+            });
+        }));
     }
 
     pub(crate) fn dismiss_menu_bar_from_body(&mut self, cx: &mut Context<Self>) {

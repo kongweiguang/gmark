@@ -13,6 +13,24 @@ async fn status_bar_file_state_uses_semantic_icons_and_conflict_opens_comparison
         Editor::from_markdown(cx, source.to_owned(), Some(editor_path))
     });
     editor.update(visual_cx, |editor, cx| {
+        editor.recovered_session = true;
+        cx.notify();
+    });
+    redraw(visual_cx);
+    assert!(visual_cx.debug_bounds("status-bar-recovery").is_none());
+    assert!(
+        visual_cx
+            .debug_bounds("status-bar-recovery-restored-icon")
+            .is_none()
+    );
+    assert!(
+        visual_cx
+            .debug_bounds("status-bar-recovery-label")
+            .is_none()
+    );
+
+    editor.update(visual_cx, |editor, cx| {
+        editor.recovered_session = false;
         editor.external_file_conflict = true;
         cx.notify();
     });
@@ -61,27 +79,6 @@ async fn status_bar_file_state_uses_semantic_icons_and_conflict_opens_comparison
     });
     assert!(visual_cx.debug_bounds("external-conflict-dialog").is_some());
 
-    editor.update(visual_cx, |editor, cx| {
-        editor.cancel_external_conflict(cx);
-        editor.external_file_conflict = false;
-        editor.recovered_session = true;
-        cx.notify();
-    });
-    redraw(visual_cx);
-    let status = visual_cx.debug_bounds("status-bar-recovery").unwrap();
-    let icon = visual_cx
-        .debug_bounds("status-bar-recovery-restored-icon")
-        .unwrap();
-    assert_eq!(status.size.height, px(24.0));
-    assert_eq!(icon.size, size(px(16.0), px(16.0)));
-    visual_cx.simulate_click(status.center(), Modifiers::default());
-    visual_cx.run_until_parked();
-    editor.read_with(visual_cx, |editor, _cx| {
-        assert!(!editor.show_external_conflict_dialog);
-        assert_eq!(editor.source_document.text(), source);
-        assert_eq!(editor.source_document.revision(), revision);
-    });
-
     fs::remove_file(path).unwrap();
 }
 
@@ -118,6 +115,7 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
         .debug_bounds("unsaved-changes-message")
         .expect("unsaved changes body");
     let first_action = visual_cx.debug_bounds("cancel-close-dialog").unwrap();
+    let actions = visual_cx.debug_bounds("unsaved-changes-actions").unwrap();
     assert!(f32::from(message.size.height) >= 16.0);
     assert!(message.top() >= dialog.top());
     assert!(message.bottom() < first_action.top());
@@ -135,6 +133,12 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
         assert!(
             action.bottom() <= dialog.bottom(),
             "{selector} escaped bottom: action={action:?}, dialog={dialog:?}"
+        );
+        let top_gap = f32::from(action.top() - actions.top());
+        let bottom_gap = f32::from(dialog.bottom() - action.bottom());
+        assert!(
+            (top_gap - bottom_gap).abs() <= 1.0,
+            "{selector} vertical gaps differ: top={top_gap}, bottom={bottom_gap}"
         );
     }
 

@@ -2,7 +2,7 @@
 
 use super::{
     DocumentEncoding, DocumentOpenPolicy, OpenedDocument, decode_markdown_bytes,
-    document_open_policy, is_image_path, open_document, open_document_with_policy,
+    document_open_policy, is_image_path, is_svg_path, open_document, open_document_with_policy,
     read_resident_text_from_probe,
 };
 
@@ -70,6 +70,21 @@ fn supported_raster_images_use_the_image_viewer_without_text_probing() {
 
     assert!(!is_image_path(&dir.path().join("vector.svg")));
     assert!(!is_image_path(&dir.path().join("photo.png.txt")));
+}
+
+#[test]
+fn svg_documents_use_the_resident_editor_for_source_preview_and_split_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vector.SVG");
+    let source = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 60"><rect width="120" height="60"/></svg>"#;
+    std::fs::write(&path, source).unwrap();
+
+    assert!(is_svg_path(&path));
+    assert!(!is_image_path(&path));
+    let OpenedDocument::Resident(opened) = open_document(&path).unwrap() else {
+        panic!("SVG must keep editable source instead of using the raster-only image viewer");
+    };
+    assert_eq!(opened.text, source);
 }
 
 #[test]

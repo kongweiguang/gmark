@@ -242,6 +242,10 @@ impl Editor {
         fallback_viewport_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if self.is_svg_document() {
+            let strings = cx.global::<I18nManager>().strings_arc();
+            return Some(self.render_svg_document_preview(theme, &strings, true, cx));
+        }
         self.sync_split_virtual_surface_mounts(cx);
         let (visible, scroll_handle, virtual_spacers) = {
             let state = self.split_preview.as_ref()?;

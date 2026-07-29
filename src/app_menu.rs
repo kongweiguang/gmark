@@ -438,7 +438,11 @@ fn open_file_in_new_window_with_policy(
     match opened {
         crate::document_io::OpenedDocument::Resident(opened) => {
             let handle = open_decoded_editor_window(cx, opened, Some(path.to_path_buf()))?;
-            if !crate::document_io::is_markdown_path(path) {
+            if crate::document_io::is_svg_path(path) {
+                let _ = handle.update(cx, |editor, _window, cx| {
+                    editor.set_view_mode(crate::editor::ViewMode::Preview, cx);
+                });
+            } else if !crate::document_io::is_markdown_path(path) {
                 let _ = handle.update(cx, |editor, _window, cx| {
                     editor.set_view_mode(crate::editor::ViewMode::Source, cx);
                 });

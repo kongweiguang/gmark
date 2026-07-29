@@ -292,14 +292,20 @@ pub(in crate::editor) fn dialog_body(label: String, theme: &Theme) -> Div {
 pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
     let c = &theme.colors;
     let d = &theme.dimensions;
+    let top_padding = d.dialog_padding;
     div()
         .w_full()
         .flex_none()
+        // 操作行显式保留按钮高度，避免 GPUI 自动高度把横向定高子项挤出面板底边。
+        .min_h(px(d.dialog_button_height
+            + top_padding * 2.0
+            + d.dialog_border_width))
         .flex()
         .flex_wrap()
         .justify_end()
         .gap(px(d.dialog_button_gap))
-        .pt(px(12.0))
+        // 分隔线到按钮与按钮到面板底边共用 dialog padding，形成对称留白。
+        .pt(px(top_padding))
         .border_t(px(d.dialog_border_width))
         .border_color(c.dialog_border)
 }

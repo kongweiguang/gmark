@@ -96,6 +96,9 @@ impl Editor {
                 theme.dimensions.dialog_border_width
             }))
             .border_color(c.dialog_border)
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation();
+            })
             .on_hover(cx.listener(Self::on_menu_bar_hover));
         let bar = if integrated {
             bar.w(px(menu_width))
@@ -601,6 +604,9 @@ impl Editor {
                                 .border_color(c.dialog_border)
                                 .rounded(px(d.menu_panel_radius))
                                 .shadow_lg()
+                                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                                    cx.stop_propagation();
+                                })
                                 .on_hover(cx.listener(Self::on_menu_submenu_panel_hover))
                                 .children(submenu_items)
                                 .into_any_element(),
@@ -632,6 +638,9 @@ impl Editor {
             .border_color(c.dialog_border)
             .rounded(px(d.menu_panel_radius))
             .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation();
+            })
             .on_hover(cx.listener(Self::on_menu_panel_hover));
         let main_panel = if let Some(split_index) = import_menu_split_index(&menu_items) {
             let scroll_items = &menu_items[..split_index];

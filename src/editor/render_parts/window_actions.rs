@@ -3,6 +3,17 @@
 use super::*;
 
 impl Editor {
+    pub(super) fn on_editor_main_content_capture_mouse_down(
+        &mut self,
+        _: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 侧栏中的按钮会主动截断冒泡；在主内容捕获阶段统一关闭导航菜单，
+        // 同时不阻止目标控件继续处理本次点击。
+        self.dismiss_menu_bar_from_body(cx);
+    }
+
     pub(super) fn on_titlebar_close(
         &mut self,
         event: &ClickEvent,

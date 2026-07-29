@@ -27,6 +27,7 @@ pub(super) const IMAGE_PREVIEW_MAX_PIXELS: u64 = 32 * 1024 * 1024;
 pub(super) const IMAGE_PREVIEW_MAX_TILED_PIXELS: u64 = 256 * 1024 * 1024;
 const IMAGE_PREVIEW_MAX_DECODE_BYTES: u64 = IMAGE_PREVIEW_MAX_PIXELS * 4;
 const IMAGE_PREVIEW_ZOOM_STEP: f32 = 0.1;
+const IMAGE_PREVIEW_PADDING: f32 = 24.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ImagePreviewZoomAction {
@@ -120,6 +121,38 @@ impl Asset for ImagePreviewTileLoader {
 
 pub(super) fn image_preview_zoom_after_wheel(current: f32, delta_y: Pixels) -> f32 {
     (current - f32::from(delta_y) / 700.0).clamp(IMAGE_PREVIEW_MIN_ZOOM, IMAGE_PREVIEW_MAX_ZOOM)
+}
+
+fn image_preview_offset_after_anchored_zoom(
+    current_offset: Point<Pixels>,
+    pointer: Point<Pixels>,
+    viewport: Bounds<Pixels>,
+    image_size: Size<f32>,
+    old_canvas_width: f32,
+    old_scale: f32,
+    new_canvas_width: f32,
+    new_scale: f32,
+) -> Point<Pixels> {
+    let viewport_left = f32::from(viewport.left());
+    let viewport_top = f32::from(viewport.top());
+    let viewport_width = f32::from(viewport.size.width);
+    let inner_width = (viewport_width - IMAGE_PREVIEW_PADDING * 2.0).max(1.0);
+    let canvas_left =
+        |width: f32| viewport_left + IMAGE_PREVIEW_PADDING + ((inner_width - width).max(0.0) / 2.0);
+
+    let old_origin_x = canvas_left(old_canvas_width) + f32::from(current_offset.x);
+    let old_origin_y = viewport_top + IMAGE_PREVIEW_PADDING + f32::from(current_offset.y);
+    // 锚点先映射回原图坐标，再用新比例反算滚动量；这样跨越居中阈值时也不会跳。
+    let image_x = ((f32::from(pointer.x) - old_origin_x) / old_scale.max(f32::EPSILON))
+        .clamp(0.0, image_size.width);
+    let image_y = ((f32::from(pointer.y) - old_origin_y) / old_scale.max(f32::EPSILON))
+        .clamp(0.0, image_size.height);
+    let next_x =
+        (f32::from(pointer.x) - canvas_left(new_canvas_width) - image_x * new_scale).min(0.0);
+    let next_y =
+        (f32::from(pointer.y) - (viewport_top + IMAGE_PREVIEW_PADDING) - image_y * new_scale)
+            .min(0.0);
+    point(px(next_x), px(next_y))
 }
 
 pub(super) fn image_preview_zoom_for_action(
@@ -438,7 +471,7 @@ impl Editor {
     pub(super) fn on_image_preview_scroll_wheel(
         &mut self,
         event: &ScrollWheelEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !(event.modifiers.control || event.modifiers.platform) {
@@ -447,6 +480,29 @@ impl Editor {
         let delta = event.delta.pixel_delta(px(28.0));
         let zoom = image_preview_zoom_after_wheel(self.image_preview_zoom, delta.y);
         if (zoom - self.image_preview_zoom).abs() > f32::EPSILON {
+            let viewport = self.scroll_handle.bounds();
+            if viewport.size.width > px(1.0)
+                && let Some(path) = self.image_preview_path.clone()
+                && let Some(Ok(asset)) = window.use_asset::<ImagePreviewAssetLoader>(&path, cx)
+            {
+                let viewport_width = f32::from(viewport.size.width);
+                let fitted_width = (viewport_width - IMAGE_PREVIEW_PADDING * 2.0)
+                    .max(1.0)
+                    .min(asset.width as f32);
+                let old_canvas_width = (fitted_width * self.image_preview_zoom).max(1.0);
+                let new_canvas_width = (fitted_width * zoom).max(1.0);
+                let offset = image_preview_offset_after_anchored_zoom(
+                    self.scroll_handle.offset(),
+                    event.position,
+                    viewport,
+                    size(asset.width as f32, asset.height as f32),
+                    old_canvas_width,
+                    old_canvas_width / asset.width as f32,
+                    new_canvas_width,
+                    new_canvas_width / asset.width as f32,
+                );
+                self.scroll_handle.set_offset(offset);
+            }
             self.image_preview_zoom = zoom;
             cx.notify();
         }
@@ -497,10 +553,12 @@ impl Editor {
         } else {
             f32::from(fallback_viewport.height)
         };
-        let fitted_width = (viewport_width - 48.0).max(1.0).min(asset.width as f32);
+        let fitted_width = (viewport_width - IMAGE_PREVIEW_PADDING * 2.0)
+            .max(1.0)
+            .min(asset.width as f32);
         let fit_scale = fitted_width / asset.width as f32;
         let canvas_width = (fitted_width * zoom).max(1.0);
-        let center_canvas = canvas_width <= (viewport_width - 48.0).max(1.0);
+        let center_canvas = canvas_width <= (viewport_width - IMAGE_PREVIEW_PADDING * 2.0).max(1.0);
         let scale = canvas_width / asset.width as f32;
         let scroll_y = (-f32::from(self.scroll_handle.offset().y)).max(0.0);
         let canvas = image_preview_canvas(
@@ -537,7 +595,7 @@ impl Editor {
                             .debug_selector(|| "image-preview-viewport".to_owned())
                             .w_full()
                             .min_h_full()
-                            .p(px(24.0))
+                            .p(px(IMAGE_PREVIEW_PADDING))
                             .flex()
                             .items_start()
                             .when(center_canvas, |this| this.justify_center())

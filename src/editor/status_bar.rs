@@ -35,6 +35,11 @@ const ALL_STATUS_VIEW_MODES: [super::ViewMode; 4] = [
     super::ViewMode::Preview,
 ];
 const PAGED_STATUS_VIEW_MODES: [super::ViewMode; 1] = [super::ViewMode::Source];
+const SVG_STATUS_VIEW_MODES: [super::ViewMode; 3] = [
+    super::ViewMode::Source,
+    super::ViewMode::Split,
+    super::ViewMode::Preview,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusTooltip {
@@ -526,6 +531,8 @@ impl Editor {
             // Source，不能用点击后再回退的方式暴露误导入口。
             let available_modes = if paged_document {
                 &PAGED_STATUS_VIEW_MODES[..]
+            } else if self.is_svg_document() {
+                &SVG_STATUS_VIEW_MODES[..]
             } else {
                 &ALL_STATUS_VIEW_MODES[..]
             };

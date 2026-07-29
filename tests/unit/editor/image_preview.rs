@@ -1,14 +1,14 @@
 // @author kongweiguang
 
-use gpui::px;
+use gpui::{Bounds, point, px, size};
 use image::{ImageBuffer, Rgba};
 
 use super::{
     IMAGE_PREVIEW_MAX_PIXELS, IMAGE_PREVIEW_MAX_TILED_PIXELS, IMAGE_PREVIEW_MAX_ZOOM,
     IMAGE_PREVIEW_MIN_ZOOM, IMAGE_PREVIEW_TILE_EDGE, ImagePreviewContent, ImagePreviewZoomAction,
-    image_preview_zoom_after_wheel, image_preview_zoom_for_action, load_image_preview_asset,
-    validate_image_preview_dimensions, validate_image_preview_tiled_dimensions,
-    visible_tile_row_window,
+    image_preview_offset_after_anchored_zoom, image_preview_zoom_after_wheel,
+    image_preview_zoom_for_action, load_image_preview_asset, validate_image_preview_dimensions,
+    validate_image_preview_tiled_dimensions, visible_tile_row_window,
 };
 
 #[test]
@@ -23,6 +23,41 @@ fn ctrl_wheel_zoom_has_stable_direction_and_limits() {
         image_preview_zoom_after_wheel(IMAGE_PREVIEW_MIN_ZOOM, px(10_000.0)),
         IMAGE_PREVIEW_MIN_ZOOM
     );
+}
+
+#[test]
+fn ctrl_wheel_zoom_keeps_the_point_under_the_pointer_stable() {
+    let viewport = Bounds::new(point(px(100.0), px(50.0)), size(px(1_000.0), px(800.0)));
+    let next = image_preview_offset_after_anchored_zoom(
+        point(px(0.0), px(-100.0)),
+        point(px(600.0), px(350.0)),
+        viewport,
+        size(1_000.0, 1_000.0),
+        900.0,
+        0.9,
+        1_200.0,
+        1.2,
+    );
+
+    assert!((f32::from(next.x) - -124.0).abs() < 0.01);
+    assert!((f32::from(next.y) - -225.333_34).abs() < 0.01);
+}
+
+#[test]
+fn ctrl_wheel_zoom_compensates_when_canvas_stops_being_centered() {
+    let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(1_000.0), px(800.0)));
+    let next = image_preview_offset_after_anchored_zoom(
+        point(px(0.0), px(0.0)),
+        point(px(500.0), px(300.0)),
+        viewport,
+        size(1_000.0, 1_000.0),
+        940.0,
+        0.94,
+        970.0,
+        0.97,
+    );
+
+    assert!((f32::from(next.x) - -9.0).abs() < 0.01);
 }
 
 #[test]

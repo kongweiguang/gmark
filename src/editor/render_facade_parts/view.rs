@@ -483,6 +483,7 @@ impl Render for Editor {
             .pt(px(titlebar_height + menu_bar_height))
             .flex()
             .min_w(px(0.0))
+            .capture_any_mouse_down(cx.listener(Self::on_editor_main_content_capture_mouse_down))
             .on_mouse_move(cx.listener(Self::on_editor_layout_resize_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,

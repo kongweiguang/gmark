@@ -684,8 +684,15 @@ impl Editor {
             document_host.update(cx, |view, cx| view.resume_after_closed_tab(cx));
         }
         let source = snapshot.source_document.text();
-        let target_mode = snapshot.view_mode;
+        let mut target_mode = snapshot.view_mode;
         let target_path = snapshot.file_path.clone();
+        if target_mode == ViewMode::Rendered
+            && target_path
+                .as_deref()
+                .is_some_and(crate::document_io::is_svg_path)
+        {
+            target_mode = ViewMode::Preview;
+        }
         // 搜索结果导航属于即将安装的目标标签。replace_document 会提前消费该请求，
         // 因此先暂存，待快照选择恢复完毕后再执行，避免目标行被旧光标覆盖。
         let pending_navigation = self.take_pending_workspace_navigation();
@@ -696,6 +703,7 @@ impl Editor {
         self.document_kind = snapshot.document_kind;
         self.image_preview_path = snapshot.image_preview_path;
         self.image_preview_zoom = snapshot.image_preview_zoom;
+        self.svg_preview_cache = None;
         self.file_open_failure = snapshot.file_open_failure;
         self.saved_file_fingerprint = snapshot.saved_file_fingerprint;
         self.document_dirty = snapshot.document_dirty;

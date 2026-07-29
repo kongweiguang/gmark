@@ -22,6 +22,28 @@ async fn dismissing_menu_panel_from_body_preserves_navigation(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+async fn clicking_workspace_sidebar_closes_in_window_menu(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha".to_string(), None));
+    visual.simulate_resize(size(px(720.0), px(520.0)));
+    editor.update_in(visual, |editor, _window, cx| {
+        editor.workspace.is_open = true;
+        editor.open_menu_bar(0, cx);
+    });
+    redraw(visual);
+
+    let sidebar = visual
+        .debug_bounds("workspace-panel")
+        .expect("workspace sidebar");
+    visual.simulate_mouse_down(sidebar.center(), MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(sidebar.center(), MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+
+    assert_eq!(editor.read_with(visual, |editor, _cx| editor.menu_bar_open), None);
+}
+
+#[gpui::test]
 async fn menu_launcher_toggles_its_panel_without_hiding_navigation(cx: &mut TestAppContext) {
     let editor = cx.new(|cx| Editor::from_markdown(cx, "alpha".to_string(), None));
 
@@ -199,7 +221,7 @@ async fn in_window_menu_keyboard_navigation_preserves_editor_focus(cx: &mut Test
 }
 
 #[gpui::test]
-async fn moving_pointer_away_keeps_in_window_menu_open(cx: &mut TestAppContext) {
+async fn moving_pointer_away_closes_in_window_menu_after_delay(cx: &mut TestAppContext) {
     let editor = cx.new(|cx| Editor::from_markdown(cx, "alpha".to_string(), None));
 
     editor.update(cx, |editor, cx| {
@@ -215,10 +237,17 @@ async fn moving_pointer_away_keeps_in_window_menu_open(cx: &mut TestAppContext) 
         assert!(editor.menu_close_task.is_none());
 
         editor.set_menu_submenu_panel_hovered(false, cx);
-        assert!(editor.menu_close_task.is_none());
+        assert!(editor.menu_close_task.is_some());
         assert_eq!(editor.menu_bar_open, Some(0));
+    });
 
-        editor.close_menu_bar(cx);
+    cx.executor().advance_clock(Duration::from_millis(180));
+    cx.run_until_parked();
+
+    editor.update(cx, |editor, _cx| {
+        assert!(editor.menu_close_task.is_none());
+        assert_eq!(editor.menu_bar_open, None);
+        assert_eq!(editor.menu_submenu_open, None);
     });
 }
 

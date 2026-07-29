@@ -74,6 +74,12 @@ pub(crate) fn is_image_path(path: &Path) -> bool {
         })
 }
 
+pub(crate) fn is_svg_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
 /// 已知非文本容器不进入文件探测；侧边栏会展示所有文件，但编辑器只打开文本正文。
 fn is_known_unsupported_document(path: &Path) -> bool {
     path.extension()
@@ -199,6 +205,11 @@ pub(crate) fn open_document_with_policy(
         DocumentBackendKind::Resident => OpenStrategy::Resident,
         DocumentBackendKind::Paged => OpenStrategy::Paged,
     };
+    // SVG 必须保留 XML 源码真值，Preview/Split 只是派生渲染；仍沿用有界探测，
+    // 超过 resident 阈值时回退 Source host，不能为预览无界读入内存。
+    if is_svg_path(path) && probe.strategy == OpenStrategy::Resident {
+        return read_resident_text_from_probe(path, &probe, limits).map(OpenedDocument::Resident);
+    }
     match document_open_policy(path, &probe) {
         DocumentOpenPolicy::ResidentMarkdown => {
             read_resident_text_from_probe(path, &probe, limits).map(OpenedDocument::Resident)
