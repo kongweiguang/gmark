@@ -18,8 +18,15 @@ use gmark_paged_document::{
 };
 use thiserror::Error;
 
+mod recovery;
 mod resident;
 
+pub use recovery::{
+    RecoveredResidentDocument, ResidentFileFingerprint, ResidentRecoveryError,
+    ResidentRecoveryJournal, ResidentRecoveryReadStatus, ResidentRecoverySelection,
+    cleanup_resident_recovery_artifacts, fingerprint_resident_file,
+    load_resident_recovery_documents, replay_resident_recovery_journal,
+};
 pub use resident::ResidentDocument;
 
 /// 打开时校验过的文件身份。后端类型不属于持久身份，每次打开都必须重新规划。
