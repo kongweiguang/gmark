@@ -27,10 +27,12 @@ pub use html::{
 pub use inline::{Inline, InlineKind, LinkKind, LinkTarget};
 pub use parser::{MarkdownDocument, MarkdownParser, parse_markdown};
 pub use resource::{
-    RESOURCE_MARKER, ResourceKind, ResourceLocation, ResourceRecord, ResourceStatus,
+    ParsedResource, RESOURCE_MARKER, ResourceKind, ResourceLocation, ResourceRecord,
+    ResourceStatus, parse_resource_parts,
 };
 pub use serializer::{
-    MarkdownSerializer, SerializationMode, serialize_canonical_markdown, serialize_markdown,
+    MarkdownSerializer, SerializationMode, serialize_canonical_markdown,
+    serialize_inlines_canonical, serialize_markdown, serialize_table_canonical,
 };
 pub use source::{
     LineEnding, LineEndingSummary, SourceFormat, SourceFormatError, SourceMap, SourceRange,

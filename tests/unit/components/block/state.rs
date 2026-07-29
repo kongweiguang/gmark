@@ -3,6 +3,27 @@
 use super::*;
 
 #[test]
+fn projects_editable_blocks_from_shared_markdown_values() {
+    let document = gmark_markdown::parse_markdown(
+        "# Title\n\n[clip](clip.mp4 \"gmark:resource\")\n\n| A | B |\n| --- | ---: |\n| 1 | 2 |",
+    );
+
+    let heading = BlockRecord::from_markdown_value(&document.blocks[0]).expect("heading");
+    assert_eq!(heading.kind, BlockKind::Heading { level: 1 });
+    assert_eq!(heading.title.visible_text(), "Title");
+
+    let resource = BlockRecord::from_markdown_value(&document.blocks[1]).expect("resource");
+    assert!(resource.resource.is_some());
+
+    let table = BlockRecord::from_markdown_value(&document.blocks[2]).expect("table");
+    assert_eq!(table.kind, BlockKind::Table);
+    assert_eq!(
+        table.table.expect("table value").alignments[1],
+        crate::components::TableColumnAlignment::Right
+    );
+}
+
+#[test]
 fn identifies_only_complete_yaml_frontmatter_raw_blocks() {
     assert!(BlockRecord::raw_markdown("---\nname: example\n---").is_yaml_frontmatter());
     assert!(BlockRecord::raw_markdown("---\nname: example\n...").is_yaml_frontmatter());

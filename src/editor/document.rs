@@ -28,6 +28,17 @@ use crate::components::{
 };
 use crate::components::{is_mermaid_info_string, parse_display_math_source};
 
+/// Parses a source snapshot into the shared pure Markdown value model.
+///
+/// The editor still owns its normalized rope, undo/redo history, and original
+/// line-ending restoration. This adapter is deliberately read-only so those
+/// behaviors cannot be changed by a rendering projection rebuild.
+pub(in crate::editor) fn parse_markdown_value(source: &str) -> gmark_markdown::MarkdownDocument {
+    let document = gmark_markdown::parse_markdown(source);
+    debug_assert!(document.source_map.validate(source).is_ok());
+    document
+}
+
 /// Parsed opening code-fence metadata.
 ///
 /// The opening fence records both the marker character and its run length so

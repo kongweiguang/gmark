@@ -711,6 +711,39 @@ impl InlineTextTree {
         }
     }
 }
+
+impl InlineTextTree {
+    /// Projects rendering-neutral inline values into the editor's mutable
+    /// fragment tree. The shared crate chooses canonical Markdown spelling;
+    /// this package keeps selection, IME, and formatting-edit metadata.
+    pub(crate) fn from_markdown_values(values: &[gmark_markdown::Inline]) -> Self {
+        Self::from_markdown(&gmark_markdown::serialize_inlines_canonical(values))
+    }
+
+    /// Exposes this tree as pure Markdown inline values for adapters such as
+    /// native tables. Unsupported editor-only syntax is retained as text so
+    /// it cannot be silently discarded at the boundary.
+    pub(crate) fn markdown_values(&self) -> Vec<gmark_markdown::Inline> {
+        let markdown = self.serialize_markdown();
+        gmark_markdown::parse_markdown(&markdown)
+            .blocks
+            .into_iter()
+            .find_map(|block| match block.kind {
+                gmark_markdown::BlockKind::Paragraph => Some(block.inlines),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                (!markdown.is_empty())
+                    .then(|| {
+                        vec![gmark_markdown::Inline::synthetic(
+                            gmark_markdown::InlineKind::Text(markdown),
+                        )]
+                    })
+                    .unwrap_or_default()
+            })
+    }
+}
+
 #[path = "inline_parts/model.rs"]
 mod model;
 #[path = "inline_parts/parser.rs"]

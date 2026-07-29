@@ -295,10 +295,7 @@ pub(super) fn prepare_projection_region(
             vec![BlockRecord::paragraph(markdown().trim().to_string())]
         }
         ProjectionRegionKind::StandaloneResource => {
-            vec![BlockRecord::resource(ResourceRecord::parse(
-                markdown().trim(),
-                None,
-            )?)]
+            vec![record_from_markdown_value(markdown().trim())?]
         }
         ProjectionRegionKind::IndentedCode => {
             vec![collect_indented_code_record(region_lines, 0)?.0]
@@ -314,8 +311,10 @@ pub(super) fn prepare_projection_region(
             InlineTextTree::plain(String::new()),
         )],
         ProjectionRegionKind::RootTableCandidate => {
-            if let Some(table) = parse_root_table_region(region_lines) {
-                vec![BlockRecord::table(table)]
+            if let Some(record) = record_from_markdown_value(&markdown())
+                .filter(|record| record.kind == BlockKind::Table)
+            {
+                vec![record]
             } else {
                 region_lines
                     .iter()
@@ -325,7 +324,7 @@ pub(super) fn prepare_projection_region(
             }
         }
         ProjectionRegionKind::PipelessTable => {
-            vec![BlockRecord::table(parse_root_table_region(region_lines)?)]
+            vec![record_from_markdown_value(&markdown())?]
         }
         ProjectionRegionKind::DisplayMath => vec![math_or_raw_record(markdown())],
         ProjectionRegionKind::Paragraph => {
@@ -339,6 +338,14 @@ pub(super) fn prepare_projection_region(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     ))
+}
+
+fn record_from_markdown_value(markdown: &str) -> Option<BlockRecord> {
+    let document = parse_markdown_value(markdown);
+    let [block] = document.blocks.as_slice() else {
+        return None;
+    };
+    BlockRecord::from_markdown_value(block)
 }
 
 pub(super) fn prepare_simple_list_nodes(lines: &[String]) -> Option<Vec<PreparedBlockNode>> {

@@ -169,19 +169,25 @@ impl ResourceRecord {
             ResourceLocation::Local(_) => false,
             ResourceLocation::Url(url) => matches!(
                 url.scheme().to_ascii_lowercase().as_str(),
-                "javascript" | "data" | "blob" | "vbscript"
+                "javascript" | "data" | "blob"
             ),
         }
     }
 }
 
-struct ParsedResource {
+/// Parsed components of one standalone GMark resource link.
+///
+/// This stays separate from [`ResourceRecord`] so syntax validation does not
+/// need to choose a filesystem base directory.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParsedResource {
     label: String,
     destination: String,
     explicit_kind: Option<ResourceKind>,
 }
 
-fn parse_resource_parts(markdown: &str) -> Option<ParsedResource> {
+/// Parses one standalone resource link without performing filesystem I/O.
+pub fn parse_resource_parts(markdown: &str) -> Option<ParsedResource> {
     if markdown.contains('\n') || markdown.contains('\r') {
         return None;
     }

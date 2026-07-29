@@ -49,6 +49,19 @@ pub fn serialize_canonical_markdown(document: &MarkdownDocument) -> String {
     MarkdownSerializer::new(SerializationMode::Canonical).serialize(document)
 }
 
+/// Serializes one inline sequence with canonical Markdown delimiters.
+///
+/// UI adapters use this at their boundary to retain editor state while
+/// delegating pure Markdown spelling to this crate.
+pub fn serialize_inlines_canonical(inlines: &[Inline]) -> String {
+    serialize_inlines(inlines)
+}
+
+/// Serializes one GFM table with canonical outer pipes and delimiters.
+pub fn serialize_table_canonical(table: &Table) -> String {
+    serialize_table(table)
+}
+
 fn serialize_blocks(blocks: &[Block]) -> String {
     blocks
         .iter()
@@ -253,9 +266,11 @@ fn serialize_table_row(row: &[TableCell], columns: usize) -> String {
     let cells = (0..columns)
         .map(|index| {
             row.get(index)
-                .map(TableCell::plain_text)
+                .map(|cell| serialize_inlines(&cell.inlines))
                 .unwrap_or_default()
+                .replace('\\', "\\\\")
                 .replace('|', "\\|")
+                .replace('\n', " ")
         })
         .collect::<Vec<_>>();
     format!("| {} |", cells.join(" | "))

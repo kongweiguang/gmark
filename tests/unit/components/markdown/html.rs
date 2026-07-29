@@ -6,6 +6,7 @@ use super::*;
 fn safe_inline_html_classifies_as_semantic() {
     let doc = parse_html_document("<span style='color:blue;'>Blue</span>");
     assert!(doc.is_semantic());
+    assert!(doc.markdown_value().is_semantic());
     assert_eq!(doc.nodes[0].tag_name, "span");
     assert_eq!(doc.raw_source, "<span style='color:blue;'>Blue</span>");
 }
@@ -14,6 +15,7 @@ fn safe_inline_html_classifies_as_semantic() {
 fn risky_tag_classifies_as_raw_text() {
     let doc = parse_html_document("<script>alert(1)</script>");
     assert_eq!(doc.safety, HtmlSafetyClass::RawTextBlock);
+    assert!(doc.markdown_value().is_unsafe());
     assert_eq!(doc.nodes[0].raw_source, "<script>alert(1)</script>");
 }
 

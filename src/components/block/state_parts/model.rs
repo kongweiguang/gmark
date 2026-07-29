@@ -59,6 +59,75 @@ impl BlockRecord {
         record
     }
 
+    /// Projects one pure Markdown block into the editor-owned block state.
+    ///
+    /// This intentionally handles only shapes the rendered editor can edit
+    /// without loss. Callers retain unsupported values as `RawMarkdown`, so
+    /// parser improvements in `gmark-markdown` cannot silently weaken the
+    /// runtime's raw-fallback guarantee.
+    pub(crate) fn from_markdown_value(value: &gmark_markdown::Block) -> Option<Self> {
+        let title = || InlineTextTree::from_markdown_values(&value.inlines);
+        match &value.kind {
+            gmark_markdown::BlockKind::Paragraph => value
+                .resource
+                .clone()
+                .map(Into::into)
+                .map(Self::resource)
+                .or_else(|| Some(Self::new(BlockKind::Paragraph, title()))),
+            gmark_markdown::BlockKind::Heading(heading) => Some(Self::new(
+                BlockKind::Heading {
+                    level: heading.level,
+                },
+                title(),
+            )),
+            gmark_markdown::BlockKind::BlockQuote { callout } => Some(Self::new(
+                callout
+                    .as_ref()
+                    .map(callout_variant_from_markdown)
+                    .map(BlockKind::Callout)
+                    .unwrap_or(BlockKind::Quote),
+                title(),
+            )),
+            gmark_markdown::BlockKind::CodeBlock(code) => Some(Self::with_plain_text(
+                BlockKind::CodeBlock {
+                    language: code.info.clone().map(Into::into),
+                },
+                value.plain_text(),
+            )),
+            gmark_markdown::BlockKind::Html(_) => {
+                let document = parse_html_document(&value.raw_source);
+                if document.is_semantic() {
+                    let mut record =
+                        Self::with_plain_text(BlockKind::HtmlBlock, value.raw_source.clone());
+                    record.html = Some(document);
+                    Some(record)
+                } else {
+                    Some(Self::raw_markdown(value.raw_source.clone()))
+                }
+            }
+            gmark_markdown::BlockKind::FootnoteDefinition { label } => Some(Self::new(
+                BlockKind::FootnoteDefinition,
+                InlineTextTree::plain(label.clone()),
+            )),
+            gmark_markdown::BlockKind::Table(table) => {
+                Some(Self::table(TableData::from_markdown_value(table)))
+            }
+            gmark_markdown::BlockKind::ThematicBreak => Some(Self::new(
+                BlockKind::Separator,
+                InlineTextTree::plain(String::new()),
+            )),
+            gmark_markdown::BlockKind::DisplayMath => Some(Self::math(value.raw_source.clone())),
+            gmark_markdown::BlockKind::Metadata(_) | gmark_markdown::BlockKind::RawMarkdown => {
+                Some(Self::raw_markdown(value.raw_source.clone()))
+            }
+            gmark_markdown::BlockKind::List(_)
+            | gmark_markdown::BlockKind::ListItem { .. }
+            | gmark_markdown::BlockKind::DefinitionList
+            | gmark_markdown::BlockKind::DefinitionListTitle
+            | gmark_markdown::BlockKind::DefinitionListDefinition => None,
+        }
+    }
+
     pub fn raw_markdown(markdown: impl Into<String>) -> Self {
         let markdown = markdown.into();
         let mut record = Self::with_plain_text(BlockKind::RawMarkdown, markdown.clone());
@@ -294,6 +363,16 @@ fn resource_capable_kind(kind: &BlockKind) -> bool {
             | BlockKind::Quote
             | BlockKind::Callout(_)
     )
+}
+
+fn callout_variant_from_markdown(value: &gmark_markdown::CalloutKind) -> CalloutVariant {
+    match value {
+        gmark_markdown::CalloutKind::Note => CalloutVariant::Note,
+        gmark_markdown::CalloutKind::Tip => CalloutVariant::Tip,
+        gmark_markdown::CalloutKind::Important => CalloutVariant::Important,
+        gmark_markdown::CalloutKind::Warning => CalloutVariant::Warning,
+        gmark_markdown::CalloutKind::Caution => CalloutVariant::Caution,
+    }
 }
 
 fn indent_multiline(content: &str, indentation: &str) -> String {

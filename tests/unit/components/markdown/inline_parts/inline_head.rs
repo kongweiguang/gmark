@@ -7,6 +7,20 @@
     use crate::components::HtmlCssColor;
 
     #[test]
+    fn projects_shared_inline_values_without_editor_runtime_state() {
+        let document = gmark_markdown::parse_markdown("**bold** [link](https://example.test)");
+        let values = &document.blocks[0].inlines;
+        let tree = InlineTextTree::from_markdown_values(values);
+
+        assert_eq!(tree.visible_text(), "bold link");
+        assert_eq!(tree.serialize_markdown(), "**bold** [link](https://example.test)");
+        assert_eq!(
+            gmark_markdown::serialize_inlines_canonical(&tree.markdown_values()),
+            "**bold** [link](https://example.test)"
+        );
+    }
+
+    #[test]
     fn parses_supported_styles_and_serializes_canonically() {
         let tree = InlineTextTree::from_markdown("1**23**4*56*7<u>89</u>0***ab***<u>*cd*</u>");
         let serialized = tree.serialize_markdown();

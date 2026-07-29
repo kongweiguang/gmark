@@ -42,6 +42,19 @@
             .collect()
     }
 
+    #[test]
+    fn pure_markdown_adapter_preserves_original_bytes_and_source_map() {
+        let source = "\u{feff}# 中文标题\r\n\r\nemoji 😀\n- [x] 完成\r";
+        let document = super::parse_markdown_value(source);
+
+        assert_eq!(document.to_markdown(), source);
+        assert!(document.format.has_utf8_bom);
+        document
+            .source_map
+            .validate(source)
+            .expect("editor adapter must retain valid UTF-8 byte ranges");
+    }
+
     #[gpui::test]
     async fn prepared_region_builder_matches_legacy_top_level_builder(cx: &mut TestAppContext) {
         let source = "# Title\n\n- one\n- two\n\n> quote\n\n```rust\nfn main() {}\n```\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n[^n]: note\n\n$$\nx + y\n$$";

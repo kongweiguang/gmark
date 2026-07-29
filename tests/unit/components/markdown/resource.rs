@@ -12,6 +12,8 @@ fn parses_resource_marker_and_auto_video_kind() {
     .expect("resource link should parse");
 
     assert_eq!(record.label, "演示");
+    let domain: gmark_markdown::ResourceRecord = record.clone().into();
+    assert_eq!(ResourceRecord::from(domain), record);
     assert_eq!(record.kind, ResourceKind::Video);
     assert_eq!(record.explicit_kind, None);
     assert_eq!(

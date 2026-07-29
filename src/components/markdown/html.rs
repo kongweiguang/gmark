@@ -160,6 +160,10 @@ pub(crate) struct HtmlNode {
 /// Classified HTML fragment plus its preserved source text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HtmlDocument {
+    /// Rendering-neutral HTML value used for Markdown parsing, source
+    /// preservation, and export-safe classification. The remaining fields are
+    /// the editor's narrow GPUI rendering projection.
+    pub(crate) domain: gmark_markdown::HtmlDocument,
     /// Exact source string used for serialization and raw editing.
     pub(crate) raw_source: String,
     /// Root-level classified nodes.
@@ -169,9 +173,10 @@ pub(crate) struct HtmlDocument {
 }
 
 impl HtmlDocument {
-    pub(crate) fn raw(raw_source: impl Into<String>) -> Self {
-        let raw_source = raw_source.into();
+    fn raw_with_markdown_value(domain: gmark_markdown::HtmlDocument) -> Self {
+        let raw_source = domain.raw_source.clone();
         Self {
+            domain,
             nodes: vec![raw_node(&raw_source, 0..raw_source.len())],
             safety: HtmlSafetyClass::RawTextBlock,
             raw_source,
@@ -180,6 +185,13 @@ impl HtmlDocument {
 
     pub(crate) fn is_semantic(&self) -> bool {
         self.safety == HtmlSafetyClass::Semantic
+    }
+
+    /// Returns the shared pure HTML value without exposing editor rendering
+    /// nodes to the domain crate.
+    #[cfg(test)]
+    pub(crate) fn markdown_value(&self) -> &gmark_markdown::HtmlDocument {
+        &self.domain
     }
 }
 
@@ -290,27 +302,29 @@ struct TagToken {
 /// Parses and classifies a raw HTML fragment. The returned document always
 /// preserves `raw_source` exactly, even when semantic parsing succeeds.
 pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
+    let markdown_value = gmark_markdown::HtmlDocument::parse(raw_source);
     if raw_source.trim().is_empty() {
-        return HtmlDocument::raw(raw_source);
+        return HtmlDocument::raw_with_markdown_value(markdown_value);
     }
 
     if tree_sitter_reports_error(raw_source) {
-        return HtmlDocument::raw(raw_source);
+        return HtmlDocument::raw_with_markdown_value(markdown_value);
     }
 
     let (nodes, index, ok) = parse_nodes(raw_source, 0, None);
     if !ok || index < raw_source.len() || nodes.is_empty() {
-        return HtmlDocument::raw(raw_source);
+        return HtmlDocument::raw_with_markdown_value(markdown_value);
     }
 
     if nodes
         .iter()
         .all(|node| matches!(node.kind, HtmlNodeKind::RawTextBlock))
     {
-        return HtmlDocument::raw(raw_source);
+        return HtmlDocument::raw_with_markdown_value(markdown_value);
     }
 
     HtmlDocument {
+        domain: markdown_value,
         raw_source: raw_source.to_string(),
         nodes,
         safety: HtmlSafetyClass::Semantic,

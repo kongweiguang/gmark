@@ -7,25 +7,17 @@
 //! are still outside the runtime-safe subset continue to use raw-Markdown
 //! fallback paths.
 
+use gmark_markdown::{
+    BlockKind as MarkdownBlockKind, Table as MarkdownTable, TableCell as MarkdownTableCell,
+    parse_markdown, serialize_table_canonical,
+};
 use gpui::{Entity, FontStyle, FontWeight, Pixels, SharedString, TextRun, Window, px};
 
 use crate::components::{Block, InlineTextTree};
 use crate::theme::Theme;
 
 /// Horizontal alignment declared by the table's delimiter row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableColumnAlignment {
-    /// No explicit alignment marker (`---`). Renders left, but stays distinct
-    /// from [`Left`](Self::Left) so an unmarked column is not silently rewritten
-    /// with a leading colon on the next serialize.
-    Default,
-    /// Explicit left alignment (`:---`).
-    Left,
-    /// Center-aligned cells (`:---:`).
-    Center,
-    /// Right-aligned cells (`---:`).
-    Right,
-}
+pub use gmark_markdown::TableAlignment as TableColumnAlignment;
 
 /// Axis kinds addressable by rendered-mode native table maintenance UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +66,47 @@ impl PartialEq for TableData {
 impl Eq for TableData {}
 
 impl TableData {
+    /// Projects a pure Markdown table into the editor-owned, interactive cell
+    /// model. Editing state stays in this package; parsing and canonical
+    /// Markdown spelling stay in `gmark-markdown`.
+    pub(crate) fn from_markdown_value(value: &MarkdownTable) -> Self {
+        let mut value = value.clone();
+        value.normalize_shape();
+        Self {
+            header: value
+                .header
+                .iter()
+                .map(table_cell_from_markdown_value)
+                .collect(),
+            rows: value
+                .rows
+                .iter()
+                .map(|row| row.iter().map(table_cell_from_markdown_value).collect())
+                .collect(),
+            alignments: value.alignments,
+        }
+    }
+
+    /// Exposes a rendering-neutral table snapshot for canonical Markdown
+    /// serialization. This creates no GPUI entities and has no I/O effects.
+    pub(crate) fn markdown_value(&self) -> MarkdownTable {
+        let mut value = MarkdownTable {
+            alignments: self.alignments.clone(),
+            header: self
+                .header
+                .iter()
+                .map(table_cell_to_markdown_value)
+                .collect(),
+            rows: self
+                .rows
+                .iter()
+                .map(|row| row.iter().map(table_cell_to_markdown_value).collect())
+                .collect(),
+        };
+        value.normalize_shape();
+        value
+    }
+
     /// Creates an empty table with one header row, `body_rows` body rows, and
     /// `columns` left-aligned columns.
     pub fn new_empty(body_rows: usize, columns: usize) -> Self {
@@ -308,6 +341,17 @@ impl TableData {
         for row in &mut self.rows {
             row.remove(col_index);
         }
+    }
+}
+
+fn table_cell_from_markdown_value(cell: &MarkdownTableCell) -> InlineTextTree {
+    InlineTextTree::from_markdown_values(&cell.inlines)
+}
+
+fn table_cell_to_markdown_value(cell: &InlineTextTree) -> MarkdownTableCell {
+    MarkdownTableCell {
+        source: gmark_markdown::SourceRange::empty(0),
+        inlines: cell.markdown_values(),
     }
 }
 
@@ -690,28 +734,11 @@ fn parse_alignment_cell(cell: &str) -> Option<TableColumnAlignment> {
     })
 }
 
-fn serialize_alignment(alignment: TableColumnAlignment) -> &'static str {
-    match alignment {
-        TableColumnAlignment::Default => "---",
-        TableColumnAlignment::Left => ":---",
-        TableColumnAlignment::Center => ":---:",
-        TableColumnAlignment::Right => "---:",
-    }
-}
-
 pub(crate) fn serialize_table_cell_markdown(tree: &InlineTextTree) -> String {
     tree.serialize_markdown()
         .replace('\\', "\\\\")
         .replace('|', "\\|")
         .replace('\n', " ")
-}
-
-fn serialize_row<'a>(cells: impl IntoIterator<Item = &'a InlineTextTree>) -> String {
-    let rendered = cells
-        .into_iter()
-        .map(serialize_table_cell_markdown)
-        .collect::<Vec<_>>();
-    format!("| {} |", rendered.join(" | "))
 }
 
 /// Returns true when a line is a candidate native table row in the current
@@ -747,46 +774,16 @@ pub fn collect_table_candidate_region(lines: &[String], start: usize) -> usize {
     index
 }
 
-/// Parses a pipe-table region into native table data.
+/// Parses a pipe-table region through the pure Markdown value model.
 pub fn parse_table_region(lines: &[String]) -> Option<TableData> {
-    if lines.len() < 2 {
-        return None;
-    }
-
-    let header = split_table_cells(&lines[0])?;
-    let alignment_cells = split_table_cells(&lines[1])?;
-    if header.is_empty() || alignment_cells.len() != header.len() {
-        return None;
-    }
-
-    let alignments = alignment_cells
-        .iter()
-        .map(|cell| parse_alignment_cell(cell))
-        .collect::<Option<Vec<_>>>()?;
-
-    let mut rows = Vec::new();
-    for line in &lines[2..] {
-        // GFM normalizes body rows to the header width: short rows are padded
-        // with empty cells and long rows drop their trailing cells, instead of
-        // invalidating the whole table.
-        let mut cells = split_table_cells(line)?;
-        cells.resize(header.len(), String::new());
-        rows.push(
-            cells
-                .into_iter()
-                .map(|cell| InlineTextTree::from_markdown(&cell))
-                .collect::<Vec<_>>(),
-        );
-    }
-
-    Some(TableData {
-        header: header
-            .into_iter()
-            .map(|cell| InlineTextTree::from_markdown(&cell))
-            .collect(),
-        rows,
-        alignments,
-    })
+    let document = parse_markdown(&lines.join("\n"));
+    document
+        .blocks
+        .into_iter()
+        .find_map(|block| match block.kind {
+            MarkdownBlockKind::Table(table) => Some(TableData::from_markdown_value(&table)),
+            _ => None,
+        })
 }
 
 /// Returns true when `line` is a delimiter row of exactly `columns` cells, each
@@ -888,19 +885,10 @@ pub fn parse_table_fragment_rows(
 
 /// Serializes native table data to canonical pipe-table Markdown lines.
 pub fn serialize_table_markdown_lines(table: &TableData) -> Vec<String> {
-    let mut lines = Vec::with_capacity(2 + table.rows.len());
-    lines.push(serialize_row(table.header.iter()));
-    lines.push(format!(
-        "| {} |",
-        table
-            .alignments
-            .iter()
-            .map(|alignment| serialize_alignment(*alignment))
-            .collect::<Vec<_>>()
-            .join(" | ")
-    ));
-    lines.extend(table.rows.iter().map(|row| serialize_row(row.iter())));
-    lines
+    serialize_table_canonical(&table.markdown_value())
+        .split('\n')
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 #[cfg(test)]

@@ -117,6 +117,14 @@ fn detects_standalone_resource_and_refuses_unsafe_opening() {
 }
 
 #[test]
+fn resource_url_policy_matches_the_existing_editor_contract() {
+    let record = ResourceRecord::parse("[legacy](vbscript:legacy \"gmark:resource\")", None)
+        .expect("a custom URL syntax remains representable");
+
+    assert!(!record.is_unsafe_url());
+}
+
+#[test]
 fn html_is_value_only_sanitized_and_has_feature_compatible_fallback() {
     let source =
         "<div class=\"safe\">ok</div>\n\n<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>";
@@ -210,6 +218,26 @@ fn parsed_serialization_is_byte_exact_and_canonical_mode_uses_values() {
     assert!(canonical.contains("## Same"));
     assert!(canonical.contains("[ref][id]"));
     assert_ne!(canonical, "");
+}
+
+#[test]
+fn canonical_table_serialization_retains_inline_values() {
+    let document = parse_markdown(
+        "| Name | Link |\n| --- | ---: |\n| **Ada** | [site](https://example.test) |",
+    );
+    let table = document
+        .blocks
+        .iter()
+        .find_map(|block| match &block.kind {
+            BlockKind::Table(table) => Some(table),
+            _ => None,
+        })
+        .expect("fixture contains a table");
+
+    assert_eq!(
+        gmark_markdown::serialize_table_canonical(table),
+        "| Name | Link |\n| --- | ---: |\n| **Ada** | [site](https://example.test) |"
+    );
 }
 
 #[test]
