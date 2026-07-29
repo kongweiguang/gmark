@@ -13,11 +13,31 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "html-native"]
+code-highlight-core = ["gmark-source-tools/code-highlight-core"]
+code-highlight-official = [
+    "code-highlight-core",
+    "gmark-source-tools/code-highlight-official",
+]
+code-highlight-config = [
+    "code-highlight-core",
+    "gmark-source-tools/code-highlight-config",
+]
+html-native = ["gmark-markdown/html-native"]
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22.1"
 chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
-gmark-markdown = { path = "../gmark-markdown" }
-gmark-source-tools = { path = "../gmark-source-tools" }
+futures = "0.3"
+gmark-markdown = { path = "../gmark-markdown", default-features = false }
+gmark-source-tools = { path = "../gmark-source-tools", default-features = false }
+mermaid-rs-renderer = { version = "0.3.0", default-features = false }
+pulldown-cmark = "0.13"
+ratex-layout = "0.1.9"
+ratex-parser = "0.1.9"
+ratex-svg = { version = "0.1.9", features = ["embed-fonts", "standalone"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 url = "2"
+uuid = { version = "1.23", features = ["v4"] }

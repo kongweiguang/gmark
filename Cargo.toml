@@ -67,10 +67,22 @@ collapsible_else_if = "allow"
 
 [features]
 default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "html-native"]
-code-highlight-core = ["dep:tree-sitter", "dep:tree-sitter-highlight"]
-html-native = ["dep:tree-sitter", "dep:tree-sitter-html"]
+code-highlight-core = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-highlight",
+    "gmark-export/code-highlight-core",
+    "gmark-source-tools/code-highlight-core",
+]
+html-native = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-html",
+    "gmark-export/html-native",
+    "gmark-markdown/html-native",
+]
 code-highlight-official = [
     "code-highlight-core",
+    "gmark-export/code-highlight-official",
+    "gmark-source-tools/code-highlight-official",
     "dep:tree-sitter-rust",
     "dep:tree-sitter-javascript",
     "dep:tree-sitter-typescript",
@@ -90,6 +102,8 @@ code-highlight-official = [
 ]
 code-highlight-config = [
     "code-highlight-core",
+    "gmark-export/code-highlight-config",
+    "gmark-source-tools/code-highlight-config",
     "dep:tree-sitter-yaml",
     "dep:tree-sitter-toml",
 ]
@@ -101,9 +115,15 @@ tempfile = "=3.27.0"
 gmark-document = { path = "crates/gmark-document" }
 gmark-document-core = { path = "crates/gmark-document-core" }
 gmark-document-runtime = { path = "crates/gmark-document-runtime" }
+gmark-config = { path = "crates/gmark-config" }
+gmark-export = { path = "crates/gmark-export", default-features = false }
+gmark-i18n = { path = "crates/gmark-i18n" }
 gmark-json-graph = { path = "crates/gmark-json-graph" }
+gmark-markdown = { path = "crates/gmark-markdown", default-features = false }
 gmark-paged-document = { package = "gmark-paged-document", path = "crates/gmark-paged-document" }
 gmark-recovery-codec = { path = "crates/gmark-recovery-codec" }
+gmark-source-tools = { path = "crates/gmark-source-tools", default-features = false }
+gmark-update-core = { path = "crates/gmark-update-core" }
 base64 = "0.22.1"
 uuid = "1.23"
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
