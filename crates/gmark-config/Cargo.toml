@@ -1,7 +1,7 @@
 # @author kongweiguang
 
 [package]
-name = "gmark-document-runtime"
+name = "gmark-config"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -15,17 +15,12 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
-crc32fast = "1"
-gmark-document = { path = "../gmark-document" }
+directories = "6"
 gmark-document-core = { path = "../gmark-document-core" }
-gmark-paged-document = { package = "gmark-paged-document", path = "../gmark-paged-document" }
-gmark-recovery-codec = { path = "../gmark-recovery-codec" }
-encoding_rs = "0.8"
-regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
-uuid = { version = "1.23", features = ["v4"] }
+toml = "1"
+uuid = { version = "1.23", features = ["serde", "v4"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

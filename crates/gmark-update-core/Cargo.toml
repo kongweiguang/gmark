@@ -1,0 +1,27 @@
+# @author kongweiguang
+
+[package]
+name = "gmark-update-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22.1"
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["fast"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "default-tls"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10.9"
+tempfile = "=3.27.0"
+url = "2"
+uuid = { version = "1.23", features = ["v4"] }

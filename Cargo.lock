@@ -4198,6 +4198,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gmark-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "gmark-document-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.3+spec-1.1.0",
+ "uuid",
+]
+
+[[package]]
 name = "gmark-document"
 version = "0.1.0"
 dependencies = [
@@ -4218,13 +4232,32 @@ dependencies = [
 name = "gmark-document-runtime"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "crc32fast",
  "encoding_rs",
  "gmark-document",
  "gmark-document-core",
  "gmark-paged-document",
+ "gmark-recovery-codec",
  "regex",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "gmark-export"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chromiumoxide",
+ "gmark-markdown",
+ "gmark-source-tools",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -4236,12 +4269,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "gmark-i18n"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "gmark-json-graph"
 version = "0.1.0"
 dependencies = [
  "gmark-document-core",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "gmark-markdown"
+version = "0.1.0"
+dependencies = [
+ "ammonia",
+ "cssparser",
+ "pulldown-cmark",
+ "regex",
+ "tree-sitter",
+ "tree-sitter-html",
+ "unicode-segmentation",
+ "url",
 ]
 
 [[package]]
@@ -4273,6 +4330,53 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "gmark-source-tools"
+version = "0.1.0"
+dependencies = [
+ "adot-tree-sitter-toml",
+ "anyhow",
+ "regex",
+ "serde",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-go",
+ "tree-sitter-highlight",
+ "tree-sitter-html",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-md",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "tree-sitter-yaml",
+]
+
+[[package]]
+name = "gmark-update-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "ed25519-dalek",
+ "reqwest 0.13.4",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "url",
+ "uuid",
 ]
 
 [[package]]

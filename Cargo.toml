@@ -15,10 +15,16 @@ members = [
     "crates/gmark-document-core",
     "crates/gmark-document",
     "crates/gmark-document-runtime",
+    "crates/gmark-config",
+    "crates/gmark-export",
     "crates/gmark-fuzz-support",
+    "crates/gmark-i18n",
     "crates/gmark-json-graph",
+    "crates/gmark-markdown",
     "crates/gmark-paged-document",
     "crates/gmark-recovery-codec",
+    "crates/gmark-source-tools",
+    "crates/gmark-update-core",
     "xtask",
 ]
 exclude = ["fuzz"]
