@@ -14,75 +14,20 @@ const OBSIDIAN_LIGHT_ID: &str = "obsidian-light";
 const CLAUDE_DARK_ID: &str = "claude-dark";
 const CLAUDE_LIGHT_ID: &str = "claude-light";
 
-/// The requested relationship between the application and the platform appearance.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThemeAppearance {
-    Dark,
-    Light,
-    #[default]
-    System,
-}
+/// Persisted theme dimensions are configuration-domain values. The UI keeps
+/// only platform appearance resolution and rendering behavior.
+pub use gmark_config::{ThemeAppearance, ThemePalette};
 
-impl ThemeAppearance {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Dark => "dark",
-            Self::Light => "light",
-            Self::System => "system",
-        }
-    }
-
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "dark" => Some(Self::Dark),
-            "light" => Some(Self::Light),
-            "system" => Some(Self::System),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn resolved(self, platform: WindowAppearance) -> Self {
-        match self {
-            Self::System => match platform {
-                WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Light,
-                WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
-            },
-            fixed => fixed,
-        }
-    }
-}
-
-/// A built-in semantic color vocabulary. Appearance is intentionally kept
-/// separate so adding another palette does not change persisted preferences.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThemePalette {
-    #[default]
-    Xcode,
-    Fleet,
-    Obsidian,
-    Claude,
-}
-
-impl ThemePalette {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Xcode => "xcode",
-            Self::Fleet => "fleet",
-            Self::Obsidian => "obsidian",
-            Self::Claude => "claude",
-        }
-    }
-
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "xcode" => Some(Self::Xcode),
-            "fleet" => Some(Self::Fleet),
-            "obsidian" => Some(Self::Obsidian),
-            "claude" => Some(Self::Claude),
-            _ => None,
-        }
+fn resolve_theme_appearance(
+    appearance: ThemeAppearance,
+    platform: WindowAppearance,
+) -> ThemeAppearance {
+    match appearance {
+        ThemeAppearance::System => match platform {
+            WindowAppearance::Light | WindowAppearance::VibrantLight => ThemeAppearance::Light,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeAppearance::Dark,
+        },
+        fixed => fixed,
     }
 }
 
@@ -109,7 +54,7 @@ pub(crate) fn resolved_theme_id(
     palette: ThemePalette,
     platform: WindowAppearance,
 ) -> &'static str {
-    let appearance = appearance.resolved(platform);
+    let appearance = resolve_theme_appearance(appearance, platform);
     match (palette, appearance) {
         (ThemePalette::Xcode, ThemeAppearance::Dark) => XCODE_DARK_ID,
         (ThemePalette::Xcode, ThemeAppearance::Light) => XCODE_LIGHT_ID,
@@ -136,7 +81,7 @@ fn build_theme(
     palette: ThemePalette,
     platform: WindowAppearance,
 ) -> (String, Theme) {
-    let resolved_appearance = appearance.resolved(platform);
+    let resolved_appearance = resolve_theme_appearance(appearance, platform);
     let (id, theme) = match (palette, resolved_appearance) {
         (ThemePalette::Xcode, ThemeAppearance::Dark) => (XCODE_DARK_ID, Theme::xcode_dark()),
         (ThemePalette::Xcode, ThemeAppearance::Light) => (XCODE_LIGHT_ID, Theme::xcode_light()),

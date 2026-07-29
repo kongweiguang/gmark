@@ -111,12 +111,16 @@ impl I18nCatalog {
         let Some(strings) = strings else {
             return LanguageSelection::NotFound;
         };
-        if self.current_language_id == language_id {
-            return LanguageSelection::Unchanged;
+        let changed = self.current_language_id != language_id;
+        if changed {
+            self.current_language_id = language_id.to_owned();
         }
-        self.current_language_id = language_id.to_owned();
         self.strings = Arc::new(strings);
-        LanguageSelection::Changed
+        if changed {
+            LanguageSelection::Changed
+        } else {
+            LanguageSelection::Unchanged
+        }
     }
 
     /// Compatibility helper with legacy `I18nManager` semantics: only a real

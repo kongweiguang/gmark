@@ -122,3 +122,27 @@ fn directory_loading_keeps_valid_packs_when_neighbors_are_bad() {
     assert!(catalog.set_language_by_id("ko-KR"));
     assert_eq!(catalog.strings().get("menu_file"), Some("파일"));
 }
+
+#[test]
+fn reimporting_the_active_custom_language_refreshes_its_bundle() {
+    let mut catalog = I18nCatalog::default();
+    let initial = CustomLanguagePack::from_json(
+        r#"{ "id": "ja-JP", "name": "Japanese", "strings": { "menu_file": "File A" } }"#,
+    )
+    .expect("initial custom pack should parse");
+    catalog
+        .upsert_custom_language(initial.into_pack())
+        .expect("initial custom pack should install");
+    assert!(catalog.set_language_by_id("ja-JP"));
+
+    let replacement = CustomLanguagePack::from_json(
+        r#"{ "id": "ja-JP", "name": "Japanese", "strings": { "menu_file": "File B" } }"#,
+    )
+    .expect("replacement custom pack should parse");
+    catalog
+        .upsert_custom_language(replacement.into_pack())
+        .expect("replacement custom pack should install");
+
+    assert!(!catalog.set_language_by_id("ja-JP"));
+    assert_eq!(catalog.strings().get("menu_file"), Some("File B"));
+}

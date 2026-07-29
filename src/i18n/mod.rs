@@ -6,21 +6,11 @@
 //! manager used by menus and editor UI. Visual styling remains in `theme`.
 
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::sync::Arc;
 
-use anyhow::{Context as _, bail};
-use gpui::{App, Global};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
-
-use crate::config::{
-    GmarkConfigDirs, object_without_empty_values, prune_empty_json_values, read_json_or_jsonc,
-    sanitize_config_file_stem,
-};
+use serde::{Deserialize, Serialize};
 
 /// All localisable UI strings for the editor.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct I18nStrings {
     /// Marker prepended to the window title when the document is dirty.
     pub dirty_title_marker: String,
@@ -566,7 +556,8 @@ pub struct I18nStrings {
 
 mod parts;
 
-pub use parts::catalog::{I18nManager, LanguageCatalogEntry, language_id_for_locale_preferences};
+pub use gmark_i18n::{LanguageCatalogEntry, language_id_for_locale_preferences};
+pub use parts::catalog::I18nManager;
 #[cfg(test)]
 #[path = "../../tests/unit/i18n/tests.rs"]
 mod tests;

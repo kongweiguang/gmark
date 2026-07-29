@@ -2,16 +2,14 @@
 
 use super::{
     GmarkConfigDirs, RECENT_FILES_LIMIT, load_or_create_installation_id_with_dirs,
-    parse_jsonc_value, prune_empty_json_values, read_recent_files_with_dirs,
-    record_recent_file_with_dirs, remove_recent_file_with_dirs, sanitize_config_file_stem,
-    strip_jsonc_comments,
+    read_recent_files_with_dirs, record_recent_file_with_dirs, remove_recent_file_with_dirs,
 };
 
 #[test]
 fn ui_check_override_isolates_every_config_artifact() {
     let root = std::env::temp_dir().join(format!("gmark-ui-check-config-{}", uuid::Uuid::new_v4()));
 
-    let dirs = GmarkConfigDirs::from_system_override(Some(root.clone())).unwrap();
+    let dirs = GmarkConfigDirs::from_system_with_override(Some(root.clone())).unwrap();
 
     assert_eq!(dirs.app_config_file(), root.join("config.toml"));
     assert_eq!(dirs.instance_lock_file(), root.join("instance.lock"));
@@ -21,51 +19,7 @@ fn ui_check_override_isolates_every_config_artifact() {
         root.join("workspace-session.json")
     );
 }
-use serde_json::json;
 use std::path::{Path, PathBuf};
-
-#[test]
-fn jsonc_comments_are_stripped_without_touching_strings() {
-    let text = r#"
-        {
-            // line comment
-            "url": "https://example.com/a//b",
-            "text": "/* not a comment */",
-            /* block comment */
-            "value": 1
-        }
-        "#;
-
-    let parsed = parse_jsonc_value(text).expect("jsonc should parse");
-    assert_eq!(parsed["url"], "https://example.com/a//b");
-    assert_eq!(parsed["text"], "/* not a comment */");
-    assert_eq!(parsed["value"], 1);
-    assert!(strip_jsonc_comments(text).is_ok());
-}
-
-#[test]
-fn empty_values_are_pruned_recursively() {
-    let mut value = json!({
-        "name": "",
-        "colors": {
-            "text_default": null,
-            "selection": "#fff"
-        },
-        "items": ["", null]
-    });
-
-    assert!(!prune_empty_json_values(&mut value));
-    assert_eq!(value, json!({ "colors": { "selection": "#fff" } }));
-}
-
-#[test]
-fn config_file_stems_are_sanitized() {
-    assert_eq!(
-        sanitize_config_file_stem("My Theme / Blue"),
-        "My_Theme_Blue"
-    );
-    assert_eq!(sanitize_config_file_stem("  ...  "), "custom");
-}
 
 #[test]
 fn missing_recent_history_file_returns_empty_list() {
@@ -83,7 +37,7 @@ fn empty_recent_history_write_does_not_create_file() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
     let dirs = GmarkConfigDirs::from_root(&root);
 
-    super::write_recent_files_with_dirs(&[], &dirs).unwrap();
+    remove_recent_file_with_dirs(Path::new("missing.md"), &dirs).unwrap();
 
     assert!(!dirs.history_file().exists());
 

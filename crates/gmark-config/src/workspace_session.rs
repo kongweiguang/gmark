@@ -5,6 +5,7 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
+use gmark_document_core::{SourceAffinity, SourceAnchor, SourceSelection};
 use serde::{Deserialize, Serialize};
 
 use crate::{ConfigDirs, persistence::atomic_write, workspace_codec};
@@ -116,6 +117,20 @@ pub struct WorkspaceSessionSelection {
 }
 
 impl WorkspaceSessionSelection {
+    /// Converts the document-core selection used by the existing UI adapter
+    /// into the versioned persistence representation.
+    #[must_use]
+    pub fn from_source_selection(selection: SourceSelection) -> Self {
+        let range = selection.range();
+        Self {
+            start: range.start.min(usize::MAX as u64) as usize,
+            end: range.end.min(usize::MAX as u64) as usize,
+            reversed: selection.reversed(),
+            anchor_affinity: Some(selection.anchor.affinity.into()),
+            head_affinity: Some(selection.head.affinity.into()),
+        }
+    }
+
     /// 从中立选择转换为持久化值。
     #[must_use]
     pub fn from_selection(selection: SessionSelection) -> Self {
@@ -145,6 +160,47 @@ impl WorkspaceSessionSelection {
                 fallback.head.byte_offset,
                 self.head_affinity.unwrap_or(fallback.head.affinity),
             ),
+        }
+    }
+
+    /// Restores the document-core selection expected by the UI adapter.
+    #[must_use]
+    pub fn source_selection_for_range(&self, range: std::ops::Range<usize>) -> SourceSelection {
+        let fallback = SourceSelection::from_range(
+            range.start as u64..range.end.max(range.start) as u64,
+            self.reversed,
+        );
+        SourceSelection {
+            anchor: SourceAnchor::new(
+                fallback.anchor.byte_offset,
+                self.anchor_affinity
+                    .map(Into::into)
+                    .unwrap_or(fallback.anchor.affinity),
+            ),
+            head: SourceAnchor::new(
+                fallback.head.byte_offset,
+                self.head_affinity
+                    .map(Into::into)
+                    .unwrap_or(fallback.head.affinity),
+            ),
+        }
+    }
+}
+
+impl From<SourceAffinity> for WorkspaceSessionAffinity {
+    fn from(value: SourceAffinity) -> Self {
+        match value {
+            SourceAffinity::Before => Self::Before,
+            SourceAffinity::After => Self::After,
+        }
+    }
+}
+
+impl From<WorkspaceSessionAffinity> for SourceAffinity {
+    fn from(value: WorkspaceSessionAffinity) -> Self {
+        match value {
+            WorkspaceSessionAffinity::Before => Self::Before,
+            WorkspaceSessionAffinity::After => Self::After,
         }
     }
 }

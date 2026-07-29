@@ -1,9 +1,9 @@
 // @author kongweiguang
 
-use super::parts::catalog::I18nLanguagePack;
 use super::{I18nManager, I18nStrings, language_id_for_locale_preferences};
 use crate::config::GmarkConfigDirs;
 use crate::theme::ThemeManager;
+use gmark_i18n::LanguagePack;
 
 #[test]
 fn built_in_chinese_strings_are_utf8() {
@@ -191,6 +191,68 @@ fn imports_jsonc_language_pack_and_persists_normalized_json() {
 }
 
 #[test]
+fn imported_pack_keeps_nested_partial_fallbacks_in_the_ui_projection() {
+    let root = std::env::temp_dir().join(format!("gmark-i18n-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).expect("temp root should be created");
+    let source = root.join("language.json");
+    std::fs::write(
+        &source,
+        r#"{
+            "id": "ja-JP",
+            "name": "日本語",
+            "strings": {
+                "slash_commands": { "table": "グリッド" }
+            }
+        }"#,
+    )
+    .expect("language config should be written");
+
+    let dirs = GmarkConfigDirs::from_root(&root);
+    let mut manager = I18nManager::default();
+    manager
+        .import_language_config_with_dirs(&source, &dirs)
+        .expect("language config should import");
+
+    assert_eq!(manager.strings().slash_commands["table"], "グリッド");
+    assert_eq!(manager.strings().slash_commands["heading_1"], "Heading 1");
+    assert_eq!(manager.strings().menu_file, "File");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reimporting_the_active_language_refreshes_the_ui_projection() {
+    let root = std::env::temp_dir().join(format!("gmark-i18n-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).expect("temp root should be created");
+    let source = root.join("language.json");
+    let dirs = GmarkConfigDirs::from_root(&root);
+    let mut manager = I18nManager::default();
+
+    std::fs::write(
+        &source,
+        r#"{ "id": "ja-JP", "name": "日本語", "strings": { "menu_file": "ファイル A" } }"#,
+    )
+    .expect("initial language config should be written");
+    manager
+        .import_language_config_with_dirs(&source, &dirs)
+        .expect("initial language config should import");
+
+    std::fs::write(
+        &source,
+        r#"{ "id": "ja-JP", "name": "日本語", "strings": { "menu_file": "ファイル B" } }"#,
+    )
+    .expect("replacement language config should be written");
+    manager
+        .import_language_config_with_dirs(&source, &dirs)
+        .expect("replacement language config should import");
+
+    assert_eq!(manager.current_language_id(), "ja-JP");
+    assert_eq!(manager.strings().menu_file, "ファイル B");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn custom_language_cannot_override_builtin_language_id() {
     let root = std::env::temp_dir().join(format!("gmark-i18n-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).expect("temp root should be created");
@@ -217,7 +279,7 @@ fn custom_language_cannot_override_builtin_language_id() {
 
 #[test]
 fn language_pack_json_falls_back_for_missing_strings() {
-    let pack = I18nLanguagePack::from_json(
+    let pack = LanguagePack::from_json(
         r#"{
                 "id": "zh-CN",
                 "name": "简体中文",
@@ -231,23 +293,24 @@ fn language_pack_json_falls_back_for_missing_strings() {
     )
     .expect("language pack should load");
 
+    let strings = I18nStrings::from_translation_bundle(&pack.strings);
     assert_eq!(pack.id, "zh-CN");
     assert_eq!(pack.name, "简体中文");
-    assert_eq!(pack.strings.menu_file, "文件菜单");
-    assert_eq!(pack.strings.menu_export, "导出");
-    assert_eq!(pack.strings.info_dialog_ok, "确定");
-    assert_eq!(pack.strings.update_open_release, "下载并安装");
-    assert_eq!(pack.strings.help_about_github_label, "GitHub");
-    assert_eq!(pack.strings.slash_commands["table"], "表格");
+    assert_eq!(strings.menu_file, "文件菜单");
+    assert_eq!(strings.menu_export, "导出");
+    assert_eq!(strings.info_dialog_ok, "确定");
+    assert_eq!(strings.update_open_release, "下载并安装");
+    assert_eq!(strings.help_about_github_label, "GitHub");
+    assert_eq!(strings.slash_commands["table"], "表格");
     assert_eq!(
-        pack.strings.help_about_star_message,
+        strings.help_about_star_message,
         "如果本项目对您有帮助，那不妨给本项目一颗 Star⭐，十分感谢！"
     );
 }
 
 #[test]
 fn partial_slash_command_map_merges_with_language_defaults() {
-    let pack = I18nLanguagePack::from_json(
+    let pack = LanguagePack::from_json(
         r#"{
                 "id": "en-US",
                 "strings": {
@@ -257,17 +320,18 @@ fn partial_slash_command_map_merges_with_language_defaults() {
     )
     .expect("language pack should load");
 
-    assert_eq!(pack.strings.slash_commands["table"], "Grid");
-    assert_eq!(pack.strings.slash_commands["heading_1"], "Heading 1");
+    let strings = I18nStrings::from_translation_bundle(&pack.strings);
+    assert_eq!(strings.slash_commands["table"], "Grid");
+    assert_eq!(strings.slash_commands["heading_1"], "Heading 1");
     assert_eq!(
-        pack.strings.slash_commands["no_results"],
+        strings.slash_commands["no_results"],
         "No matching block type"
     );
 }
 
 #[test]
 fn unknown_language_pack_falls_back_to_english_strings() {
-    let pack = I18nLanguagePack::from_json(
+    let pack = LanguagePack::from_json(
         r#"{
                 "id": "fr-FR",
                 "strings": {
@@ -277,21 +341,19 @@ fn unknown_language_pack_falls_back_to_english_strings() {
     )
     .expect("language pack should load");
 
+    let strings = I18nStrings::from_translation_bundle(&pack.strings);
     assert_eq!(pack.id, "fr-FR");
     assert_eq!(pack.name, "fr-FR");
-    assert_eq!(pack.strings.menu_file, "Fichier");
-    assert_eq!(pack.strings.menu_export, "Export");
-    assert_eq!(pack.strings.info_dialog_ok, "OK");
-    assert_eq!(pack.strings.update_open_release, "Download and Install");
-    assert_eq!(pack.strings.menu_open_recent_file, "Open Recent File");
-    assert_eq!(pack.strings.menu_no_recent_files, "No Recent Files");
+    assert_eq!(strings.menu_file, "Fichier");
+    assert_eq!(strings.menu_export, "Export");
+    assert_eq!(strings.info_dialog_ok, "OK");
+    assert_eq!(strings.update_open_release, "Download and Install");
+    assert_eq!(strings.menu_open_recent_file, "Open Recent File");
+    assert_eq!(strings.menu_no_recent_files, "No Recent Files");
+    assert_eq!(strings.recent_file_missing_title, "Recent File Missing");
+    assert_eq!(strings.help_about_github_label, "GitHub");
     assert_eq!(
-        pack.strings.recent_file_missing_title,
-        "Recent File Missing"
-    );
-    assert_eq!(pack.strings.help_about_github_label, "GitHub");
-    assert_eq!(
-        pack.strings.help_about_star_message,
+        strings.help_about_star_message,
         "If this project helps you, consider giving it a Star⭐. Thank you!"
     );
 }

@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use std::collections::BTreeMap;
 
 impl PreferencesNav {
     const ORDER: [Self; 6] = [

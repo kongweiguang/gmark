@@ -2,32 +2,35 @@
 
 //! Persistent app preferences and the preferences window.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-
-use anyhow::Context as _;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use serde::{Deserialize, Serialize};
 
 use crate::components::{
     Block, BlockEvent, BlockRecord, ShortcutCategory, ShortcutCommand, ShortcutDefinition,
     install_keybindings, normalize_shortcut_config, normalize_shortcut_keys,
     resolved_shortcut_keys, shortcut_conflict_for, shortcut_definitions, switch::Switch,
 };
-use crate::config::{GmarkConfigDirs, read_recent_files};
+use crate::config::GmarkConfigDirs;
 use crate::i18n::{I18nManager, LanguageCatalogEntry, language_id_for_locale_preferences};
 use crate::theme::{Theme, ThemeAppearance, ThemeManager, ThemePalette};
 use crate::window_chrome::{custom_titlebar_height, gmark_window_options, render_custom_titlebar};
 
-const DEFAULT_LANGUAGE_ID: &str = "en-US";
+pub(crate) use gmark_config::{
+    AppPreferences, AutoSavePreference, DocumentLoadingPreferences, ImagePasteBehavior,
+    ResourceInsertBehavior, StartupOpenPreference, StatusBarButton, StatusBarPreferences,
+};
+
+const DEFAULT_LANGUAGE_ID: &str = gmark_config::DEFAULT_LANGUAGE_ID;
+#[cfg(test)]
 const DEFAULT_EDITOR_FONT_SIZE: u8 = 16;
+#[cfg(test)]
 const DEFAULT_EDITOR_LINE_HEIGHT_PERCENT: u16 = 160;
 const MIN_EDITOR_FONT_SIZE: u8 = 12;
 const MAX_EDITOR_FONT_SIZE: u8 = 24;
 const MIN_EDITOR_LINE_HEIGHT_PERCENT: u16 = 120;
 const MAX_EDITOR_LINE_HEIGHT_PERCENT: u16 = 200;
 const EDITOR_LINE_HEIGHT_STEP: u16 = 5;
+#[cfg(test)]
 const DEFAULT_EDITOR_CONTENT_WIDTH: u16 = 1200;
 const MIN_EDITOR_CONTENT_WIDTH: u16 = 680;
 const MAX_EDITOR_CONTENT_WIDTH: u16 = 1600;
@@ -69,214 +72,6 @@ const SEARCH_ICON: &str = "icon/ui/search.svg";
 const CLOSE_ICON: &str = "icon/ui/close.svg";
 const MINUS_ICON: &str = "icon/ui/minus.svg";
 const PLUS_ICON: &str = "icon/ui/plus.svg";
-
-/// A user-configurable button shown in the status bar.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct StatusBarButton {
-    pub id: String,
-    pub label: String,
-    pub action_id: String,
-}
-
-/// Status bar visibility and component toggles.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct StatusBarPreferences {
-    pub enabled: bool,
-    pub show_word_count: bool,
-    pub show_cursor_position: bool,
-    pub show_sidebar_toggle: bool,
-    pub show_mode_switch: bool,
-    pub custom_buttons: Vec<StatusBarButton>,
-}
-
-impl Default for StatusBarPreferences {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            show_word_count: true,
-            show_cursor_position: true,
-            show_sidebar_toggle: true,
-            show_mode_switch: true,
-            custom_buttons: Vec::new(),
-        }
-    }
-}
-
-/// Startup document selection stored in `config.toml`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StartupOpenPreference {
-    NewFile,
-    LastOpenedFile,
-}
-
-impl StartupOpenPreference {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::NewFile => "new_file",
-            Self::LastOpenedFile => "last_opened_file",
-        }
-    }
-
-    fn from_str(value: &str) -> Self {
-        match value {
-            "last_opened_file" => Self::LastOpenedFile,
-            _ => Self::NewFile,
-        }
-    }
-}
-
-/// 图片、附件与视频共用的资源插入存储策略。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResourceInsertBehavior {
-    None,
-    CopyToDocumentFolder,
-    CopyToAssetsFolder,
-    CopyToNamedAssetsFolder,
-}
-
-/// Automatic file-save behavior. Crash recovery remains independent and always journals dirty work.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum AutoSavePreference {
-    /// Never write the Markdown file without an explicit Save command.
-    #[default]
-    Off,
-    /// Save an existing, conflict-free file after one second without edits.
-    AfterDelay,
-}
-
-impl AutoSavePreference {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::AfterDelay => "after_delay",
-        }
-    }
-
-    fn from_str(value: &str) -> Self {
-        match value {
-            "after_delay" => Self::AfterDelay,
-            _ => Self::Off,
-        }
-    }
-}
-
-impl ResourceInsertBehavior {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::CopyToDocumentFolder => "copy_to_document_folder",
-            Self::CopyToAssetsFolder => "copy_to_assets_folder",
-            Self::CopyToNamedAssetsFolder => "copy_to_named_assets_folder",
-        }
-    }
-
-    fn from_str(value: &str) -> Self {
-        match value {
-            "copy_to_document_folder" => Self::CopyToDocumentFolder,
-            "copy_to_assets_folder" => Self::CopyToAssetsFolder,
-            "copy_to_named_assets_folder" => Self::CopyToNamedAssetsFolder,
-            _ => Self::None,
-        }
-    }
-}
-
-/// 首个兼容版本保留旧类型名，配合持久化的 `image_paste_behavior` 双写支持降级。
-pub(crate) type ImagePasteBehavior = ResourceInsertBehavior;
-
-/// User preferences persisted under the app config directory.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AppPreferences {
-    pub(crate) startup_open: StartupOpenPreference,
-    pub(crate) auto_check_updates: bool,
-    pub(crate) default_language_id: String,
-    pub(crate) theme_appearance: ThemeAppearance,
-    pub(crate) theme_palette: ThemePalette,
-    pub(crate) show_table_headers: bool,
-    pub(crate) image_paste_behavior: ImagePasteBehavior,
-    pub(crate) auto_save: AutoSavePreference,
-    pub(crate) spell_check: bool,
-    pub(crate) auto_pair_brackets: bool,
-    pub(crate) auto_pair_markdown: bool,
-    pub(crate) code_folding: bool,
-    pub(crate) format_on_save: bool,
-    pub(crate) editor_font_size: u8,
-    pub(crate) editor_line_height_percent: u16,
-    pub(crate) editor_content_width: u16,
-    pub(crate) editor_font_family: String,
-    pub(crate) show_tab_bar_actions: bool,
-    pub(crate) recent_editing_commands: Vec<String>,
-    pub(crate) keybindings: BTreeMap<String, Vec<String>>,
-    pub(crate) status_bar: StatusBarPreferences,
-    pub(crate) document_loading: DocumentLoadingPreferences,
-}
-
-impl Default for AppPreferences {
-    fn default() -> Self {
-        Self {
-            startup_open: StartupOpenPreference::NewFile,
-            auto_check_updates: true,
-            default_language_id: DEFAULT_LANGUAGE_ID.into(),
-            theme_appearance: ThemeAppearance::System,
-            theme_palette: ThemePalette::Xcode,
-            show_table_headers: true,
-            image_paste_behavior: ImagePasteBehavior::None,
-            auto_save: AutoSavePreference::Off,
-            spell_check: true,
-            auto_pair_brackets: true,
-            auto_pair_markdown: true,
-            code_folding: true,
-            format_on_save: false,
-            editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
-            editor_line_height_percent: DEFAULT_EDITOR_LINE_HEIGHT_PERCENT,
-            editor_content_width: DEFAULT_EDITOR_CONTENT_WIDTH,
-            editor_font_family: String::new(),
-            show_tab_bar_actions: false,
-            recent_editing_commands: Vec::new(),
-            keybindings: BTreeMap::new(),
-            status_bar: StatusBarPreferences::default(),
-            document_loading: DocumentLoadingPreferences::default(),
-        }
-    }
-}
-
-impl AppPreferences {
-    pub(crate) fn resource_insert_behavior(&self) -> ResourceInsertBehavior {
-        self.image_paste_behavior
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DocumentLoadingPreferences {
-    pub(crate) max_resident_mib: Option<u64>,
-}
-
-impl DocumentLoadingPreferences {
-    const MIB_RANGE: std::ops::RangeInclusive<u64> = 1..=1_024;
-
-    pub(crate) fn policy(&self) -> gmark_document_core::LoadingPolicy {
-        gmark_document_core::LoadingPolicy {
-            max_resident_bytes: self
-                .max_resident_mib
-                .filter(|value| Self::MIB_RANGE.contains(value))
-                .and_then(|mib| mib.checked_mul(1024 * 1024)),
-            force_safe_source: false,
-        }
-    }
-
-    pub(crate) fn effective_max_resident_mib(&self) -> u64 {
-        self.max_resident_mib
-            .filter(|value| Self::MIB_RANGE.contains(value))
-            .unwrap_or(
-                gmark_document_core::DEFAULT_LOADING_LIMITS.max_resident_bytes / (1024 * 1024),
-            )
-    }
-
-    /// 非法覆盖值仍保留在配置中供用户修正，但打开策略会回退到默认大小。
-    pub(crate) fn has_invalid_override(&self) -> bool {
-        self.max_resident_mib
-            .is_some_and(|value| !Self::MIB_RANGE.contains(&value))
-    }
-}
 
 /// Status Bar Settings
 struct StatusBarSettings {
