@@ -513,7 +513,11 @@
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&root).unwrap();
-        let path = root.join("dirty.md");
+        let alias = root.join("alias");
+        fs::create_dir_all(&alias).unwrap();
+        // Windows Runner 的临时目录可能使用 8.3 别名；显式保留一个跨平台路径别名，
+        // 防止安全规范化后的删除路径绕过原始标签路径的脏状态检查。
+        let path = alias.join("..").join("dirty.md");
         fs::write(&path, "# dirty\n").unwrap();
         let editor_path = path.clone();
         let (editor, visual) = cx.add_window_view(move |_window, cx| {

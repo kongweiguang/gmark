@@ -118,6 +118,8 @@ pub(super) fn plan_workspace_create(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct WorkspaceDeletePlan {
     pub(super) root: PathBuf,
+    /// 保留工作区树交付的路径身份，删除后仍可匹配标签、选择与空目录状态。
+    pub(super) workspace_path: PathBuf,
     pub(super) path: PathBuf,
 }
 
@@ -150,6 +152,7 @@ impl WorkspaceDeletePlan {
 }
 
 pub(super) fn plan_workspace_delete(root: &Path, path: &Path) -> Result<WorkspaceDeletePlan> {
+    let workspace_path = path.to_path_buf();
     let root = dunce::canonicalize(root)
         .with_context(|| format!("failed to resolve workspace root '{}'", root.display()))?;
     let path = dunce::canonicalize(path)
@@ -166,7 +169,11 @@ pub(super) fn plan_workspace_delete(root: &Path, path: &Path) -> Result<Workspac
     if !metadata.is_file() && !metadata.is_dir() {
         bail!("deletion target is not a regular file or directory");
     }
-    Ok(WorkspaceDeletePlan { root, path })
+    Ok(WorkspaceDeletePlan {
+        root,
+        workspace_path,
+        path,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

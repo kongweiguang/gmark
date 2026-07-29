@@ -370,6 +370,8 @@ fn workspace_delete_plan_revalidates_and_delegates_the_exact_target() {
     let expected = dunce::canonicalize(&target).unwrap();
     let mut delegated = None;
 
+    assert_eq!(plan.workspace_path, target);
+
     plan.execute_with(|path| {
         delegated = Some(path.to_path_buf());
         fs::remove_dir_all(path).map_err(Into::into)

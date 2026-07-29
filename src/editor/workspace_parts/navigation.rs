@@ -291,7 +291,7 @@ impl Editor {
         let planned = super::workspace_file_ops::plan_workspace_delete(root, &path);
         let (plan, error) = match planned {
             Ok(plan) => {
-                let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.path);
+                let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.workspace_path);
                 if has_dirty {
                     (
                         None,
@@ -634,7 +634,7 @@ impl Editor {
         if self.workspace.file_operation_task.is_some() {
             return;
         }
-        let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.path);
+        let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.workspace_path);
         if has_dirty {
             if let Some(dialog) = self.workspace.operation_dialog.as_mut() {
                 dialog.error = Some(
@@ -651,11 +651,11 @@ impl Editor {
         self.workspace.file_operation_generation = generation;
         // 回收站操作可能受 Shell/磁盘影响持续数百毫秒；确认后先从本地树移除目标，
         // 失败时再重新扫描恢复，避免用户误以为点击没有生效。
-        let tree_updated = self.workspace.remove_path(&plan.path);
+        let tree_updated = self.workspace.remove_path(&plan.workspace_path);
         self.workspace.operation_dialog = None;
         if matches!(
             self.workspace.selected.as_ref(),
-            Some(WorkspaceSelection::File(path)) if path.starts_with(&plan.path)
+            Some(WorkspaceSelection::File(path)) if path.starts_with(&plan.workspace_path)
         ) {
             self.workspace.selected = None;
         }
@@ -674,8 +674,8 @@ impl Editor {
                     editor.workspace.file_operation_task = None;
                     match result {
                         Ok(()) => {
-                            let tabs_closed =
-                                editor.close_tabs_affected_by_deleted_path(&plan.path, cx);
+                            let tabs_closed = editor
+                                .close_tabs_affected_by_deleted_path(&plan.workspace_path, cx);
                             editor.workspace.operation_dialog = None;
                             editor.workspace.operation_error = if tabs_closed {
                                 None
@@ -691,7 +691,7 @@ impl Editor {
                             editor
                                 .workspace
                                 .pinned_empty_directories
-                                .retain(|path| !path.starts_with(&plan.path));
+                                .retain(|path| !path.starts_with(&plan.workspace_path));
                             if !tree_updated {
                                 editor.invalidate_workspace_file_tree();
                             }
