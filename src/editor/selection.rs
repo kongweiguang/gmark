@@ -554,6 +554,8 @@ impl Editor {
         } else {
             (anchor, focus, anchor_index, focus_index)
         };
+        let start = self.cross_block_endpoint_on_char_boundary(start, false, cx)?;
+        let end = self.cross_block_endpoint_on_char_boundary(end, true, cx)?;
         if start_index == end_index && start.offset == end.offset {
             return None;
         }
@@ -576,6 +578,31 @@ impl Editor {
         Some(CrossBlockSelectionEndpoint {
             entity_id: endpoint.entity_id,
             offset: endpoint.offset.min(len),
+        })
+    }
+
+    fn cross_block_endpoint_on_char_boundary(
+        &self,
+        endpoint: CrossBlockSelectionEndpoint,
+        toward_end: bool,
+        cx: &App,
+    ) -> Option<CrossBlockSelectionEndpoint> {
+        let entity = self.document.block_entity_by_id(endpoint.entity_id)?;
+        let block = entity.read(cx);
+        let text = block.display_text();
+        let mut offset = endpoint.offset.min(text.len());
+        if toward_end {
+            while offset < text.len() && !text.is_char_boundary(offset) {
+                offset += 1;
+            }
+        } else {
+            while offset > 0 && !text.is_char_boundary(offset) {
+                offset -= 1;
+            }
+        }
+        Some(CrossBlockSelectionEndpoint {
+            entity_id: endpoint.entity_id,
+            offset,
         })
     }
 

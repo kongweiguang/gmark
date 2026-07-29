@@ -400,3 +400,39 @@ async fn mermaid_workbench_uses_explicit_modes_and_adapts_its_content_height(
         "narrow split preview must remain readable"
     );
 }
+
+#[gpui::test]
+async fn mermaid_preview_wheel_continues_scrolling_the_document(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let source = format!(
+        "```mermaid\nflowchart TD\nA -->|yes| B\n```\n\n{}",
+        "Supporting paragraph.\n\n".repeat(80)
+    );
+    let (editor, visual) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, source, None));
+    redraw(visual);
+    visual.executor().advance_clock(Duration::from_millis(300));
+    visual.run_until_parked();
+    redraw(visual);
+
+    let preview = visual
+        .debug_bounds("mermaid-preview-pane")
+        .expect("Mermaid preview pane");
+    editor.read_with(visual, |editor, _cx| {
+        assert!(editor.scroll_handle.max_offset().height > px(0.0));
+        assert_eq!(editor.scroll_handle.offset().y, px(0.0));
+    });
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: preview.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        ..Default::default()
+    });
+    redraw(visual);
+
+    editor.read_with(visual, |editor, _cx| {
+        assert!(
+            editor.scroll_handle.offset().y < px(0.0),
+            "wheel input over a non-scrollable Mermaid preview must continue scrolling the document"
+        );
+    });
+}

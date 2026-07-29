@@ -84,6 +84,19 @@ fn cache_key_changes_with_source() {
 }
 
 #[test]
+fn themed_cache_key_includes_the_render_strategy_version() {
+    let source = "flowchart TD\nA --> B";
+    let mut legacy_hasher = DefaultHasher::new();
+    mermaid_cache_key(source).hash(&mut legacy_hasher);
+    MermaidThemeMode::Light.hash(&mut legacy_hasher);
+
+    assert_ne!(
+        mermaid_themed_cache_key(source, MermaidThemeMode::Light),
+        format!("{:016x}", legacy_hasher.finish())
+    );
+}
+
+#[test]
 fn semantic_line_count_ignores_comments_blank_lines_and_frontmatter() {
     let source = "---\ntitle: Demo\n---\nflowchart LR\n%% comment\n\nA --> B\nB --> C";
     assert_eq!(semantic_mermaid_line_count(source), 3);
@@ -94,7 +107,7 @@ fn display_scale_uses_intrinsic_size_and_caps_growth() {
     let simple = "flowchart LR\nA --> B\nB --> C";
     assert_eq!(
         mermaid_display_scale(simple, 240.0, 120.0, 720.0, 960.0),
-        1.0
+        MERMAID_SIMPLE_MAX_SCALE
     );
 
     let complex = std::iter::once("flowchart LR".to_string())
@@ -105,6 +118,13 @@ fn display_scale_uses_intrinsic_size_and_caps_growth() {
     assert!(scale > 1.0);
     assert!(scale <= MERMAID_MAX_SCALE);
     assert!(260.0 * scale <= 720.0 + 0.5);
+}
+
+#[test]
+fn simple_wide_diagrams_still_shrink_to_the_content_column() {
+    let source = "flowchart LR\nA --> B";
+
+    assert!((mermaid_display_scale(source, 1_000.0, 120.0, 720.0, 960.0) - 0.72).abs() < 0.001);
 }
 
 #[test]
@@ -147,8 +167,91 @@ fn dark_renderer_uses_dark_mermaid_palette() {
 }
 
 #[test]
+fn flowchart_renderer_avoids_tight_grid_routing_bends() {
+    let options = mermaid_render_options("flowchart TD\nA --> B");
+
+    assert!(!options.layout.flowchart.routing.enable_grid_router);
+    assert_eq!(options.layout.node_spacing, MERMAID_FLOWCHART_SPACING);
+    assert_eq!(options.layout.rank_spacing, MERMAID_FLOWCHART_SPACING);
+}
+
+#[test]
+fn decision_branches_use_side_ports_top_entries_and_shared_label_geometry() {
+    let source = "flowchart TD\nA{校验通过?}\nA -->|是| B[提交成功]\nA -->|否| C[提示错误]";
+    let options = mermaid_render_options(source);
+    let parsed = mermaid_rs_renderer::parse_mermaid_strict(source).expect("flowchart source");
+    let mut layout =
+        mermaid_rs_renderer::compute_layout(&parsed.graph, &options.theme, &options.layout);
+    normalize_flowchart_decision_branches(&mut layout, FlowchartDirection::TopDown);
+
+    let decision = layout.nodes.get("A").expect("decision node");
+    for edge in &layout.edges {
+        let target = layout.nodes.get(&edge.to).expect("target node");
+        let start = edge.points.first().copied().expect("branch start");
+        let end = edge.points.last().copied().expect("branch end");
+        let label = edge.label_anchor.expect("branch label anchor");
+        assert!((start.1 - (decision.y + decision.height * 0.75)).abs() < 0.001);
+        assert!((end.0 - (target.x + target.width / 2.0)).abs() < 0.001);
+        assert!((end.1 + MERMAID_ARROW_TIP_EXTENSION - target.y).abs() < 0.001);
+        assert_eq!(label, edge.points[1]);
+        assert_eq!(label.0, end.0);
+    }
+    assert!(layout.edges[0].points[0].0 < decision.x + decision.width / 2.0);
+    assert!(layout.edges[1].points[0].0 > decision.x + decision.width / 2.0);
+}
+
+#[test]
+fn rendered_decision_labels_share_visible_backgrounds() {
+    let source = "flowchart TD\nA{校验通过?}\nA -->|是| B[提交成功]\nA -->|否| C[提示错误]";
+    let svg =
+        render_mermaid_raw_with_theme(source, MermaidThemeMode::Dark).expect("dark flowchart SVG");
+
+    assert_eq!(svg.matches("fill-opacity=\"0.95\"").count(), 2);
+    assert!(!svg.contains("fill-opacity=\"0.00\""));
+}
+
+#[test]
+fn forward_flowchart_edges_become_smooth_curves_with_the_original_end_tangent() {
+    let svg = r#"<svg><path id="edge-2" class="edgePath" d="M 140.114,314.495 L 140.114,324.120 Q 140.114,331.995 135.145,338.105 L 108.863,370.422 Q 103.894,376.531 103.894,384.406 L 103.894,394.031" marker-end="url(#arrow)" /></svg>"#;
+    let smoothed = smooth_forward_flowchart_edges("flowchart TD\nA --> B", svg);
+
+    assert!(smoothed.contains("d=\"M 140.114,314.495 C "));
+    assert!(smoothed.contains("103.894,394.031\""));
+    assert!(!smoothed.contains(" Q "));
+    assert!(smoothed.contains("marker-end"));
+    let curve = smoothed.split(" C ").nth(1).expect("cubic curve");
+    let coordinates = curve
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',' || ch == '"')
+        .filter_map(|part| part.parse::<f32>().ok())
+        .take(6)
+        .collect::<Vec<_>>();
+    assert_eq!(coordinates.len(), 6);
+    assert!((coordinates[2] - coordinates[4]).abs() < 0.001);
+}
+
+#[test]
+fn reverse_flowchart_edges_keep_their_avoidance_route() {
+    let svg = r#"<svg><path class="edgePath" d="M 100,300 L 120,250 Q 130,240 140,200" /></svg>"#;
+
+    assert_eq!(
+        smooth_forward_flowchart_edges("flowchart TD\nA --> B", svg),
+        svg
+    );
+}
+
+#[test]
+fn short_curved_edges_without_port_segments_are_left_unchanged() {
+    let svg = r#"<svg><path class="edgePath" d="M 100,100 Q 120,120 140,160" /></svg>"#;
+
+    assert_eq!(
+        smooth_forward_flowchart_edges("flowchart TD\nA --> B", svg),
+        svg
+    );
+}
+
+#[test]
 fn display_svg_scaling_rewrites_root_dimensions() {
-    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50"><rect width="100" height="50"/></svg>"#;
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50"><rect x="0" y="0" width="100" height="50" fill="#333333"/><rect width="100" height="50"/></svg>"##;
     let (scaled, size) = scale_mermaid_svg_for_display(svg, 2.0).expect("scaled svg");
 
     assert_eq!(
@@ -161,6 +264,8 @@ fn display_svg_scaling_rewrites_root_dimensions() {
     assert!(scaled.contains(r#"width="200.000""#));
     assert!(scaled.contains(r#"height="100.000""#));
     assert!(scaled.contains(r#"viewBox="0 0 100 50""#));
+    assert!(scaled.contains(r#"<rect x="0" y="0" width="100" height="50" fill="none""#));
+    assert!(scaled.contains(r#"<rect width="100" height="50"/>"#));
 }
 
 #[test]

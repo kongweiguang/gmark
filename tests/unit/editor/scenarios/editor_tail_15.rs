@@ -249,6 +249,27 @@ async fn nonvirtual_history_restore_recovers_original_line_ending_map(cx: &mut T
 }
 
 #[gpui::test]
+async fn malformed_history_line_endings_are_repaired_without_panicking(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let editor = cx.new(|cx| Editor::from_markdown(cx, "current".to_owned(), None));
+
+    editor.update(cx, |editor, cx| {
+        let mut history =
+            editor.capture_history_entry(crate::components::UndoCaptureKind::NonCoalescible, cx);
+        history.source_text = "a\nb".to_owned();
+        history.source_format = gmark_document::SourceFormatSnapshot {
+            utf8_bom: false,
+            endings: Vec::new(),
+            dominant: gmark_document::LineEnding::CrLf,
+        };
+
+        editor.restore_history_entry(&history, cx);
+        assert_eq!(editor.source_document.text(), "a\nb");
+        assert_eq!(editor.source_document.serialized_bytes(), b"a\r\nb");
+    });
+}
+
+#[gpui::test]
 async fn line_ending_command_is_dirty_undoable_and_saves_real_bytes(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let path = temp_markdown_path("line-ending-normalize");

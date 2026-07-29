@@ -726,11 +726,11 @@ impl Render for PreferencesWindow {
     }
 }
 
-pub(super) fn open_preferences_window_with_state(
+fn try_open_preferences_window_with_state(
     cx: &mut App,
     preferences: AppPreferences,
     title: String,
-) -> WindowHandle<PreferencesWindow> {
+) -> anyhow::Result<WindowHandle<PreferencesWindow>> {
     let bounds = Bounds::centered(None, size(px(860.0), px(620.0)), cx);
     let window_title = SharedString::from(format!("gmark - {title}"));
     let handle = cx
@@ -738,7 +738,7 @@ pub(super) fn open_preferences_window_with_state(
             gmark_window_options(window_title, bounds),
             move |_window, cx| cx.new(move |cx| PreferencesWindow::new(preferences, cx)),
         )
-        .expect("preferences window should open");
+        .map_err(|error| anyhow::anyhow!("failed to open preferences window: {error}"))?;
 
     handle
         .update(cx, |view, window, cx| {
@@ -750,12 +750,24 @@ pub(super) fn open_preferences_window_with_state(
             window.activate_window();
             view.focus_handle.focus(window);
         })
-        .expect("newly opened preferences window should be updateable");
+        .map_err(|error| anyhow::anyhow!("failed to initialize preferences window: {error}"))?;
 
-    handle
+    Ok(handle)
 }
 
-pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesWindow> {
+#[cfg(test)]
+pub(super) fn open_preferences_window_with_state(
+    cx: &mut App,
+    preferences: AppPreferences,
+    title: String,
+) -> WindowHandle<PreferencesWindow> {
+    try_open_preferences_window_with_state(cx, preferences, title)
+        .expect("test preferences window should open")
+}
+
+pub(crate) fn open_preferences_window(
+    cx: &mut App,
+) -> anyhow::Result<WindowHandle<PreferencesWindow>> {
     let preferences = match read_app_preferences() {
         Ok(preferences) => preferences,
         Err(err) => {
@@ -768,7 +780,7 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
         .strings()
         .preferences_window_title
         .clone();
-    open_preferences_window_with_state(cx, preferences, title)
+    try_open_preferences_window_with_state(cx, preferences, title)
 }
 
 pub(crate) fn localized_shortcut_command_label(

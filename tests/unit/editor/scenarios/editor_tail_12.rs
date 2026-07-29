@@ -375,7 +375,9 @@ async fn app_opens_recovery_session_as_dirty_editor_window(cx: &mut TestAppConte
         )
         .unwrap();
     let recovered = crate::recovery::replay_journal(journal.path()).unwrap();
-    let window = cx.update(|cx| crate::app_menu::open_recovered_editor_window(cx, recovered));
+    let window = cx
+        .update(|cx| crate::app_menu::open_recovered_editor_window(cx, recovered))
+        .unwrap();
     cx.run_until_parked();
 
     window

@@ -2,6 +2,7 @@
 
 //! Safe Markdown byte decoding shared by every file-open entry point.
 
+use std::fs::File;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
@@ -42,6 +43,8 @@ pub(crate) enum OpenedDocument {
     Resident(OpenedMarkdown),
     ResidentFormat(OpenProbe),
     Paged(OpenProbe),
+    /// 图片由 GPUI 按路径懒加载，不进入文本探测或文档状态机。
+    Image,
 }
 
 /// 文件打开策略只决定存储与主视图，不把未来的派生视图当作文档真值。
@@ -57,6 +60,17 @@ pub(crate) fn is_markdown_path(path: &Path) -> bool {
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
             matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown")
+        })
+}
+
+pub(crate) fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+            )
         })
 }
 
@@ -146,6 +160,10 @@ pub(crate) fn open_document_with_policy(
     path: &Path,
     loading: LoadingPolicy,
 ) -> Result<OpenedDocument> {
+    if is_image_path(path) {
+        File::open(path).with_context(|| format!("failed to open '{}'", path.display()))?;
+        return Ok(OpenedDocument::Image);
+    }
     if is_known_unsupported_document(path) {
         let extension = path
             .extension()

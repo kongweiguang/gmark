@@ -4,6 +4,15 @@
 
 use super::*;
 
+fn source_format_for_history_text(
+    text: &str,
+    mut format: gmark_document::SourceFormatSnapshot,
+) -> gmark_document::SourceFormatSnapshot {
+    let ending_count = text.bytes().filter(|byte| *byte == b'\n').count();
+    format.endings.resize(ending_count, format.dominant);
+    format
+}
+
 impl Editor {
     pub(super) fn empty_selection_snapshot() -> UndoSelectionSnapshot {
         UndoSelectionSnapshot::collapsed(0, SourceAffinity::Before)
@@ -70,9 +79,13 @@ impl Editor {
     }
 
     pub(super) fn capture_stable_history_entry(&self, kind: UndoCaptureKind) -> HistoryEntry {
+        let source_text = self.last_stable_source_text.clone();
         HistoryEntry {
-            source_text: self.last_stable_source_text.clone(),
-            source_format: self.source_document.source_format(),
+            source_format: source_format_for_history_text(
+                &source_text,
+                self.source_document.source_format(),
+            ),
+            source_text,
             selection: self.last_selection_snapshot,
             timestamp: Instant::now(),
             kind,
@@ -328,11 +341,11 @@ impl Editor {
 
     pub(super) fn restore_history_entry(&mut self, entry: &HistoryEntry, cx: &mut Context<Self>) {
         self.sync_source_document_from_projection(&entry.source_text);
-        assert!(
-            self.source_document
-                .restore_source_format(entry.source_format.clone()),
-            "历史源码格式必须与规范化源码的换行数一致"
-        );
+        // 历史快照来自 UI 输入与源码同步的交界处。即使旧版本或异常事件顺序留下了
+        // 换行数量不匹配的快照，也必须修复为可序列化格式，不能在撤销时终止主线程。
+        let format =
+            source_format_for_history_text(&entry.source_text, entry.source_format.clone());
+        let _ = self.source_document.restore_source_format(format);
         match self.view_mode {
             ViewMode::Rendered | ViewMode::Preview => {
                 self.rebuild_primary_projection_from_source_reusing(cx);

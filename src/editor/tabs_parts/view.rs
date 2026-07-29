@@ -198,7 +198,14 @@ impl Editor {
                         .ok()
                         .flatten();
                     if let Some(detached) = detached {
-                        crate::app_menu::open_detached_tab_window(cx, detached);
+                        let rollback = detached.clone();
+                        if let Err(error) = crate::app_menu::open_detached_tab_window(cx, detached)
+                        {
+                            eprintln!("failed to detach tab: {error}");
+                            let _ = strip_detach_editor.update(cx, |editor, cx| {
+                                editor.reattach_detached_tab(rollback, cx);
+                            });
+                        }
                     }
                 })
                 .child(
@@ -213,11 +220,12 @@ impl Editor {
                         .overflow_x_scroll()
                         .children(self.tabs.records.iter().enumerate().map(|(index, record)| {
                             let active = index == self.tabs.active;
-                            let (path, dirty, document_kind) = if active {
+                            let (path, dirty, document_kind, image_preview) = if active {
                                 (
                                     self.file_path.as_deref(),
                                     self.is_document_dirty(),
                                     self.document_kind,
+                                    self.image_preview_path.is_some(),
                                 )
                             } else {
                                 record
@@ -228,9 +236,10 @@ impl Editor {
                                             snapshot.file_path.as_deref(),
                                             snapshot.document_dirty,
                                             snapshot.document_kind,
+                                            snapshot.image_preview_path.is_some(),
                                         )
                                     })
-                                    .unwrap_or((None, false, DocumentKind::Markdown))
+                                    .unwrap_or((None, false, DocumentKind::Markdown, false))
                             };
                             let title = path
                                 .and_then(Path::file_name)
@@ -239,6 +248,8 @@ impl Editor {
                             let display_title = middle_ellipsis(&title, 28);
                             let leading_icon = if record.pinned {
                                 TAB_PIN_ICON
+                            } else if image_preview {
+                                TAB_IMAGE_ICON
                             } else {
                                 document_kind.icon()
                             };

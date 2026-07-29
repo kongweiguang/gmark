@@ -649,12 +649,15 @@ impl Editor {
     }
 
     /// Returns (line, col), both 1-based, from the source-mode selection snapshot.
-    fn compute_source_cursor_position(&self, cx: &App) -> (usize, usize) {
+    pub(super) fn compute_source_cursor_position(&self, cx: &App) -> (usize, usize) {
         let snapshot = self.capture_source_selection_snapshot(cx);
         let cursor_offset =
             super::saturating_source_offset(snapshot.source_selection().head.byte_offset);
         let text = self.document.raw_source_text(cx);
-        let clamped = cursor_offset.min(text.len());
+        let mut clamped = cursor_offset.min(text.len());
+        while clamped > 0 && !text.is_char_boundary(clamped) {
+            clamped -= 1;
+        }
 
         let line = text[..clamped].matches('\n').count() + 1;
         let last_newline = text[..clamped].rfind('\n').map(|i| i + 1).unwrap_or(0);

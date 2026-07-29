@@ -2,7 +2,8 @@
 
 use super::{
     DocumentEncoding, DocumentOpenPolicy, OpenedDocument, decode_markdown_bytes,
-    document_open_policy, open_document, open_document_with_policy, read_resident_text_from_probe,
+    document_open_policy, is_image_path, open_document, open_document_with_policy,
+    read_resident_text_from_probe,
 };
 
 #[test]
@@ -41,6 +42,34 @@ fn known_non_text_extensions_are_rejected_before_file_io() {
     let error = open_document(&missing).unwrap_err().to_string();
 
     assert_eq!(error, "unsupported file type '.exe'");
+}
+
+#[test]
+fn supported_raster_images_use_the_image_viewer_without_text_probing() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        "preview.png",
+        "preview.jpg",
+        "preview.jpeg",
+        "preview.gif",
+        "preview.webp",
+        "preview.bmp",
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"image bytes are decoded lazily by GPUI").unwrap();
+
+        assert!(
+            is_image_path(&path),
+            "{name} should be recognized as an image"
+        );
+        assert!(matches!(
+            open_document(&path).unwrap(),
+            OpenedDocument::Image
+        ));
+    }
+
+    assert!(!is_image_path(&dir.path().join("vector.svg")));
+    assert!(!is_image_path(&dir.path().join("photo.png.txt")));
 }
 
 #[test]

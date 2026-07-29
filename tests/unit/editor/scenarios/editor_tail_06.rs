@@ -237,10 +237,10 @@ async fn export_html_uses_source_mode_raw_text(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn dropped_markdown_replaces_clean_editor_in_current_window(cx: &mut TestAppContext) {
+async fn dropped_markdown_opens_new_tab_without_replacing_current(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
 
-    let dropped_path = temp_markdown_path("drop-clean-replace");
+    let dropped_path = temp_markdown_path("drop-new-tab");
     fs::write(
         &dropped_path,
         "# Dropped\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
@@ -255,16 +255,10 @@ async fn dropped_markdown_replaces_clean_editor_in_current_window(cx: &mut TestA
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "old".to_string(), None));
 
     editor.update(cx, |editor, cx| {
-        editor.toggle_view_mode(cx);
-        assert!(editor.view_mode == ViewMode::Source);
+        editor.mark_dirty(cx);
+        editor.open_dropped_markdown_in_tab(dropped_path.clone(), cx);
     });
-
-    cx.update(|window, cx| {
-        editor.update(cx, |editor, cx| {
-            editor.request_dropped_markdown_replace(dropped_path.clone(), window, cx);
-        });
-    });
-    redraw(cx);
+    cx.run_until_parked();
 
     editor.read_with(cx, |editor, cx| {
         assert_eq!(editor.file_path.as_ref(), Some(&dropped_path));
@@ -284,27 +278,40 @@ async fn dropped_markdown_replaces_clean_editor_in_current_window(cx: &mut TestA
         );
         assert!(editor.document.markdown_text(cx).contains("# Dropped"));
     });
+
+    editor.update(cx, |editor, cx| {
+        assert!(editor.switch_to_tab_index(0, cx));
+    });
+    editor.read_with(cx, |editor, cx| {
+        assert!(editor.document_dirty);
+        assert_eq!(editor.file_path, None);
+        assert_eq!(editor.document.markdown_text(cx), "old");
+    });
     assert_eq!(cx.cx.windows().len(), 1);
 }
 
 #[gpui::test]
-async fn dropped_paths_pick_first_valid_markdown_file(cx: &mut TestAppContext) {
+async fn dropped_paths_pick_first_supported_document_or_image(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
 
     let text_path = temp_export_path("drop-ignore-non-markdown", "txt");
+    let image_path = temp_export_path("drop-pick-image", "png");
     let markdown_path = temp_export_path("drop-pick-markdown", "markdown");
     fs::write(&text_path, "plain").expect("write text");
+    fs::write(&image_path, "image").expect("write image");
     fs::write(&markdown_path, "markdown").expect("write markdown");
     let cleanup_text = text_path.clone();
+    let cleanup_image = image_path.clone();
     let cleanup_markdown = markdown_path.clone();
     cx.on_quit(move || {
         let _ = fs::remove_file(&cleanup_text);
+        let _ = fs::remove_file(&cleanup_image);
         let _ = fs::remove_file(&cleanup_markdown);
     });
 
     assert_eq!(
-        Editor::first_dropped_markdown_path(&[text_path, markdown_path.clone()]),
-        Some(markdown_path)
+        Editor::first_dropped_openable_path(&[text_path, image_path.clone(), markdown_path,]),
+        Some(image_path)
     );
 }
 
@@ -462,11 +469,13 @@ async fn close_window_menu_action_closes_only_active_editor_window(cx: &mut Test
 async fn app_menu_opened_windows_activate_and_close_independently(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
 
-    let first_window =
-        cx.update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None));
+    let first_window = cx
+        .update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None))
+        .unwrap();
     cx.run_until_parked();
-    let second_window =
-        cx.update(|cx| crate::app_menu::open_editor_window(cx, "second".to_string(), None));
+    let second_window = cx
+        .update(|cx| crate::app_menu::open_editor_window(cx, "second".to_string(), None))
+        .unwrap();
     cx.run_until_parked();
 
     let active_window = cx.update(|cx| cx.active_window().expect("window should be active"));
@@ -506,16 +515,19 @@ async fn app_menu_opened_file_window_reinstalls_close_guard_after_registration(
     let opened_path = temp_markdown_path("app-menu-opened-file-window-close");
     fs::write(&opened_path, "opened from file").expect("write opened markdown");
 
-    let first_window =
-        cx.update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None));
+    let first_window = cx
+        .update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None))
+        .unwrap();
     cx.run_until_parked();
-    let second_window = cx.update(|cx| {
-        crate::app_menu::open_editor_window(
-            cx,
-            fs::read_to_string(&opened_path).expect("read opened markdown"),
-            Some(opened_path.clone()),
-        )
-    });
+    let second_window = cx
+        .update(|cx| {
+            crate::app_menu::open_editor_window(
+                cx,
+                fs::read_to_string(&opened_path).expect("read opened markdown"),
+                Some(opened_path.clone()),
+            )
+        })
+        .unwrap();
     cx.run_until_parked();
 
     let active_window = cx.update(|cx| cx.active_window().expect("window should be active"));
@@ -549,15 +561,18 @@ async fn app_menu_opened_dirty_file_window_prompts_only_that_window(cx: &mut Tes
     let opened_path = temp_markdown_path("app-menu-opened-dirty-file-window-close");
     fs::write(&opened_path, "opened from file").expect("write opened markdown");
 
-    let first_window =
-        cx.update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None));
-    let second_window = cx.update(|cx| {
-        crate::app_menu::open_editor_window(
-            cx,
-            fs::read_to_string(&opened_path).expect("read opened markdown"),
-            Some(opened_path.clone()),
-        )
-    });
+    let first_window = cx
+        .update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None))
+        .unwrap();
+    let second_window = cx
+        .update(|cx| {
+            crate::app_menu::open_editor_window(
+                cx,
+                fs::read_to_string(&opened_path).expect("read opened markdown"),
+                Some(opened_path.clone()),
+            )
+        })
+        .unwrap();
     cx.run_until_parked();
 
     second_window
@@ -609,10 +624,12 @@ async fn app_menu_opened_dirty_window_close_guard_prompts_only_that_window(
 ) {
     init_editor_test_app(cx);
 
-    let first_window =
-        cx.update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None));
-    let second_window =
-        cx.update(|cx| crate::app_menu::open_editor_window(cx, "second".to_string(), None));
+    let first_window = cx
+        .update(|cx| crate::app_menu::open_editor_window(cx, "first".to_string(), None))
+        .unwrap();
+    let second_window = cx
+        .update(|cx| crate::app_menu::open_editor_window(cx, "second".to_string(), None))
+        .unwrap();
     cx.run_until_parked();
 
     second_window

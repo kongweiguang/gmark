@@ -256,6 +256,9 @@ const MERMAID_SPLIT_NARROW_MIN_HEIGHT: f32 = 280.0;
 const MERMAID_SPLIT_NARROW_MAX_HEIGHT: f32 = 360.0;
 const MERMAID_WORKBENCH_MIN_MAX_HEIGHT: f32 = 420.0;
 const MERMAID_WORKBENCH_MAX_HEIGHT: f32 = 760.0;
+const MERMAID_PREVIEW_MAX_VIEWPORT_RATIO: f32 = 1.5;
+const MERMAID_PREVIEW_MIN_MAX_HEIGHT: f32 = 720.0;
+const MERMAID_PREVIEW_MAX_HEIGHT: f32 = 1_440.0;
 const MERMAID_PREVIEW_VERTICAL_INSET: f32 = 24.0;
 const MERMAID_SOURCE_VERTICAL_INSET: f32 = 24.0;
 const MERMAID_SPLIT_DIVIDER_HEIGHT: f32 = 1.0;
@@ -287,7 +290,9 @@ fn mermaid_workbench_body_height(
         .map(|height| height.max(1.0) + MERMAID_PREVIEW_VERTICAL_INSET)
         .unwrap_or(MERMAID_CONTENT_MIN_HEIGHT);
     let source_height = source_desired.clamp(MERMAID_CONTENT_MIN_HEIGHT, max_height);
-    let preview_height = preview_desired.clamp(MERMAID_CONTENT_MIN_HEIGHT, max_height);
+    let preview_max_height = (viewport_height.max(1.0) * MERMAID_PREVIEW_MAX_VIEWPORT_RATIO)
+        .clamp(MERMAID_PREVIEW_MIN_MAX_HEIGHT, MERMAID_PREVIEW_MAX_HEIGHT);
+    let preview_height = preview_desired.clamp(MERMAID_CONTENT_MIN_HEIGHT, preview_max_height);
 
     match mode {
         MermaidViewMode::Preview => MermaidWorkbenchHeights {

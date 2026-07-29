@@ -77,6 +77,28 @@ impl Editor {
         self.new_tab_from_snapshot(snapshot, cx);
     }
 
+    pub(super) fn install_image_preview_tab(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let snapshot = Self::snapshot_for_image_preview(path);
+        self.new_tab_from_snapshot(snapshot, cx);
+    }
+
+    pub(crate) fn install_initial_image_preview(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let snapshot = Self::snapshot_for_image_preview(path);
+        self.install_tab_snapshot(snapshot, cx);
+        self.schedule_workspace_session_save(cx);
+    }
+
+    fn snapshot_for_image_preview(path: PathBuf) -> DocumentTabSnapshot {
+        let mut snapshot = Self::snapshot_for_untitled_document(DocumentKind::from_path(&path));
+        snapshot.file_path = Some(path.clone());
+        snapshot.image_preview_path = Some(path);
+        snapshot.image_preview_zoom = 1.0;
+        snapshot.saved_file_fingerprint = None;
+        snapshot.recovery_journal = None;
+        snapshot.view_mode = ViewMode::Preview;
+        snapshot
+    }
+
     pub(crate) fn install_initial_file_open_failure(
         &mut self,
         path: PathBuf,
@@ -139,6 +161,9 @@ impl Editor {
                 snapshot.document_host = Some(document_host);
                 Some(snapshot)
             }
+            crate::document_io::OpenedDocument::Image => {
+                Some(Self::snapshot_for_image_preview(tab.path.clone()))
+            }
         }
     }
 
@@ -173,6 +198,8 @@ impl Editor {
             source_encoding: opened.encoding,
             document_kind: DocumentKind::from_path(&path),
             file_path: Some(path.clone()),
+            image_preview_path: None,
+            image_preview_zoom: 1.0,
             file_open_failure: None,
             saved_file_fingerprint: crate::recovery::fingerprint_file(&path).ok(),
             document_dirty: false,
@@ -226,6 +253,8 @@ impl Editor {
             source_encoding: crate::document_io::DocumentEncoding::Utf8,
             document_kind,
             file_path: None,
+            image_preview_path: None,
+            image_preview_zoom: 1.0,
             file_open_failure: None,
             saved_file_fingerprint: None,
             document_dirty: false,
@@ -282,7 +311,7 @@ impl Editor {
         self.new_tab_from_snapshot(snapshot, cx)
     }
 
-    fn new_tab_from_snapshot(
+    pub(super) fn new_tab_from_snapshot(
         &mut self,
         snapshot: DocumentTabSnapshot,
         cx: &mut Context<Self>,
@@ -349,6 +378,8 @@ impl Editor {
                 .as_deref()
                 .and_then(|path| crate::recovery::fingerprint_file(path).ok()),
             file_path,
+            image_preview_path: None,
+            image_preview_zoom: 1.0,
             file_open_failure: None,
             document_dirty: true,
             view_mode,

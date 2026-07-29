@@ -18,6 +18,7 @@ use crate::{
 };
 
 const RECOVERY_CHUNK_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RECOVERY_CHUNKS_PER_REPLACE: u32 = 4_096;
 const SAMPLE_BYTES: u64 = 64 * 1024;
 static NEXT_JOURNAL_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -197,6 +198,11 @@ impl PagedRecoveryJournal {
         let chunks = utf8_chunks(replacement);
         let chunk_count = u32::try_from(chunks.len())
             .map_err(|_| PagedDocumentError::Recovery("too many recovery chunks".to_owned()))?;
+        if chunk_count > MAX_RECOVERY_CHUNKS_PER_REPLACE {
+            return Err(PagedDocumentError::Recovery(
+                "recovery replacement exceeds the chunk limit".to_owned(),
+            ));
+        }
         let transaction = self.next_transaction;
         self.next_transaction = self.next_transaction.wrapping_add(1).max(1);
         let mut frames = Vec::new();
@@ -526,18 +532,31 @@ fn consume_edit(
             view_mode: next_view_mode,
         } => {
             *max_transaction = (*max_transaction).max(transaction);
-            if start > end || chunk_count == 0 {
+            if chunk_count > MAX_RECOVERY_CHUNKS_PER_REPLACE {
+                return Err(PagedDocumentError::Recovery(
+                    "recovery replacement exceeds the chunk limit".to_owned(),
+                ));
+            }
+            if start > end || chunk_count == 0 || chunk_index >= chunk_count {
                 return Ok(false);
             }
             if chunk_index == 0 {
                 if pending.is_some() {
                     return Ok(false);
                 }
+                let mut chunks = Vec::new();
+                chunks
+                    .try_reserve_exact(chunk_count as usize)
+                    .map_err(|_| {
+                        PagedDocumentError::Recovery(
+                            "recovery replacement chunk allocation failed".to_owned(),
+                        )
+                    })?;
                 *pending = Some(PendingReplace {
                     transaction,
                     range: start..end,
                     chunk_count,
-                    chunks: Vec::with_capacity(chunk_count as usize),
+                    chunks,
                     selection: next_selection.map(Into::into),
                     view_mode: next_view_mode,
                 });

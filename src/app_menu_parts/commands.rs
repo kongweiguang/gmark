@@ -463,7 +463,9 @@ fn menu_block_kind(action: &dyn Action) -> Option<BlockKind> {
 /// Executes one of the app-menu actions against the current application state.
 pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
     if action.as_any().is::<NewWindow>() {
-        open_editor_window(cx, String::new(), None);
+        if let Err(error) = open_editor_window(cx, String::new(), None) {
+            eprintln!("failed to open editor window: {error}");
+        }
     } else if action.as_any().is::<NewTab>() {
         let _ = with_active_editor(cx, |editor, _window, cx| {
             editor.new_untitled_tab(cx);
@@ -477,7 +479,9 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
             editor.on_open_folder_action(&OpenFolder, window, cx);
         });
     } else if action.as_any().is::<OpenPreferences>() {
-        open_preferences_window(cx);
+        if let Err(error) = open_preferences_window(cx) {
+            eprintln!("failed to open preferences: {error}");
+        }
     } else if let Some(action) = action.as_any().downcast_ref::<OpenRecentFile>() {
         open_recent_file(cx, PathBuf::from(&action.path));
     } else if action.as_any().is::<NoRecentFiles>() {
@@ -632,7 +636,9 @@ pub(crate) fn dispatch_menu_action_for_editor(
     let current_window = Some(window.window_handle());
 
     if action.as_any().is::<NewWindow>() {
-        open_editor_window(cx, String::new(), None);
+        if let Err(error) = open_editor_window(cx, String::new(), None) {
+            eprintln!("failed to open editor window: {error}");
+        }
     } else if action.as_any().is::<NewTab>() {
         let _ = target.update(cx, |editor, cx| {
             editor.new_untitled_tab(cx);
@@ -646,7 +652,9 @@ pub(crate) fn dispatch_menu_action_for_editor(
             editor.on_open_folder_action(&OpenFolder, window, cx);
         });
     } else if action.as_any().is::<OpenPreferences>() {
-        open_preferences_window(cx);
+        if let Err(error) = open_preferences_window(cx) {
+            eprintln!("failed to open preferences: {error}");
+        }
     } else if let Some(action) = action.as_any().downcast_ref::<OpenRecentFile>() {
         open_recent_file_with_error_window(cx, PathBuf::from(&action.path), current_window);
     } else if action.as_any().is::<NoRecentFiles>() {

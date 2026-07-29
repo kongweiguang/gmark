@@ -337,7 +337,6 @@ impl Block {
                 .overflow_hidden()
                 .overflow_y_scroll()
                 .track_scroll(&preview_scroll_handle)
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                 .bg(c.source_mode_block_bg)
                 .child(self.render_mermaid_content(
                     theme,
@@ -394,7 +393,6 @@ impl Block {
                             .overflow_hidden()
                             .overflow_y_scroll()
                             .track_scroll(&preview_scroll_handle)
-                            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                             .child(preview),
                     )
                     .into_any_element()
@@ -443,7 +441,6 @@ impl Block {
                             .overflow_hidden()
                             .overflow_y_scroll()
                             .track_scroll(&preview_scroll_handle)
-                            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                             .child(preview),
                     )
                     .into_any_element()

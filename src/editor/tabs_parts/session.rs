@@ -348,6 +348,9 @@ impl Editor {
             | crate::document_io::OpenedDocument::Paged(_) => {
                 self.set_view_mode(ViewMode::Source, cx);
             }
+            crate::document_io::OpenedDocument::Image => {
+                self.set_view_mode(ViewMode::Preview, cx);
+            }
         }
         if let Some(host) = self.document_host.clone() {
             let selection = first
@@ -458,6 +461,7 @@ impl Editor {
                 crate::document_io::OpenedDocument::ResidentFormat(_)
                 | crate::document_io::OpenedDocument::Paged(_) => ViewMode::Source,
                 crate::document_io::OpenedDocument::Resident(_) => snapshot.view_mode,
+                crate::document_io::OpenedDocument::Image => ViewMode::Preview,
             };
             if let Some(host) = snapshot.document_host.as_ref() {
                 let selection = tab
@@ -566,6 +570,14 @@ impl Editor {
         self.schedule_workspace_session_save(cx);
     }
 
+    pub(crate) fn reattach_detached_tab(
+        &mut self,
+        detached: DetachedTab,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.new_tab_from_snapshot(detached.snapshot, cx)
+    }
+
     pub(super) fn detach_tab_by_id(
         &mut self,
         id: uuid::Uuid,
@@ -633,6 +645,8 @@ impl Editor {
             ),
             document_kind: self.document_kind,
             file_path: self.file_path.take(),
+            image_preview_path: self.image_preview_path.take(),
+            image_preview_zoom: self.image_preview_zoom,
             file_open_failure: self.file_open_failure.take(),
             saved_file_fingerprint: self.saved_file_fingerprint.take(),
             document_dirty: self.is_document_dirty(),
@@ -680,6 +694,8 @@ impl Editor {
         self.source_document = snapshot.source_document;
         self.source_encoding = snapshot.source_encoding;
         self.document_kind = snapshot.document_kind;
+        self.image_preview_path = snapshot.image_preview_path;
+        self.image_preview_zoom = snapshot.image_preview_zoom;
         self.file_open_failure = snapshot.file_open_failure;
         self.saved_file_fingerprint = snapshot.saved_file_fingerprint;
         self.document_dirty = snapshot.document_dirty;
@@ -805,6 +821,9 @@ impl Editor {
                             editor.install_file_open_failure_tab(path, error.to_string(), cx)
                         }
                     },
+                    Ok(crate::document_io::OpenedDocument::Image) => {
+                        editor.install_image_preview_tab(path, cx)
+                    }
                     Err(error) => editor.install_file_open_failure_tab(path, error.to_string(), cx),
                 }
             });

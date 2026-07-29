@@ -258,6 +258,9 @@ impl Editor {
         self.sync_workspace_visibility_for_viewport(viewport_width);
         self.sync_document_sidebar_visibility_for_viewport(viewport_width);
 
+        if self.image_preview_path.is_some() {
+            return self.render_image_preview(&theme, &strings, window, cx);
+        }
         if self.file_open_failure.is_some() {
             return self.render_file_open_failure(&theme, &strings, cx);
         }

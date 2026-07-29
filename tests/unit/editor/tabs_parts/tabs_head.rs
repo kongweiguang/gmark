@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gmark_paged_document::SourceAffinity;
-use gpui::{px, size};
+use gpui::{Modifiers, point, px, size};
+use image::{ImageBuffer, Rgba};
 
 use super::{DocumentKind, SourceDocument, UndoSelectionSnapshot, ViewMode};
 
@@ -85,6 +86,9 @@ async fn new_tab_button_keeps_layout_stable_and_isolates_document_state(
     assert_eq!(title_after_pin.right(), title_before.right());
 
     visual.simulate_click(button.center(), gpui::Modifiers::default());
+    visual.update(|window, cx| window.draw(cx).clear());
+    visual.run_until_parked();
+    visual.update(|window, cx| window.draw(cx).clear());
     visual.run_until_parked();
     visual.update(|window, cx| window.draw(cx).clear());
     let untyped = visual
@@ -271,4 +275,58 @@ async fn clean_close_and_reopen_restores_document(cx: &mut gpui::TestAppContext)
             assert!(editor.tabs.closed.is_empty());
         });
     });
+}
+
+#[gpui::test]
+async fn image_tab_uses_preview_mode_and_survives_tab_switches(cx: &mut gpui::TestAppContext) {
+    init_test_app(cx);
+    let image_dir = tempfile::tempdir().expect("image preview tempdir");
+    let image_path = image_dir.path().join("workspace-preview.png");
+    ImageBuffer::from_pixel(1_600, 640, Rgba([24u8, 96, 180, 255]))
+        .save(&image_path)
+        .expect("write image preview fixture");
+    let (editor, visual) = cx
+        .add_window_view(|_window, cx| super::Editor::from_markdown(cx, "draft".to_owned(), None));
+
+    editor.update(visual, |editor, cx| {
+        editor.install_image_preview_tab(image_path.clone(), cx);
+        assert_eq!(editor.image_preview_path.as_ref(), Some(&image_path));
+        assert_eq!(editor.file_path.as_ref(), Some(&image_path));
+        assert_eq!(editor.view_mode, ViewMode::Preview);
+        assert!(!editor.is_document_dirty());
+        editor.image_preview_zoom = 1.5;
+
+        assert!(editor.switch_to_tab_index(0, cx));
+        assert!(editor.image_preview_path.is_none());
+        assert!(editor.switch_to_tab_index(1, cx));
+        assert_eq!(editor.image_preview_path.as_ref(), Some(&image_path));
+        assert_eq!(editor.view_mode, ViewMode::Preview);
+        assert_eq!(editor.image_preview_zoom, 1.5);
+    });
+    visual.run_until_parked();
+    visual.update(|window, cx| window.draw(cx).clear());
+    assert!(visual.debug_bounds("image-preview").is_some());
+    assert!(visual.debug_bounds("image-preview-content").is_some());
+    assert!(visual.debug_bounds("image-preview-zoom-toolbar").is_some());
+    assert!(visual.debug_bounds("image-preview-zoom-out").is_some());
+    assert!(visual.debug_bounds("image-preview-actual-size").is_some());
+    assert!(visual.debug_bounds("image-preview-zoom-in").is_some());
+    assert!(visual.debug_bounds("image-preview-fit-width").is_some());
+    let canvas_before = visual
+        .debug_bounds("image-preview-canvas")
+        .expect("image preview canvas");
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: canvas_before.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        modifiers: Modifiers {
+            control: true,
+            ..Modifiers::default()
+        },
+        ..Default::default()
+    });
+    visual.update(|window, cx| window.draw(cx).clear());
+    let canvas_after = visual
+        .debug_bounds("image-preview-canvas")
+        .expect("zoomed image preview canvas");
+    assert!(canvas_after.size.width > canvas_before.size.width);
 }

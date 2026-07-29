@@ -2,6 +2,28 @@
 
 use super::*;
 
+fn utf8_boundaries(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+        .collect()
+}
+
+fn proportional_utf8_boundary(
+    source_boundaries: &[usize],
+    target_boundaries: &[usize],
+    source_offset: usize,
+) -> usize {
+    let source_index = source_boundaries
+        .partition_point(|boundary| *boundary <= source_offset)
+        .saturating_sub(1);
+    let source_steps = source_boundaries.len().saturating_sub(1).max(1);
+    let target_steps = target_boundaries.len().saturating_sub(1);
+    let target_index = ((target_steps as u128 * source_index as u128) / source_steps as u128)
+        .min(target_steps as u128) as usize;
+    target_boundaries[target_index]
+}
+
 impl ExpandedInlineProjection {
     // Projection is a temporary editing view over clean inline fragments. It
     // exposes delimiters only for the fragment touched by the caret, selection,
@@ -68,6 +90,8 @@ impl ExpandedInlineProjection {
 
                     let id_text = footnote.id.clone();
                     let id_len = id_text.len();
+                    let clean_boundaries = utf8_boundaries(&fragment.text);
+                    let id_boundaries = utf8_boundaries(&id_text);
                     projected_fragments.push(InlineFragment {
                         text: id_text,
                         style: fragment.style,
@@ -84,20 +108,14 @@ impl ExpandedInlineProjection {
                         kind: ExpandedInlineSegmentKind::FootnoteIdText,
                     });
                     for offset in 0..=fragment_len {
-                        let mapped = if fragment_len == 0 {
-                            0
-                        } else {
-                            (id_len * offset) / fragment_len
-                        };
+                        let mapped =
+                            proportional_utf8_boundary(&clean_boundaries, &id_boundaries, offset);
                         clean_to_display_cursor[clean_range.start + offset] =
                             display_cursor + mapped;
                     }
                     for offset in 1..=id_len {
-                        let mapped = if id_len == 0 {
-                            0
-                        } else {
-                            (fragment_len * offset) / id_len
-                        };
+                        let mapped =
+                            proportional_utf8_boundary(&id_boundaries, &clean_boundaries, offset);
                         display_to_clean.push(clean_range.start + mapped);
                     }
                     display_cursor += id_len;

@@ -502,3 +502,41 @@ fn delete_selection_starting_on_empty_paragraph_removes_table() {
     });
     cx.quit();
 }
+
+#[test]
+fn source_selection_with_interior_utf8_offsets_does_not_panic() {
+    let mut cx = TestAppContext::single();
+    init_editor_test_app(&mut cx);
+    let editor = cx.new(|cx| Editor::from_markdown(cx, "中a".to_string(), None));
+
+    editor.update(&mut cx, |editor, cx| {
+        editor.set_view_mode(super::ViewMode::Source, cx);
+        let source = editor.document.visible_blocks()[0].entity.clone();
+        source.update(cx, |block, _cx| {
+            // 模拟命中测试或投影映射把选择端点落在三字节中文字符内部。
+            block.selected_range = 1..2;
+        });
+
+        assert_eq!(editor.selected_markdown_text(cx).as_deref(), Some("中"));
+        assert_eq!(editor.compute_source_cursor_position(cx), (1, 1));
+    });
+    cx.quit();
+}
+
+#[test]
+fn cross_block_unicode_endpoints_expand_to_complete_characters() {
+    let mut cx = TestAppContext::single();
+    init_editor_test_app(&mut cx);
+    let editor = cx.new(|cx| Editor::from_markdown(cx, "中a\n\n尾b".to_string(), None));
+
+    editor.update(&mut cx, |editor, cx| {
+        set_selection(editor, 0, 1, 1, 1, cx);
+        assert_eq!(
+            editor.cross_block_selected_markdown(cx).as_deref(),
+            Some("中a\n\n尾")
+        );
+        assert!(editor.delete_cross_block_selection(cx));
+        assert_eq!(editor.document.markdown_text(cx), "b");
+    });
+    cx.quit();
+}

@@ -104,8 +104,8 @@ fn handle_instance_message(cx: &mut App, message: single_instance::InstanceMessa
         let window = cx.active_window().or_else(|| cx.windows().last().copied());
         if let Some(window) = window {
             let _ = window.update(cx, |_view, window, _cx| window.activate_window());
-        } else {
-            open_editor_window(cx, String::new(), None);
+        } else if let Err(error) = open_editor_window(cx, String::new(), None) {
+            eprintln!("failed to open editor window: {error}");
         }
         return;
     }
@@ -147,7 +147,9 @@ fn open_startup_window(cx: &mut App, startup_open: config::StartupOpenPreference
         }
     }
 
-    open_editor_window(cx, String::new(), None);
+    if let Err(error) = open_editor_window(cx, String::new(), None) {
+        eprintln!("failed to open editor window: {error}");
+    }
 }
 
 impl AssetSource for GmarkAssets {
@@ -642,7 +644,9 @@ fn run_app() {
             }
         }
         if !opened_input && !opened_recovery {
-            open_editor_window(cx, String::new(), None);
+            if let Err(error) = open_editor_window(cx, String::new(), None) {
+                eprintln!("failed to open editor window: {error}");
+            }
         }
         app_menu::install_menus(cx);
         cx.refresh_windows();

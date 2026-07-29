@@ -111,6 +111,49 @@ fn expanded_code_cursor_offset_keeps_plain_text_boundaries() {
 }
 
 #[test]
+fn unicode_footnote_projection_maps_only_utf8_boundaries() {
+    let superscript = "¹⁰".to_owned();
+    let clean_middle = "¹".len();
+    let fragments = vec![InlineFragment {
+        text: superscript.clone(),
+        style: InlineStyle::default(),
+        html_style: None,
+        link: None,
+        footnote: Some(InlineFootnoteReference {
+            id: "éa".to_owned(),
+            ordinal: Some(10),
+            occurrence_index: 0,
+        }),
+        math: None,
+    }];
+    let projection = ExpandedInlineProjection::build(&fragments, clean_middle..clean_middle, None)
+        .expect("touched footnote should expand");
+    let display = projection.cache.visible_text();
+
+    for (offset, mapped) in projection
+        .clean_to_display_cursor
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        if superscript.is_char_boundary(offset) {
+            assert!(
+                display.is_char_boundary(mapped),
+                "clean {offset} mapped to {mapped}"
+            );
+        }
+    }
+    for (offset, mapped) in projection.display_to_clean.iter().copied().enumerate() {
+        if display.is_char_boundary(offset) {
+            assert!(
+                superscript.is_char_boundary(mapped),
+                "display {offset} mapped to {mapped}"
+            );
+        }
+    }
+}
+
+#[test]
 fn typing_inside_manual_backticks_keeps_cursor_inside_code_span() {
     let tree = InlineTextTree::plain("``");
     let result = tree.replace_visible_range(1..1, "1", InlineInsertionAttributes::default());

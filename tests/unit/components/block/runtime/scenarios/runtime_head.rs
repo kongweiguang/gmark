@@ -4,7 +4,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::projection::{
-    expanded_display_cursor_offset_for_clean, expanded_display_offset_for_clean,
+    ExpandedInlineProjection, expanded_display_cursor_offset_for_clean,
+    expanded_display_offset_for_clean,
 };
 use crate::components::markdown::code_highlight::CodeLanguageKey;
 use crate::components::markdown::inline::{
@@ -13,8 +14,8 @@ use crate::components::markdown::inline::{
 };
 use crate::components::markdown::link::parse_link_reference_definitions;
 use crate::components::{
-    Block, BlockKind, BlockRecord, CopyAsMarkdown, DeleteBack, IndentBlock, Newline,
-    MermaidViewMode, PasteAsPlainText, TableCellPosition,
+    Block, BlockKind, BlockRecord, CopyAsMarkdown, DeleteBack, IndentBlock,
+    InlineFootnoteReference, MermaidViewMode, Newline, PasteAsPlainText, TableCellPosition,
 };
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;

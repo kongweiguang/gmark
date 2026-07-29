@@ -49,11 +49,11 @@ fn tall_mermaid_preview_grows_with_the_successful_svg() {
 }
 
 #[test]
-fn mermaid_workbench_height_respects_viewport_and_absolute_caps() {
+fn mermaid_preview_expands_before_using_internal_scrolling() {
     let viewport_capped = mermaid_workbench_body_height(
         MermaidViewMode::Preview,
         1_200.0,
-        1_000.0,
+        800.0,
         Some(2_000.0),
         2,
         20.0,
@@ -75,9 +75,9 @@ fn mermaid_workbench_height_respects_viewport_and_absolute_caps() {
         20.0,
     );
 
-    assert_eq!(viewport_capped.body_height, 700.0);
-    assert_eq!(absolute_capped.body_height, 760.0);
-    assert_eq!(small_viewport_floor.body_height, 420.0);
+    assert_eq!(viewport_capped.body_height, 1_200.0);
+    assert_eq!(absolute_capped.body_height, 1_440.0);
+    assert_eq!(small_viewport_floor.body_height, 720.0);
 }
 
 #[test]

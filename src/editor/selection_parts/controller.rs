@@ -2,6 +2,27 @@
 
 use super::*;
 
+fn selection_range_on_utf8_boundaries(
+    text: &str,
+    range: std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let mut start = range.start.min(text.len());
+    let mut end = range.end.min(text.len());
+    if start >= end {
+        return None;
+    }
+
+    // 命中测试与富文本投影来自不同坐标空间；异常端点应扩到它触及的完整字符，
+    // 不能让状态栏的选区统计用非法 UTF-8 范围终止整个 UI 主线程。
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    (start < end).then_some(start..end)
+}
+
 impl Editor {
     pub(super) fn apply_virtual_cross_block_inline_targets(
         &mut self,
@@ -473,7 +494,10 @@ impl Editor {
     ) -> String {
         if let Some(mapping) = mappings.get(&entity.entity_id()) {
             if full_block {
-                return source[mapping.full_source_range.clone()].to_string();
+                return source
+                    .get(mapping.full_source_range.clone())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_default();
             }
 
             let start = self
@@ -496,7 +520,10 @@ impl Editor {
                     cx,
                 )
                 .unwrap_or(mapping.full_source_range.end);
-            return source[start.min(end)..start.max(end)].to_string();
+            return selection_range_on_utf8_boundaries(source, start.min(end)..start.max(end))
+                .and_then(|range| source.get(range))
+                .map(ToOwned::to_owned)
+                .unwrap_or_default();
         }
 
         let block = entity.read(cx);
@@ -587,10 +614,11 @@ impl Editor {
             let markdown_range =
                 block.current_range_to_markdown_range(block.selected_range.clone());
             let full_markdown = block.record.title.serialize_markdown();
-            let start = markdown_range.start.min(full_markdown.len());
-            let end = markdown_range.end.min(full_markdown.len());
-            if start < end {
-                return Some(full_markdown[start..end].to_owned());
+            if let Some(selected) =
+                selection_range_on_utf8_boundaries(&full_markdown, markdown_range)
+                    .and_then(|range| full_markdown.get(range))
+            {
+                return Some(selected.to_owned());
             }
         }
 

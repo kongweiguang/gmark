@@ -1,6 +1,6 @@
 // @author kongweiguang
 
-//! External Markdown file drops for replacing the current editor window.
+//! External file drops for opening documents in tabs or inserting resources.
 
 use std::path::{Path, PathBuf};
 
@@ -12,14 +12,14 @@ use crate::components::{BlockEvent, PastedImageSource};
 use crate::i18n::I18nManager;
 
 impl Editor {
-    pub(super) fn is_markdown_file_path(path: &Path) -> bool {
-        path.is_file() && crate::document_io::is_markdown_path(path)
-    }
-
-    pub(super) fn first_dropped_markdown_path(paths: &[PathBuf]) -> Option<PathBuf> {
+    pub(super) fn first_dropped_openable_path(paths: &[PathBuf]) -> Option<PathBuf> {
         paths
             .iter()
-            .find(|path| Self::is_markdown_file_path(path))
+            .find(|path| {
+                path.is_file()
+                    && (crate::document_io::is_markdown_path(path)
+                        || crate::document_io::is_image_path(path))
+            })
             .cloned()
     }
 
@@ -29,7 +29,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = Self::first_dropped_markdown_path(paths.paths()) else {
+        let Some(path) = Self::first_dropped_openable_path(paths.paths()) else {
             if let Some(resource_path) = paths.paths().iter().find(|path| path.is_file()).cloned() {
                 self.insert_dropped_resource(resource_path, window, cx);
                 return;
@@ -39,24 +39,17 @@ impl Editor {
             return;
         };
 
-        if crate::document_io::open_document(&path)
-            .is_ok_and(|opened| matches!(opened, crate::document_io::OpenedDocument::Paged(_)))
-        {
-            cx.spawn(async move |_editor, cx| {
-                let _ = cx.update(move |cx| {
-                    if let Err(error) = crate::app_menu::open_file_in_new_window(cx, &path) {
-                        eprintln!(
-                            "failed to open dropped large file '{}': {error}",
-                            path.display()
-                        );
-                    }
-                });
-            })
-            .detach();
-            return;
-        }
+        self.open_dropped_markdown_in_tab(path, cx);
+    }
 
-        self.request_dropped_markdown_replace(path, window, cx);
+    /// 文件拖放与工作区导航共享同一套打开策略：已打开的路径切换到原 Tab，
+    /// 新路径创建 Tab；当前文档无论是否已修改都不得被拖入文件覆盖。
+    pub(in crate::editor) fn open_dropped_markdown_in_tab(
+        &mut self,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_path_in_tab(path, cx);
     }
 
     /// Routes non-Markdown file drops through the same block event used by
@@ -87,6 +80,7 @@ impl Editor {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn request_dropped_markdown_replace(
         &mut self,
         path: PathBuf,
@@ -161,6 +155,8 @@ impl Editor {
             .map(DocumentKind::from_path)
             .unwrap_or(DocumentKind::Markdown);
         self.file_path = file_path;
+        self.image_preview_path = None;
+        self.image_preview_zoom = 1.0;
         self.view_mode = ViewMode::Rendered;
         self.split_preview = None;
         self.projection_cache_task = None;

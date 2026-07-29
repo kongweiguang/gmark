@@ -153,7 +153,7 @@ pub(crate) fn open_editor_window(
     cx: &mut App,
     markdown: String,
     file_path: Option<PathBuf>,
-) -> WindowHandle<Editor> {
+) -> anyhow::Result<WindowHandle<Editor>> {
     open_decoded_editor_window(
         cx,
         crate::document_io::OpenedMarkdown {
@@ -171,7 +171,7 @@ pub(crate) fn open_decoded_editor_window(
     cx: &mut App,
     opened: crate::document_io::OpenedMarkdown,
     file_path: Option<PathBuf>,
-) -> WindowHandle<Editor> {
+) -> anyhow::Result<WindowHandle<Editor>> {
     open_decoded_editor_window_with_bounds(cx, opened, file_path, None)
 }
 
@@ -214,7 +214,7 @@ fn open_decoded_editor_window_with_bounds(
     opened: crate::document_io::OpenedMarkdown,
     file_path: Option<PathBuf>,
     restored_bounds: Option<WindowBounds>,
-) -> WindowHandle<Editor> {
+) -> anyhow::Result<WindowHandle<Editor>> {
     let title = window_title(file_path.as_deref());
     let options = restored_bounds.map_or_else(
         || {
@@ -231,19 +231,23 @@ fn open_decoded_editor_window_with_bounds(
             });
             editor
         })
-        .unwrap();
+        .map_err(|error| anyhow::anyhow!("failed to open editor window: {error}"))?;
 
-    handle
-        .update(cx, |editor, window, cx| {
-            window.activate_window();
-            editor.force_install_close_guard(cx, window);
-        })
-        .expect("newly opened editor window should be updateable");
+    if let Err(error) = handle.update(cx, |editor, window, cx| {
+        window.activate_window();
+        editor.force_install_close_guard(cx, window);
+    }) {
+        eprintln!("failed to initialize editor window: {error}");
+    }
 
-    handle
+    Ok(handle)
 }
 
-fn open_file_failure_window(cx: &mut App, path: PathBuf, reason: String) -> WindowHandle<Editor> {
+fn open_file_failure_window(
+    cx: &mut App,
+    path: PathBuf,
+    reason: String,
+) -> anyhow::Result<WindowHandle<Editor>> {
     let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
     let title = window_title(Some(&path));
     let handle = cx
@@ -258,21 +262,56 @@ fn open_file_failure_window(cx: &mut App, path: PathBuf, reason: String) -> Wind
             });
             editor
         })
-        .expect("file failure window should open");
-    handle
-        .update(cx, |editor, window, cx| {
-            window.activate_window();
-            editor.force_install_close_guard(cx, window);
+        .map_err(|error| anyhow::anyhow!("failed to open file error window: {error}"))?;
+    if let Err(error) = handle.update(cx, |editor, window, cx| {
+        window.activate_window();
+        editor.force_install_close_guard(cx, window);
+    }) {
+        eprintln!("failed to initialize file error window: {error}");
+    }
+    Ok(handle)
+}
+
+fn open_image_preview_window(
+    cx: &mut App,
+    path: PathBuf,
+    restored_bounds: Option<WindowBounds>,
+) -> anyhow::Result<WindowHandle<Editor>> {
+    let title = window_title(Some(&path));
+    let options = restored_bounds.map_or_else(
+        || {
+            let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
+            gmark_window_options(title.clone(), bounds)
+        },
+        |bounds| gmark_window_options_with_bounds(title.clone(), bounds),
+    );
+    let handle = cx
+        .open_window(options, move |window, cx| {
+            let editor = cx.new(move |cx| {
+                let mut editor = Editor::from_markdown(cx, String::new(), None);
+                editor.install_initial_image_preview(path, cx);
+                editor
+            });
+            editor.update(cx, |editor, cx| {
+                editor.install_accessibility_bridge(window, cx)
+            });
+            editor
         })
-        .expect("file failure window should be updateable");
-    handle
+        .map_err(|error| anyhow::anyhow!("failed to open image preview window: {error}"))?;
+    if let Err(error) = handle.update(cx, |editor, window, cx| {
+        window.activate_window();
+        editor.force_install_close_guard(cx, window);
+    }) {
+        eprintln!("failed to initialize image preview window: {error}");
+    }
+    Ok(handle)
 }
 
 /// Opens an unfinished recovery session directly in the editor surface.
 pub(crate) fn open_recovered_editor_window(
     cx: &mut App,
     recovered: crate::recovery::RecoveredDocument,
-) -> WindowHandle<Editor> {
+) -> anyhow::Result<WindowHandle<Editor>> {
     let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
     let title = window_title(recovered.file_path.as_deref());
     let handle = cx
@@ -283,15 +322,15 @@ pub(crate) fn open_recovered_editor_window(
             });
             editor
         })
-        .unwrap();
-    handle
-        .update(cx, |editor, window, cx| {
-            window.activate_window();
-            window.set_window_edited(true);
-            editor.force_install_close_guard(cx, window);
-        })
-        .expect("recovered editor window should be updateable");
-    handle
+        .map_err(|error| anyhow::anyhow!("failed to open recovered editor window: {error}"))?;
+    if let Err(error) = handle.update(cx, |editor, window, cx| {
+        window.activate_window();
+        window.set_window_edited(true);
+        editor.force_install_close_guard(cx, window);
+    }) {
+        eprintln!("failed to initialize recovered editor window: {error}");
+    }
+    Ok(handle)
 }
 
 pub(crate) fn open_recovered_editor_tabs_window(
@@ -302,15 +341,21 @@ pub(crate) fn open_recovered_editor_tabs_window(
         return None;
     }
     let additional = recovered.split_off(1);
-    let first = recovered.pop().expect("non-empty recovery batch");
-    let handle = open_recovered_editor_window(cx, first);
+    let first = recovered.pop()?;
+    let handle = match open_recovered_editor_window(cx, first) {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("failed to open recovered editor: {error}");
+            return None;
+        }
+    };
     if !additional.is_empty() {
         handle
             .update(cx, |editor, window, cx| {
                 editor.append_recovered_tabs(additional, cx);
                 window.set_window_edited(true);
             })
-            .expect("recovery tab window should be updateable");
+            .unwrap_or_else(|error| eprintln!("failed to append recovered tabs: {error}"));
     }
     Some(handle)
 }
@@ -385,14 +430,14 @@ fn open_file_in_new_window_with_policy(
     } {
         Ok(opened) => opened,
         Err(error) => {
-            open_file_failure_window(cx, path.to_path_buf(), error.to_string());
+            open_file_failure_window(cx, path.to_path_buf(), error.to_string())?;
             record_recent_file_and_refresh(path, cx);
             return Ok(());
         }
     };
     match opened {
         crate::document_io::OpenedDocument::Resident(opened) => {
-            let handle = open_decoded_editor_window(cx, opened, Some(path.to_path_buf()));
+            let handle = open_decoded_editor_window(cx, opened, Some(path.to_path_buf()))?;
             if !crate::document_io::is_markdown_path(path) {
                 let _ = handle.update(cx, |editor, _window, cx| {
                     editor.set_view_mode(crate::editor::ViewMode::Source, cx);
@@ -402,6 +447,9 @@ fn open_file_in_new_window_with_policy(
         crate::document_io::OpenedDocument::ResidentFormat(probe)
         | crate::document_io::OpenedDocument::Paged(probe) => {
             open_large_editor_window(cx, path.to_path_buf(), probe, None)?;
+        }
+        crate::document_io::OpenedDocument::Image => {
+            open_image_preview_window(cx, path.to_path_buf(), None)?;
         }
     }
     record_recent_file_and_refresh(path, cx);
@@ -449,12 +497,18 @@ pub(crate) fn open_workspace_session_window(
         .unwrap_or(0);
     let handle = match &first.opened {
         crate::document_io::OpenedDocument::Resident(opened) => {
-            open_decoded_editor_window_with_bounds(
+            match open_decoded_editor_window_with_bounds(
                 cx,
                 opened.clone(),
                 Some(first.path.clone()),
                 window_bounds,
-            )
+            ) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    eprintln!("failed to restore workspace window: {error}");
+                    return false;
+                }
+            }
         }
         crate::document_io::OpenedDocument::ResidentFormat(probe)
         | crate::document_io::OpenedDocument::Paged(probe) => {
@@ -465,6 +519,15 @@ pub(crate) fn open_workspace_session_window(
                         "failed to restore large workspace tab '{}': {error}",
                         first.path.display()
                     );
+                    return false;
+                }
+            }
+        }
+        crate::document_io::OpenedDocument::Image => {
+            match open_image_preview_window(cx, first.path.clone(), window_bounds) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    eprintln!("failed to restore image workspace window: {error}");
                     return false;
                 }
             }
@@ -488,7 +551,10 @@ pub(crate) fn open_workspace_session_window(
         .is_ok()
 }
 
-pub(crate) fn open_detached_tab_window(cx: &mut App, detached: crate::editor::DetachedTab) {
+pub(crate) fn open_detached_tab_window(
+    cx: &mut App,
+    detached: crate::editor::DetachedTab,
+) -> anyhow::Result<()> {
     let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
     let title = window_title(detached.file_path());
     let handle = cx
@@ -503,14 +569,15 @@ pub(crate) fn open_detached_tab_window(cx: &mut App, detached: crate::editor::De
             });
             editor
         })
-        .expect("detached tab window should open");
-    handle
-        .update(cx, |editor, window, cx| {
-            window.activate_window();
-            window.set_window_edited(editor.is_document_dirty());
-            editor.force_install_close_guard(cx, window);
-        })
-        .expect("detached tab editor should be updateable");
+        .map_err(|error| anyhow::anyhow!("failed to open detached tab window: {error}"))?;
+    if let Err(error) = handle.update(cx, |editor, window, cx| {
+        window.activate_window();
+        window.set_window_edited(editor.is_document_dirty());
+        editor.force_install_close_guard(cx, window);
+    }) {
+        eprintln!("failed to initialize detached tab window: {error}");
+    }
+    Ok(())
 }
 
 fn record_recent_file_and_refresh(path: &Path, cx: &mut App) {

@@ -564,3 +564,42 @@ fn paged_recovery_refuses_a_changed_base_file() {
 
     assert!(replay_paged_recovery(journal.path()).is_err());
 }
+
+#[test]
+fn paged_recovery_rejects_unbounded_chunk_count_without_allocating() {
+    use std::io::Write as _;
+
+    use gmark_recovery_codec::{RecordKind, encode_record_payload};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("bounded-recovery-source.txt");
+    fs::write(&source_path, b"alpha").unwrap();
+    let source = FileSource::open(&source_path).unwrap();
+    let journal = PagedRecoveryJournal::create(
+        dir.path().join("recovery"),
+        &source,
+        TextEncoding::Utf8 { bom: false },
+    )
+    .unwrap();
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "command": "replace_chunk",
+        "transaction": 1,
+        "start": 0,
+        "end": 0,
+        "chunk_index": 0,
+        "chunk_count": u32::MAX,
+        "text": "x",
+        "selection": null,
+        "view_mode": "source"
+    }))
+    .unwrap();
+    let frame = encode_record_payload(RecordKind::Edit, &payload).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(journal.path())
+        .unwrap()
+        .write_all(&frame)
+        .unwrap();
+
+    assert!(replay_paged_recovery(journal.path()).is_err());
+}

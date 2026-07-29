@@ -44,6 +44,7 @@ mod find_replace;
 mod focus_modes;
 mod format_menu;
 mod history;
+mod image_preview;
 mod link_completion;
 pub(crate) use crate::perf;
 mod persistence;
@@ -214,6 +215,8 @@ pub struct Editor {
     split_divider_focus_handle: FocusHandle,
     /// 主画布工具栏按钮跨 render 保持焦点身份，避免文档投影刷新打断键盘导航。
     document_toolbar_focus_handles: [FocusHandle; 3],
+    /// 图片缩放工具条跨异步分片加载保持稳定的键盘焦点顺序。
+    image_preview_focus_handles: [FocusHandle; 4],
     file_open_failure_focus_handles: [FocusHandle; 2],
     /// 更新面板是应用级浮层，但焦点身份属于当前窗口，跨进度刷新必须保持稳定。
     update_primary_focus_handle: FocusHandle,
@@ -247,6 +250,10 @@ pub struct Editor {
     pending_window_title_refresh: bool,
     document_dirty: bool,
     file_path: Option<PathBuf>,
+    /// 图片查看是只读派生界面，路径独立于文本模型并随 Tab 快照迁移。
+    image_preview_path: Option<PathBuf>,
+    /// 图片缩放相对“适合可用宽度”的倍率；属于标签视图状态，不进入文档事务。
+    image_preview_zoom: f32,
     /// 打不开的文件仍占用真实 Tab；错误与后续动作必须留在内容区，不能污染工作区扫描状态。
     file_open_failure: Option<FileOpenFailure>,
     saved_file_fingerprint: Option<crate::recovery::FileFingerprint>,

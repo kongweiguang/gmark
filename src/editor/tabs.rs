@@ -32,6 +32,7 @@ const CLOSED_TAB_LIMIT: usize = 20;
 const TAB_CLOSE_ICON: &str = "icon/ui/close.svg";
 const NEW_TAB_ICON: &str = "icon/ui/plus.svg";
 const TAB_DOCUMENT_ICON: &str = "icon/workspace/markdown.svg";
+const TAB_IMAGE_ICON: &str = "icon/ui/image.svg";
 const TAB_PIN_ICON: &str = "icon/editor/tab-pin.svg";
 const QUICK_OPEN_ICON: &str = "icon/ui/files.svg";
 const FIND_ICON: &str = "icon/ui/search.svg";
@@ -111,6 +112,7 @@ pub(crate) struct RestoredTab {
     pub(crate) scroll_y: Option<f32>,
 }
 
+#[derive(Clone)]
 pub(crate) struct DetachedTab {
     snapshot: DocumentTabSnapshot,
 }
@@ -121,12 +123,15 @@ impl DetachedTab {
     }
 }
 
+#[derive(Clone)]
 struct DocumentTabSnapshot {
     document_host: Option<Entity<crate::document_host::DocumentHost>>,
     source_document: EditorDocumentSession,
     source_encoding: crate::document_io::DocumentEncoding,
     document_kind: DocumentKind,
     file_path: Option<PathBuf>,
+    image_preview_path: Option<PathBuf>,
+    image_preview_zoom: f32,
     file_open_failure: Option<FileOpenFailure>,
     saved_file_fingerprint: Option<crate::recovery::FileFingerprint>,
     document_dirty: bool,
