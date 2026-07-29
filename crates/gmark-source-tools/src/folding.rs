@@ -1,5 +1,4 @@
 // @author kongweiguang
-
 use std::cmp::Reverse;
 
 use crate::{ByteRange, SourceLanguage};
@@ -14,10 +13,15 @@ pub enum FoldKind {
     MarkdownFence,
     Indentation,
     TomlTable,
+    BashKeyword,
+    MermaidSubgraph,
+    RubyKeyword,
+    HtmlElement,
 }
 
 impl FoldKind {
-    const fn stable_name(self) -> &'static str {
+    /// 为兼容适配器、持久折叠状态和日志提供的稳定分类名。
+    pub const fn stable_name(self) -> &'static str {
         match self {
             Self::Syntax => "syntax",
             Self::Delimiter => "delimiter",
@@ -26,6 +30,10 @@ impl FoldKind {
             Self::MarkdownFence => "fence",
             Self::Indentation => "indent",
             Self::TomlTable => "table",
+            Self::BashKeyword => "shell",
+            Self::MermaidSubgraph => "subgraph",
+            Self::RubyKeyword => "ruby",
+            Self::HtmlElement => "element",
         }
     }
 }
@@ -79,10 +87,21 @@ pub fn fold_ranges_in_window(
         byte_base,
         line_base,
     };
-    let mut ranges = Vec::new();
     #[cfg(feature = "code-highlight-core")]
-    ranges.extend(tree_sitter_ranges(language, source, &starts, coordinates));
-    ranges.extend(delimiter_ranges(language, source, &starts, coordinates));
+    let ranges = tree_sitter_ranges(language, source, &starts, coordinates);
+    #[cfg(not(feature = "code-highlight-core"))]
+    let ranges = Vec::new();
+    finish_fold_ranges(language, source, &starts, coordinates, ranges)
+}
+
+fn finish_fold_ranges(
+    language: SourceLanguage,
+    source: &str,
+    starts: &[usize],
+    coordinates: FoldCoordinates,
+    mut ranges: Vec<FoldRange>,
+) -> Vec<FoldRange> {
+    ranges.extend(delimiter_ranges(language, source, starts, coordinates));
     match language {
         SourceLanguage::Markdown => {
             ranges.extend(crate::folding_structural::markdown_ranges(
@@ -102,6 +121,21 @@ pub fn fold_ranges_in_window(
             ranges.extend(crate::folding_structural::toml_ranges(
                 source,
                 &starts,
+                coordinates,
+            ));
+        }
+        SourceLanguage::Bash | SourceLanguage::Mermaid | SourceLanguage::Ruby => {
+            ranges.extend(crate::folding_structural::keyword_ranges(
+                language,
+                source,
+                starts,
+                coordinates,
+            ));
+        }
+        SourceLanguage::Html => {
+            ranges.extend(crate::folding_structural::html_ranges(
+                source,
+                starts,
                 coordinates,
             ));
         }
@@ -129,6 +163,35 @@ fn tree_sitter_ranges(
         return Vec::new();
     };
 
+    tree_sitter_ranges_from_tree(language, source, starts, coordinates, &tree)
+}
+
+#[cfg(feature = "code-highlight-core")]
+pub(crate) fn fold_ranges_for_tree(
+    language: SourceLanguage,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> Vec<FoldRange> {
+    if !language.supports_folding() || source.is_empty() {
+        return Vec::new();
+    }
+    let starts = line_starts(source);
+    let coordinates = FoldCoordinates {
+        byte_base: 0,
+        line_base: 0,
+    };
+    let ranges = tree_sitter_ranges_from_tree(language, source, &starts, coordinates, tree);
+    finish_fold_ranges(language, source, &starts, coordinates, ranges)
+}
+
+#[cfg(feature = "code-highlight-core")]
+fn tree_sitter_ranges_from_tree(
+    language: SourceLanguage,
+    source: &str,
+    starts: &[usize],
+    coordinates: FoldCoordinates,
+    tree: &tree_sitter::Tree,
+) -> Vec<FoldRange> {
     let mut output = Vec::new();
     let mut pending = vec![tree.root_node()];
     while let Some(node) = pending.pop() {
@@ -419,7 +482,7 @@ fn stable_fold_id(kind: FoldKind, start: u64, depth: usize) -> u64 {
     hash
 }
 
-fn line_starts(source: &str) -> Vec<usize> {
+pub(crate) fn line_starts(source: &str) -> Vec<usize> {
     let mut starts = vec![0];
     starts.extend(source.match_indices('\n').map(|(index, _)| index + 1));
     starts

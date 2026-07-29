@@ -245,6 +245,32 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     },
 ];
 
+/// 内置围栏语言菜单使用的规范名称。UI 可以直接展示这些值，但语言目录仍由本 crate
+/// 统一维护，避免各适配器复制别名表。
+pub const FENCE_LANGUAGE_MENU_ITEMS: &[&str] = &[
+    "text",
+    "rust",
+    "javascript",
+    "jsx",
+    "typescript",
+    "tsx",
+    "json",
+    "markdown",
+    "bash",
+    "c",
+    "cpp",
+    "csharp",
+    "css",
+    "go",
+    "html",
+    "java",
+    "php",
+    "python",
+    "ruby",
+    "yaml",
+    "toml",
+];
+
 #[cfg(feature = "code-highlight-core")]
 pub(crate) fn tree_sitter_language(language: SourceLanguage) -> Option<tree_sitter::Language> {
     match language {

@@ -1,6 +1,8 @@
 // @author kongweiguang
 
-use gmark_source_tools::{FoldKind, SourceLanguage, fold_ranges, fold_ranges_in_window};
+use gmark_source_tools::{
+    FoldKind, IncrementalFoldParser, SourceLanguage, fold_ranges, fold_ranges_in_window,
+};
 
 #[test]
 fn delimiter_folding_uses_real_byte_coordinates_and_ignores_strings() {
@@ -50,4 +52,36 @@ fn indentation_fallback_folds_python_blocks() {
     assert!(ranges.iter().any(|range| {
         range.kind == FoldKind::Indentation && range.start_line == 1 && range.end_line == 2
     }));
+}
+
+#[test]
+fn keyword_and_html_fallbacks_do_not_require_a_grammar() {
+    let cases = [
+        (SourceLanguage::Bash, "if true; then\n  echo ok\nfi\n"),
+        (SourceLanguage::Mermaid, "subgraph A\n  X --> Y\nend\n"),
+        (SourceLanguage::Ruby, "def answer\n  42\nend\n"),
+        (SourceLanguage::Html, "<div>\n  <span>x</span>\n</div>\n"),
+    ];
+    for (language, source) in cases {
+        assert!(
+            !fold_ranges(language, source).is_empty(),
+            "{language:?} should retain a structural fallback"
+        );
+    }
+}
+
+#[test]
+fn incremental_parser_keeps_the_full_document_fallback_contract() {
+    let mut parser = IncrementalFoldParser::default();
+    let initial = "fn main() {\n  run();\n}\n";
+    assert!(!parser.parse(7, SourceLanguage::Rust, initial).is_empty());
+    assert!(!parser.last_parse_was_incremental());
+
+    let edited = "fn main() {\n  run_twice();\n}\n";
+    assert!(!parser.parse(7, SourceLanguage::Rust, edited).is_empty());
+    #[cfg(feature = "code-highlight-core")]
+    assert!(parser.last_parse_was_incremental());
+
+    assert!(!parser.parse(8, SourceLanguage::Rust, edited).is_empty());
+    assert!(!parser.last_parse_was_incremental());
 }

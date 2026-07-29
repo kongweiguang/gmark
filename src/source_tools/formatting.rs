@@ -1,19 +1,14 @@
 // @author kongweiguang
 
 use std::fmt;
-use std::io::{Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
-
-use gmark_paged_document::SearchCancellation;
+use std::time::Duration;
 
 use super::SourceLanguageId;
 
 const DEFAULT_FORMAT_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
-const MAX_STDERR_BYTES: usize = 1024 * 1024;
 
 /// 格式化失败不得产生候选正文，调用方可安全保持原 revision。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,168 +371,11 @@ fn command_with_executable(template: &str, executable: &Path) -> String {
     }
 }
 
-pub(crate) fn run_shell_formatter(
-    spec: &ExternalFormatterSpec,
-    input: &[u8],
-    cancellation: &SearchCancellation,
-) -> Result<String, FormatError> {
-    if spec.selection.is_some() && !spec.supports_range {
-        return Err(FormatError::MissingFormatter(
-            "当前格式化器不支持选区格式化".to_owned(),
-        ));
-    }
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut command = Command::new("powershell.exe");
-        command.args(["-NoProfile", "-NonInteractive", "-Command", &spec.command]);
-        command.creation_flags(CREATE_NO_WINDOW);
-        command
-    };
-    #[cfg(not(target_os = "windows"))]
-    let mut command = {
-        use std::os::unix::process::CommandExt as _;
-        let mut command = Command::new("/bin/sh");
-        command.args(["-lc", &spec.command]);
-        // 独立进程组让取消/超时能够终止 Shell 及其所有后代，而不波及 GMark。
-        command.process_group(0);
-        command
-    };
-    command
-        .current_dir(&spec.cwd)
-        .env("GMARK_FILE", &spec.file)
-        .env("GMARK_LANGUAGE", spec.language.canonical_name())
-        .env(
-            "GMARK_RANGE_START",
-            spec.selection
-                .as_ref()
-                .map_or(0, |range| range.start)
-                .to_string(),
-        )
-        .env(
-            "GMARK_RANGE_END",
-            spec.selection
-                .as_ref()
-                .map_or(0, |range| range.end)
-                .to_string(),
-        )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| FormatError::External(format!("无法启动格式化器：{error}")))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| FormatError::External("格式化器 stdin 不可用".to_owned()))?;
-    let input = input.to_vec();
-    let writer = std::thread::spawn(move || stdin.write_all(&input));
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| FormatError::External("格式化器 stdout 不可用".to_owned()))?;
-    let output_limit = spec.max_output_bytes;
-    let output_reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .by_ref()
-            .take(output_limit as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| FormatError::External("格式化器 stderr 不可用".to_owned()))?;
-    let error_reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stderr
-            .by_ref()
-            .take(MAX_STDERR_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-    let started = Instant::now();
-    let status = loop {
-        if cancellation.is_cancelled() {
-            terminate_formatter(&mut child);
-            break Err(FormatError::Cancelled);
-        }
-        if started.elapsed() >= spec.timeout {
-            terminate_formatter(&mut child);
-            break Err(FormatError::TimedOut);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => {
-                terminate_formatter(&mut child);
-                break Err(FormatError::External(format!("等待格式化器失败：{error}")));
-            }
-        }
-    };
-    // 无论成功、失败、取消或超时，都等待三个管道线程退出，保证没有后台线程继续
-    // 持有文档输入或子进程句柄。
-    let _ = writer.join();
-    let output = output_reader
-        .join()
-        .map_err(|_| FormatError::External("读取格式化输出失败".to_owned()))?
-        .map_err(|error| FormatError::External(error.to_string()))?;
-    let stderr = error_reader
-        .join()
-        .map_err(|_| FormatError::External("读取格式化错误失败".to_owned()))?
-        .map_err(|error| FormatError::External(error.to_string()))?;
-    let status = status?;
-    if output.len() > spec.max_output_bytes {
-        return Err(FormatError::OutputTooLarge);
-    }
-    if !status.success() {
-        let detail = String::from_utf8_lossy(&stderr);
-        return Err(FormatError::External(format!(
-            "格式化器退出状态 {status}：{}",
-            detail.trim()
-        )));
-    }
-    String::from_utf8(output).map_err(|_| FormatError::InvalidUtf8)
-}
-
-fn terminate_formatter(child: &mut std::process::Child) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let _ = Command::new("taskkill.exe")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // 子进程以自己的 process group 启动；负 PID 表示向完整进程组发送 TERM。
-        let _ = Command::new("kill")
-            .args(["-TERM", "--", &format!("-{}", child.id())])
-            .status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 impl std::error::Error for FormatError {}
 
-/// 只重写 JSON token 之间的空白，因此不会重排 key 或规范化数字、转义词法。
+/// 内置 JSON 格式化委托给无 UI 依赖的领域 crate；外部进程契约仍保留在本模块。
 pub(crate) fn format_json(source: &str) -> Result<String, FormatError> {
-    if let Err(error) = serde_json::from_str::<serde_json::Value>(source) {
-        return Err(FormatError::InvalidJson {
-            line: error.line(),
-            column: error.column(),
-            message: error.to_string(),
-        });
-    }
-    Ok(format_json_tokens(source, false))
+    gmark_source_tools::format_json(source).map_err(domain_formatter_error)
 }
 
 /// 选区从行中部开始时，仅给候选的后续行补回源列缩进；首行仍由原 range 起点定位。
@@ -561,303 +399,40 @@ pub(crate) fn indent_multiline_candidate(candidate: String, columns: usize) -> S
     output
 }
 
-/// JSONL 保持一条记录一行，仅移除记录内部 token 之间的无意义空白。
+/// JSONL 保持一条记录一行；词法验证和渲染都委托给领域 crate。
 pub(crate) fn format_json_lines(source: &str) -> Result<String, FormatError> {
-    let trailing_newline = source.ends_with('\n');
-    let mut output = String::new();
-    for (index, line) in source.lines().enumerate() {
-        if index > 0 {
-            output.push('\n');
-        }
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Err(error) = serde_json::from_str::<serde_json::Value>(line) {
-            return Err(FormatError::InvalidJsonLine {
-                record: index + 1,
-                column: error.column(),
-                message: error.to_string(),
-            });
-        }
-        output.push_str(&format_json_tokens(line, true));
-    }
-    if trailing_newline && !output.ends_with('\n') {
-        output.push('\n');
-    }
-    Ok(output)
+    gmark_source_tools::format_json_lines(source).map_err(domain_formatter_error)
 }
 
-fn format_json_tokens(source: &str, compact: bool) -> String {
-    let trailing_newline = source.ends_with('\n');
-    let bytes = source.as_bytes();
-    let mut output = String::with_capacity(source.len().saturating_add(source.len() / 8));
-    let mut index = 0usize;
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if !byte.is_ascii() {
-            let character = source[index..]
-                .chars()
-                .next()
-                .expect("UTF-8 source has a character at this byte");
-            output.push(character);
-            index += character.len_utf8();
-            continue;
+fn domain_formatter_error(error: gmark_source_tools::FormatterError) -> FormatError {
+    match error {
+        gmark_source_tools::FormatterError::InvalidJson {
+            line,
+            column,
+            message,
+        } => FormatError::InvalidJson {
+            line,
+            column,
+            message,
+        },
+        gmark_source_tools::FormatterError::InvalidJsonLine {
+            record,
+            column,
+            message,
+        } => FormatError::InvalidJsonLine {
+            record,
+            column,
+            message,
+        },
+        gmark_source_tools::FormatterError::Unavailable { language } => {
+            FormatError::MissingFormatter(format!(
+                "未给 {} 配置格式化器",
+                language.canonical_name()
+            ))
         }
-        if in_string {
-            output.push(byte as char);
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            index += 1;
-            continue;
-        }
-        if byte == b'"' {
-            in_string = true;
-            output.push('"');
-            index += 1;
-            continue;
-        }
-        if byte.is_ascii_whitespace() {
-            index += 1;
-            continue;
-        }
-        match byte {
-            b'{' | b'[' => {
-                output.push(byte as char);
-                let next = next_non_whitespace(bytes, index + 1);
-                let expected = if byte == b'{' { b'}' } else { b']' };
-                if next != Some(expected) {
-                    depth += 1;
-                    separator(&mut output, compact, depth);
-                }
-            }
-            b'}' | b']' => {
-                let previous = output.as_bytes().last().copied();
-                let opener = if byte == b'}' { b'{' } else { b'[' };
-                if previous != Some(opener) {
-                    depth = depth.saturating_sub(1);
-                    separator(&mut output, compact, depth);
-                }
-                output.push(byte as char);
-            }
-            b',' => {
-                output.push(',');
-                separator(&mut output, compact, depth);
-            }
-            b':' => {
-                output.push(':');
-                if !compact {
-                    output.push(' ');
-                }
-            }
-            _ => output.push(byte as char),
-        }
-        index += 1;
     }
-    if trailing_newline && !output.ends_with('\n') {
-        output.push('\n');
-    }
-    output
-}
-
-fn next_non_whitespace(bytes: &[u8], mut index: usize) -> Option<u8> {
-    while let Some(byte) = bytes.get(index).copied() {
-        if !byte.is_ascii_whitespace() {
-            return Some(byte);
-        }
-        index += 1;
-    }
-    None
-}
-
-fn separator(output: &mut String, compact: bool, depth: usize) {
-    if compact {
-        return;
-    }
-    output.push('\n');
-    output.extend(std::iter::repeat_n(' ', depth.saturating_mul(2)));
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Windows Runner 高负载时 PowerShell 冷启动可能超过五秒；这里的预算只保护
-    // 非超时场景，专门的超时测试仍使用 30ms 验证生产超时契约。
-    const SHELL_TEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-    #[test]
-    fn json_formatting_preserves_key_number_and_escape_lexemes() {
-        let source =
-            "{\"z\":1e2,\"a\":\"\\u4e16\\u754c\",\"actual\":\"世界\",\"nested\":[true,false]}\n";
-        let formatted = format_json(source).unwrap();
-        assert_eq!(
-            formatted,
-            "{\n  \"z\": 1e2,\n  \"a\": \"\\u4e16\\u754c\",\n  \"actual\": \"世界\",\n  \"nested\": [\n    true,\n    false\n  ]\n}\n"
-        );
-    }
-
-    #[test]
-    fn json_formatting_rejects_invalid_input_without_candidate() {
-        assert!(matches!(
-            format_json("{\"a\":}"),
-            Err(FormatError::InvalidJson { .. })
-        ));
-    }
-
-    #[test]
-    fn json_lines_remains_one_record_per_line() {
-        let formatted = format_json_lines(" { \"b\" : 2 }\n[ 1, 2 ]\n").unwrap();
-        assert_eq!(formatted, "{\"b\":2}\n[1,2]\n");
-    }
-
-    #[test]
-    fn selection_candidate_keeps_source_column_on_following_lines() {
-        let formatted = format_json("{\"a\":1}").unwrap();
-        assert_eq!(
-            indent_multiline_candidate(formatted, 4),
-            "{\n      \"a\": 1\n    }"
-        );
-    }
-
-    #[test]
-    fn workspace_formatter_and_format_on_save_override_global_defaults() {
-        let directory = tempfile::tempdir().unwrap();
-        let file = directory.path().join("sample.rs");
-        std::fs::write(&file, "fn main() {}\n").unwrap();
-        std::fs::write(
-            directory.path().join(".gmark.toml"),
-            "[formatting]\nformat_on_save = true\n[formatting.languages.rust]\ncommand = \"custom-rustfmt\"\nsupports_range = true\n",
-        )
-        .unwrap();
-
-        let config = nearest_workspace_config(&file).expect("workspace config should be found");
-        let parsed =
-            toml::from_str::<toml::Value>(&std::fs::read_to_string(config).unwrap()).unwrap();
-        assert_eq!(
-            parsed
-                .get("formatting")
-                .and_then(|value| value.get("format_on_save"))
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
-        assert!(format_on_save_for_file(&file, false));
-        let FormatterResolution::External(spec) =
-            resolve_formatter(SourceLanguageId::Rust, &file, Some(0..2))
-        else {
-            panic!("workspace formatter should resolve");
-        };
-        assert_eq!(spec.command, "custom-rustfmt");
-        assert!(spec.supports_range);
-        assert!(spec.from_workspace);
-    }
-
-    #[test]
-    fn shell_formatter_uses_stdin_stdout_protocol() {
-        let directory = tempfile::tempdir().unwrap();
-        #[cfg(target_os = "windows")]
-        let command =
-            "$text = [Console]::In.ReadToEnd(); [Console]::Out.Write($text.ToUpperInvariant())";
-        #[cfg(not(target_os = "windows"))]
-        let command = "tr '[:lower:]' '[:upper:]'";
-        let spec = ExternalFormatterSpec {
-            command: command.to_owned(),
-            cwd: directory.path().to_path_buf(),
-            file: directory.path().join("sample.txt"),
-            language: SourceLanguageId::PlainText,
-            selection: None,
-            timeout: SHELL_TEST_TIMEOUT,
-            max_output_bytes: 1024,
-            supports_range: false,
-            from_workspace: false,
-        };
-        let output = run_shell_formatter(&spec, b"hello", &SearchCancellation::default()).unwrap();
-        assert_eq!(output, "HELLO");
-    }
-
-    fn shell_spec(
-        command: &str,
-        timeout: Duration,
-        max_output_bytes: usize,
-    ) -> ExternalFormatterSpec {
-        let directory = std::env::temp_dir();
-        ExternalFormatterSpec {
-            command: command.to_owned(),
-            cwd: directory.clone(),
-            file: directory.join("sample.txt"),
-            language: SourceLanguageId::PlainText,
-            selection: None,
-            timeout,
-            max_output_bytes,
-            supports_range: false,
-            from_workspace: false,
-        }
-    }
-
-    #[test]
-    fn shell_formatter_rejects_nonzero_exit_with_stderr() {
-        #[cfg(target_os = "windows")]
-        let command = "[Console]::Error.Write('bad input'); exit 7";
-        #[cfg(not(target_os = "windows"))]
-        let command = "printf 'bad input' >&2; exit 7";
-        let error = run_shell_formatter(
-            &shell_spec(command, SHELL_TEST_TIMEOUT, 1024),
-            b"input",
-            &SearchCancellation::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(error, FormatError::External(message) if message.contains("bad input")));
-    }
-
-    #[test]
-    fn shell_formatter_enforces_timeout_and_output_limit() {
-        #[cfg(target_os = "windows")]
-        let sleep = "Start-Sleep -Seconds 5";
-        #[cfg(not(target_os = "windows"))]
-        let sleep = "sleep 5";
-        assert_eq!(
-            run_shell_formatter(
-                &shell_spec(sleep, Duration::from_millis(30), 1024),
-                b"",
-                &SearchCancellation::default(),
-            ),
-            Err(FormatError::TimedOut)
-        );
-
-        #[cfg(target_os = "windows")]
-        let flood = "[Console]::Out.Write('x' * 64)";
-        #[cfg(not(target_os = "windows"))]
-        let flood = "printf '%064d' 0";
-        assert_eq!(
-            run_shell_formatter(
-                &shell_spec(flood, SHELL_TEST_TIMEOUT, 16),
-                b"",
-                &SearchCancellation::default(),
-            ),
-            Err(FormatError::OutputTooLarge)
-        );
-    }
-
-    #[test]
-    fn shell_formatter_rejects_invalid_utf8() {
-        #[cfg(target_os = "windows")]
-        let command = "$bytes = [byte[]](255); $out = [Console]::OpenStandardOutput(); $out.Write($bytes, 0, 1)";
-        #[cfg(not(target_os = "windows"))]
-        let command = "printf '\\377'";
-        assert_eq!(
-            run_shell_formatter(
-                &shell_spec(command, SHELL_TEST_TIMEOUT, 1024),
-                b"",
-                &SearchCancellation::default(),
-            ),
-            Err(FormatError::InvalidUtf8)
-        );
-    }
-}
+#[path = "formatting_tests.rs"]
+mod tests;

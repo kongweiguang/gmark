@@ -186,6 +186,144 @@ pub(crate) fn toml_ranges(
     output
 }
 
+pub(crate) fn keyword_ranges(
+    language: crate::SourceLanguage,
+    source: &str,
+    starts: &[usize],
+    coordinates: FoldCoordinates,
+) -> Vec<FoldRange> {
+    let mut output = Vec::new();
+    let mut stack = Vec::<(usize, FoldKind)>::new();
+    for (line, text) in source.lines().enumerate() {
+        let trimmed = text.trim();
+        let opener = match language {
+            crate::SourceLanguage::Mermaid if trimmed.starts_with("subgraph") => {
+                Some(FoldKind::MermaidSubgraph)
+            }
+            crate::SourceLanguage::Ruby
+                if trimmed.starts_with("class ")
+                    || trimmed.starts_with("module ")
+                    || trimmed.starts_with("def ")
+                    || trimmed.starts_with("if ")
+                    || trimmed.starts_with("unless ")
+                    || trimmed.starts_with("case ")
+                    || trimmed.starts_with("while ")
+                    || trimmed.starts_with("for ")
+                    || trimmed.ends_with(" do") =>
+            {
+                Some(FoldKind::RubyKeyword)
+            }
+            crate::SourceLanguage::Bash
+                if trimmed.starts_with("if ")
+                    || trimmed.starts_with("for ")
+                    || trimmed.starts_with("while ")
+                    || trimmed.starts_with("case ")
+                    || trimmed.ends_with("() {") =>
+            {
+                Some(FoldKind::BashKeyword)
+            }
+            _ => None,
+        };
+        if let Some(kind) = opener {
+            stack.push((line, kind));
+        }
+        let closes = (matches!(
+            language,
+            crate::SourceLanguage::Mermaid | crate::SourceLanguage::Ruby
+        ) && trimmed == "end")
+            || (language == crate::SourceLanguage::Bash
+                && matches!(trimmed, "fi" | "done" | "esac" | "}"));
+        if closes
+            && let Some((start, kind)) = stack.pop()
+            && let Some(&start_byte) = starts.get(start)
+        {
+            push_fold(
+                &mut output,
+                starts,
+                coordinates,
+                start_byte,
+                line_end(starts, source.len(), line),
+                kind,
+                None,
+            );
+        }
+    }
+    output
+}
+
+pub(crate) fn html_ranges(
+    source: &str,
+    starts: &[usize],
+    coordinates: FoldCoordinates,
+) -> Vec<FoldRange> {
+    let bytes = source.as_bytes();
+    let mut stack = Vec::<(String, usize)>::new();
+    let mut output = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'<' || bytes.get(index + 1).is_none() {
+            index += 1;
+            continue;
+        }
+        let close = bytes.get(index + 1) == Some(&b'/');
+        let name_start = index + if close { 2 } else { 1 };
+        let mut name_end = name_start;
+        while bytes
+            .get(name_end)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b':' | b'_'))
+        {
+            name_end += 1;
+        }
+        if name_end == name_start {
+            index += 1;
+            continue;
+        }
+        let name = source[name_start..name_end].to_ascii_lowercase();
+        let Some(relative_end) = source[name_end..].find('>') else {
+            break;
+        };
+        let tag_end = name_end + relative_end + 1;
+        if close {
+            if let Some(position) = stack.iter().rposition(|(candidate, _)| *candidate == name) {
+                let (_, start) = stack.remove(position);
+                push_fold(
+                    &mut output,
+                    starts,
+                    coordinates,
+                    start,
+                    tag_end,
+                    FoldKind::HtmlElement,
+                    Some('>'),
+                );
+            }
+        } else if !source[index..tag_end].trim_end().ends_with("/>") && !is_void_html_tag(&name) {
+            stack.push((name, index));
+        }
+        index = tag_end;
+    }
+    output
+}
+
+fn is_void_html_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
 fn indentation(line: &str) -> usize {
     line.bytes()
         .take_while(|byte| matches!(*byte, b' ' | b'\t'))
