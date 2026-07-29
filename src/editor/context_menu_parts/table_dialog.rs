@@ -25,10 +25,10 @@ impl Editor {
                 + d.table_insert_stepper_gap * 0.5
                 + d.dialog_button_height
                 + panel_padding_y
-                // GPUI 的横向定高按钮不完整参与父级固有高度；补回底部 padding，
-                // 并预留面板与分隔线的设备像素取整。
-                + panel_padding_y
-                + d.dialog_border_width * 3.0
+                // GPUI 的横向定高按钮不完整参与父级固有高度；除面板底部 padding 外，
+                // 还要补足紧凑操作行和设备像素取整预算，避免 2× Runner 裁掉按钮。
+                + d.table_insert_stepper_gap * 4.0
+                + d.dialog_border_width * 6.0
         )
         .ceil();
 

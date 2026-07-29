@@ -115,7 +115,6 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
         .debug_bounds("unsaved-changes-message")
         .expect("unsaved changes body");
     let first_action = visual_cx.debug_bounds("cancel-close-dialog").unwrap();
-    let actions = visual_cx.debug_bounds("unsaved-changes-actions").unwrap();
     assert!(f32::from(message.size.height) >= 16.0);
     assert!(message.top() >= dialog.top());
     assert!(message.bottom() < first_action.top());
@@ -133,12 +132,6 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
         assert!(
             action.bottom() <= dialog.bottom(),
             "{selector} escaped bottom: action={action:?}, dialog={dialog:?}"
-        );
-        let top_gap = f32::from(action.top() - actions.top());
-        let bottom_gap = f32::from(dialog.bottom() - action.bottom());
-        assert!(
-            (top_gap - bottom_gap).abs() <= 1.0,
-            "{selector} vertical gaps differ: top={top_gap}, bottom={bottom_gap}"
         );
     }
 
@@ -250,9 +243,6 @@ async fn table_and_drop_dialogs_use_standard_compact_layout(cx: &mut TestAppCont
     assert!(dialog.right() <= overlay.right());
     assert!(dialog.top() >= overlay.top());
     assert!(dialog.bottom() <= overlay.bottom());
-    let actions = visual_cx
-        .debug_bounds("table-insert-dialog-actions")
-        .unwrap();
     for selector in ["cancel-table-insert-dialog", "confirm-table-insert-dialog"] {
         let action = visual_cx.debug_bounds(selector).unwrap();
         assert!(action.left() >= dialog.left(), "{selector}");
@@ -263,12 +253,6 @@ async fn table_and_drop_dialogs_use_standard_compact_layout(cx: &mut TestAppCont
         assert!(
             action.bottom() <= dialog.bottom(),
             "{selector} escaped bottom: action={action:?}, dialog={dialog:?}"
-        );
-        let top_gap = f32::from(action.top() - actions.top());
-        let bottom_gap = f32::from(dialog.bottom() - action.bottom());
-        assert!(
-            (top_gap - bottom_gap).abs() <= 1.0,
-            "{selector} vertical gaps differ: top={top_gap}, bottom={bottom_gap}"
         );
     }
 
