@@ -106,21 +106,21 @@ fn finish_fold_ranges(
         SourceLanguage::Markdown => {
             ranges.extend(crate::folding_structural::markdown_ranges(
                 source,
-                &starts,
+                starts,
                 coordinates,
             ));
         }
         SourceLanguage::Python | SourceLanguage::Yaml => {
             ranges.extend(crate::folding_structural::indentation_ranges(
                 source,
-                &starts,
+                starts,
                 coordinates,
             ));
         }
         SourceLanguage::Toml => {
             ranges.extend(crate::folding_structural::toml_ranges(
                 source,
-                &starts,
+                starts,
                 coordinates,
             ));
         }
