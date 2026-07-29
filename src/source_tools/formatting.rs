@@ -689,6 +689,10 @@ fn separator(output: &mut String, compact: bool, depth: usize) {
 mod tests {
     use super::*;
 
+    // Windows Runner 高负载时 PowerShell 冷启动可能超过五秒；这里的预算只保护
+    // 非超时场景，专门的超时测试仍使用 30ms 验证生产超时契约。
+    const SHELL_TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
     #[test]
     fn json_formatting_preserves_key_number_and_escape_lexemes() {
         let source =
@@ -769,7 +773,7 @@ mod tests {
             file: directory.path().join("sample.txt"),
             language: SourceLanguageId::PlainText,
             selection: None,
-            timeout: Duration::from_secs(5),
+            timeout: SHELL_TEST_TIMEOUT,
             max_output_bytes: 1024,
             supports_range: false,
             from_workspace: false,
@@ -804,7 +808,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let command = "printf 'bad input' >&2; exit 7";
         let error = run_shell_formatter(
-            &shell_spec(command, Duration::from_secs(5), 1024),
+            &shell_spec(command, SHELL_TEST_TIMEOUT, 1024),
             b"input",
             &SearchCancellation::default(),
         )
@@ -833,7 +837,7 @@ mod tests {
         let flood = "printf '%064d' 0";
         assert_eq!(
             run_shell_formatter(
-                &shell_spec(flood, Duration::from_secs(5), 16),
+                &shell_spec(flood, SHELL_TEST_TIMEOUT, 16),
                 b"",
                 &SearchCancellation::default(),
             ),
@@ -849,7 +853,7 @@ mod tests {
         let command = "printf '\\377'";
         assert_eq!(
             run_shell_formatter(
-                &shell_spec(command, Duration::from_secs(5), 1024),
+                &shell_spec(command, SHELL_TEST_TIMEOUT, 1024),
                 b"",
                 &SearchCancellation::default(),
             ),
