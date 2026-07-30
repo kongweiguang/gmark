@@ -58,6 +58,8 @@ Cargo metadata currently establishes these workspace edges:
 gmark
   -> gmark-config, gmark-i18n, gmark-markdown, gmark-source-tools
   -> gmark-export, gmark-update-core
+  -> gmark-document-core, gmark-document, gmark-document-runtime
+  -> gmark-json-graph, gmark-paged-document, gmark-recovery-codec
 
 gmark-config -> gmark-document-core
 gmark-export -> gmark-markdown, gmark-source-tools
