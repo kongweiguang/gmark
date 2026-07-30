@@ -1,5 +1,6 @@
 // @author kongweiguang
 
+use super::layout::RenderedRowGapState;
 use super::{
     INTEGRATED_MENU_LEFT, MENU_ICON_SLOT, MENU_SHORTCUT_GAP, MENU_SHORTCUT_MAX_WIDTH,
     MENU_SHORTCUT_SLOT, NoRecentFiles, RenderedRowSpacingInfo, callout_row_top_gap,
@@ -225,6 +226,43 @@ fn non_quote_rows_keep_default_gap() {
 }
 
 #[test]
+fn blank_rows_are_layout_metadata_not_visible_content() {
+    let mut state = RenderedRowGapState::default();
+    let blank = RenderedRowSpacingInfo {
+        is_empty_paragraph: true,
+        is_source_blank: true,
+        ..RenderedRowSpacingInfo::default()
+    };
+    let content = RenderedRowSpacingInfo::default();
+
+    assert_eq!(state.root_gap(blank, 4.0), None);
+    assert_eq!(state.root_gap(content, 4.0), Some(0.0));
+    assert_eq!(state.root_gap(blank, 4.0), None);
+    assert_eq!(state.root_gap(blank, 4.0), None);
+    assert_eq!(state.root_gap(content, 4.0), Some(4.0));
+}
+
+#[test]
+fn blank_separator_inside_quote_restores_one_semantic_gap() {
+    let group = Uuid::new_v4();
+    let content = RenderedRowSpacingInfo {
+        quote_group_anchor: Some(group),
+        ..RenderedRowSpacingInfo::default()
+    };
+    let blank = RenderedRowSpacingInfo {
+        quote_group_anchor: Some(group),
+        is_empty_paragraph: true,
+        is_source_blank: true,
+        ..RenderedRowSpacingInfo::default()
+    };
+    let mut state = RenderedRowGapState::default();
+
+    assert_eq!(state.root_gap(content, 4.0), Some(0.0));
+    assert_eq!(state.root_gap(blank, 4.0), None);
+    assert_eq!(state.root_gap(content, 4.0), Some(4.0));
+}
+
+#[test]
 fn callout_inner_spacing_uses_header_and_body_tokens() {
     let theme = Theme::default_theme();
     let dimensions = &theme.dimensions;
@@ -248,6 +286,29 @@ fn callout_inner_spacing_uses_header_and_body_tokens() {
 
     assert_eq!(header_gap, dimensions.callout_header_margin_bottom);
     assert_eq!(body_gap, dimensions.callout_body_gap);
+}
+
+#[test]
+fn callout_blank_separator_collapses_to_body_spacing() {
+    let theme = Theme::default_theme();
+    let dimensions = &theme.dimensions;
+    let mut state = RenderedRowGapState::default();
+    let header = RenderedRowSpacingInfo {
+        is_callout_header: true,
+        ..RenderedRowSpacingInfo::default()
+    };
+    let blank = RenderedRowSpacingInfo {
+        is_empty_paragraph: true,
+        is_source_blank: true,
+        ..RenderedRowSpacingInfo::default()
+    };
+
+    assert_eq!(state.callout_gap(header, dimensions), Some(0.0));
+    assert_eq!(state.callout_gap(blank, dimensions), None);
+    assert_eq!(
+        state.callout_gap(RenderedRowSpacingInfo::default(), dimensions),
+        Some(dimensions.callout_header_margin_bottom)
+    );
 }
 
 #[test]

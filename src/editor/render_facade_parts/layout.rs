@@ -2,6 +2,12 @@
 
 use super::*;
 
+#[path = "layout_parts/gap_state.rs"]
+mod gap_state;
+pub(super) use gap_state::RenderedRowGapState;
+#[cfg(test)]
+pub(super) use gap_state::{callout_row_top_gap, rendered_row_top_gap};
+
 pub(in crate::editor) fn clamped_floating_panel_origin(
     requested: Point<Pixels>,
     panel_width: f32,
@@ -427,11 +433,14 @@ pub(super) struct RenderedRowSpacingInfo {
     pub(super) is_callout_header: bool,
     pub(super) footnote_anchor: Option<uuid::Uuid>,
     pub(super) is_footnote_header: bool,
+    pub(super) is_empty_paragraph: bool,
+    pub(super) is_source_blank: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RenderedRowKind {
     Plain,
+    Blank,
     Footnote,
     Callout(CalloutVariant),
 }
@@ -463,6 +472,9 @@ impl RenderedRowCache {
 
 impl RenderedRowSpacingInfo {
     pub(super) fn from_block(block: &Block) -> Self {
+        let is_empty_paragraph = block.kind() == crate::components::BlockKind::Paragraph
+            && block.record.title.visible_text().is_empty()
+            && block.children.is_empty();
         Self {
             quote_group_anchor: block.quote_group_anchor,
             visible_quote_group_anchor: block.visible_quote_group_anchor,
@@ -471,25 +483,9 @@ impl RenderedRowSpacingInfo {
             is_callout_header: block.kind().is_callout(),
             footnote_anchor: block.footnote_anchor,
             is_footnote_header: block.kind().is_footnote_definition(),
+            is_empty_paragraph,
+            is_source_blank: block.record.is_source_blank(),
         }
-    }
-}
-
-pub(super) fn rendered_row_top_gap(
-    previous: Option<RenderedRowSpacingInfo>,
-    current: RenderedRowSpacingInfo,
-    default_gap: f32,
-) -> f32 {
-    let Some(previous) = previous else {
-        return 0.0;
-    };
-
-    if previous.quote_group_anchor.is_some()
-        && previous.quote_group_anchor == current.quote_group_anchor
-    {
-        0.0
-    } else {
-        default_gap
     }
 }
 
@@ -501,43 +497,6 @@ pub(super) fn callout_colors(variant: CalloutVariant, theme: &Theme) -> (Hsla, H
         CalloutVariant::Important => (c.callout_important_border, c.callout_important_bg),
         CalloutVariant::Warning => (c.callout_warning_border, c.callout_warning_bg),
         CalloutVariant::Caution => (c.callout_caution_border, c.callout_caution_bg),
-    }
-}
-
-pub(super) fn callout_row_top_gap(
-    previous: Option<RenderedRowSpacingInfo>,
-    current: RenderedRowSpacingInfo,
-    dimensions: &ThemeDimensions,
-) -> f32 {
-    let Some(previous) = previous else {
-        return 0.0;
-    };
-
-    if previous.visible_quote_group_anchor.is_some()
-        && previous.visible_quote_group_anchor == current.visible_quote_group_anchor
-    {
-        return 0.0;
-    }
-
-    if previous.is_callout_header {
-        dimensions.callout_header_margin_bottom
-    } else {
-        dimensions.callout_body_gap
-    }
-}
-
-pub(super) fn footnote_row_top_gap(
-    previous: Option<RenderedRowSpacingInfo>,
-    default_gap: f32,
-) -> f32 {
-    let Some(previous) = previous else {
-        return 0.0;
-    };
-
-    if previous.is_footnote_header {
-        default_gap * 0.75
-    } else {
-        default_gap
     }
 }
 

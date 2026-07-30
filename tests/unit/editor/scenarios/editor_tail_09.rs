@@ -370,12 +370,28 @@ fn virtual_region_index_keeps_large_mount_window_bounded() {
     );
     let index = VirtualRegionIndex::from_projection(&projection);
     assert_eq!(index.len(), projection.regions.len());
-    assert!(index.total_height() > 600_000.0);
+    assert!(index.total_height() > 400_000.0);
 
     let window = index.mount_window(index.total_height() * 0.75, 720.0, 800.0, Some(0));
     assert!(window.regions.start > 10_000);
     assert!(window.regions.len() < 200);
     assert_eq!(window.pinned_region, Some(0));
+}
+
+#[test]
+fn virtual_blank_region_keeps_only_minimum_index_height() {
+    let source = format!("alpha\n{}beta", "\n".repeat(2_000));
+    let projection = PreparedSplitProjection::from_snapshot(
+        gmark_document::SourceDocument::new(&source).snapshot(),
+    );
+    let blank_region = projection
+        .regions
+        .iter()
+        .position(|region| region.kind == ProjectionRegionKind::Blank)
+        .expect("blank region");
+    let index = VirtualRegionIndex::from_projection(&projection);
+
+    assert_eq!(index.height(blank_region), Some(1.0));
 }
 
 #[test]

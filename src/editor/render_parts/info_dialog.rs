@@ -285,31 +285,35 @@ impl Editor {
         let mut rows = Vec::new();
         let mut row_starts = Vec::new();
         let mut row_top_gaps = Vec::new();
-        let mut previous = None;
+        let mut gap_state = RenderedRowGapState::default();
         let mut index = 0usize;
 
         while index < visible.len() {
             let first_spacing = spacing_for(index);
-            let top_gap = rendered_row_top_gap(previous, first_spacing, d.block_gap);
+            let Some(top_gap) = gap_state.root_gap(first_spacing, d.block_gap) else {
+                index += 1;
+                continue;
+            };
 
             if let (Some(callout_anchor), Some(callout_variant)) =
                 (first_spacing.callout_anchor, first_spacing.callout_variant)
             {
                 let mut children = Vec::new();
                 let mut end = index;
-                let mut previous_callout = None;
+                let mut callout_gaps = RenderedRowGapState::default();
                 while end < visible.len() && spacing_for(end).callout_anchor == Some(callout_anchor)
                 {
                     let spacing = spacing_for(end);
-                    children.push(
-                        div()
-                            .w_full()
-                            .flex_shrink_0()
-                            .mt(px(callout_row_top_gap(previous_callout, spacing, d)))
-                            .child(visible[end].entity.clone())
-                            .into_any_element(),
-                    );
-                    previous_callout = Some(spacing);
+                    if let Some(gap) = callout_gaps.callout_gap(spacing, d) {
+                        children.push(
+                            div()
+                                .w_full()
+                                .flex_shrink_0()
+                                .mt(px(gap))
+                                .child(visible[end].entity.clone())
+                                .into_any_element(),
+                        );
+                    }
                     end += 1;
                 }
                 let (accent, background) = callout_colors(callout_variant, theme);
@@ -332,7 +336,7 @@ impl Editor {
                         .children(children)
                         .into_any_element(),
                 );
-                previous = Some(spacing_for(end - 1));
+                gap_state.finish_group(callout_gaps.last_content());
                 index = end;
                 continue;
             }
@@ -340,20 +344,21 @@ impl Editor {
             if let Some(footnote_anchor) = first_spacing.footnote_anchor {
                 let mut children = Vec::new();
                 let mut end = index;
-                let mut previous_footnote = None;
+                let mut footnote_gaps = RenderedRowGapState::default();
                 while end < visible.len()
                     && spacing_for(end).footnote_anchor == Some(footnote_anchor)
                 {
                     let spacing = spacing_for(end);
-                    children.push(
-                        div()
-                            .w_full()
-                            .flex_shrink_0()
-                            .mt(px(footnote_row_top_gap(previous_footnote, d.block_gap)))
-                            .child(visible[end].entity.clone())
-                            .into_any_element(),
-                    );
-                    previous_footnote = Some(spacing);
+                    if let Some(gap) = footnote_gaps.footnote_gap(spacing, d.block_gap) {
+                        children.push(
+                            div()
+                                .w_full()
+                                .flex_shrink_0()
+                                .mt(px(gap))
+                                .child(visible[end].entity.clone())
+                                .into_any_element(),
+                        );
+                    }
                     end += 1;
                 }
                 row_starts.push(index);
@@ -367,7 +372,7 @@ impl Editor {
                         .child(footnote_group_shell(children, theme, d))
                         .into_any_element(),
                 );
-                previous = Some(spacing_for(end - 1));
+                gap_state.finish_group(footnote_gaps.last_content());
                 index = end;
                 continue;
             }
@@ -383,7 +388,6 @@ impl Editor {
                     .child(visible[index].entity.clone())
                     .into_any_element(),
             );
-            previous = Some(first_spacing);
             index += 1;
         }
 

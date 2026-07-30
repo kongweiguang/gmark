@@ -712,8 +712,12 @@ fn highest_power_of_two_not_greater_than(value: usize) -> usize {
 }
 
 fn estimate_region_height(kind: ProjectionRegionKind, line_count: usize) -> f32 {
+    if kind == ProjectionRegionKind::Blank {
+        // 空白区是源码映射边界，不是可见内容；只保留索引要求的最小正高度。
+        return MIN_REGION_HEIGHT;
+    }
     let line_height = match kind {
-        ProjectionRegionKind::Blank => 12.0,
+        ProjectionRegionKind::Blank => unreachable!("blank region handled above"),
         ProjectionRegionKind::AtxHeading | ProjectionRegionKind::SetextHeading => 34.0,
         ProjectionRegionKind::Separator => 20.0,
         ProjectionRegionKind::StandaloneImage => 220.0,

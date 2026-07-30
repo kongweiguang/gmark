@@ -648,8 +648,10 @@
             assert_eq!(visible.len(), 4);
             assert_eq!(visible[0].entity.read(cx).display_text(), "alpha");
             assert_eq!(visible[1].entity.read(cx).display_text(), "");
+            assert!(visible[1].entity.read(cx).record.is_source_blank());
             assert_eq!(visible[2].entity.read(cx).display_text(), "beta");
             assert_eq!(visible[3].entity.read(cx).display_text(), "");
+            assert!(visible[3].entity.read(cx).record.is_source_blank());
             assert_eq!(editor.document.markdown_text(cx), "alpha\n\n\nbeta\n\n");
         });
 
@@ -752,6 +754,32 @@
             assert_eq!(visible.len(), 1);
             assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Paragraph);
             assert_eq!(visible[0].entity.read(cx).display_text(), "");
+            assert!(!visible[0].entity.read(cx).record.is_source_blank());
             assert_eq!(editor.document.markdown_text(cx), "");
         });
+    }
+
+    #[gpui::test]
+    async fn blank_only_document_keeps_one_edit_host_and_round_trips(cx: &mut TestAppContext) {
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "\n\n".to_owned(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 3);
+            assert!(visible[0].entity.read(cx).record.is_source_blank());
+            assert!(visible[1].entity.read(cx).record.is_source_blank());
+            assert!(!visible[2].entity.read(cx).record.is_source_blank());
+            assert_eq!(editor.document.markdown_text(cx), "\n\n");
+        });
+    }
+
+    #[test]
+    fn typing_promotes_source_blank_to_content_paragraph() {
+        let mut record = crate::editor::BlockRecord::source_blank();
+        assert!(record.is_source_blank());
+
+        record.set_title(crate::editor::InlineTextTree::plain("content".to_owned()));
+
+        assert!(!record.is_source_blank());
+        assert_eq!(record.title.visible_text(), "content");
     }

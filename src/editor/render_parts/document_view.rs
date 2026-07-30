@@ -98,14 +98,26 @@ impl Editor {
         let rows = if let Some(rows) = cached_rows {
             rows
         } else {
-            let mut previous_row_spacing = None;
+            let mut gap_state = RenderedRowGapState::default();
             // 第一遍只在语义变化后扫描轻量行描述；滚动帧直接复用结果。
             let mut rows = Vec::new();
             let mut index = 0usize;
             while index < visible_blocks.len() {
                 let first_spacing = spacing_for(index);
-                let top_gap =
-                    rendered_row_top_gap(previous_row_spacing, first_spacing, d.block_gap);
+                if first_spacing.is_empty_paragraph {
+                    let _ = gap_state.root_gap(first_spacing, d.block_gap);
+                    rows.push(RenderedRowDescriptor {
+                        start: index,
+                        end: index + 1,
+                        top_gap: 0.0,
+                        kind: RenderedRowKind::Blank,
+                    });
+                    index += 1;
+                    continue;
+                }
+                let top_gap = gap_state
+                    .root_gap(first_spacing, d.block_gap)
+                    .expect("非空内容必须产生行间距");
 
                 if let (Some(callout_anchor), Some(variant)) =
                     (first_spacing.callout_anchor, first_spacing.callout_variant)
@@ -122,7 +134,11 @@ impl Editor {
                         top_gap,
                         kind: RenderedRowKind::Callout(variant),
                     });
-                    previous_row_spacing = Some(spacing_for(group_end - 1));
+                    let last_content = (index..group_end)
+                        .rev()
+                        .map(spacing_for)
+                        .find(|spacing| !spacing.is_empty_paragraph);
+                    gap_state.finish_group(last_content);
                     index = group_end;
                     continue;
                 }
@@ -140,7 +156,11 @@ impl Editor {
                         top_gap,
                         kind: RenderedRowKind::Footnote,
                     });
-                    previous_row_spacing = Some(spacing_for(group_end - 1));
+                    let last_content = (index..group_end)
+                        .rev()
+                        .map(spacing_for)
+                        .find(|spacing| !spacing.is_empty_paragraph);
+                    gap_state.finish_group(last_content);
                     index = group_end;
                     continue;
                 }
@@ -151,7 +171,6 @@ impl Editor {
                     top_gap,
                     kind: RenderedRowKind::Plain,
                 });
-                previous_row_spacing = Some(first_spacing);
                 index += 1;
             }
 
@@ -171,9 +190,10 @@ impl Editor {
         // A table cell maps to its containing table block's row. The viewport
         // stays contiguous; a far focused row is mounted absolutely below so it
         // keeps its GPUI input handler without forcing every intervening row in.
-        let focus_row = self
+        let focused_entity_id = self
             .focused_edit_target_entity_id(window, cx)
-            .or(self.active_entity_id)
+            .or(self.active_entity_id);
+        let focus_row = focused_entity_id
             .and_then(|id| {
                 self.document.visible_index_for_entity_id(id).or_else(|| {
                     self.table_cell_binding(id).and_then(|binding| {
@@ -236,13 +256,30 @@ impl Editor {
         // 未测量行先用最小块高估算；深滚动恢复时再从测量前沿连续挂载，避免估算
         // 总高小于已保存 offset 后退化为仅挂载末行。
         let estimate = d.block_min_height.max(1.0);
+        let collapsed_blank = |row: usize| {
+            if rows[row].kind != RenderedRowKind::Blank {
+                return false;
+            }
+            let entity = &visible_blocks[rows[row].start].entity;
+            let spacing = spacing_for(rows[row].start);
+            self.view_mode == super::ViewMode::Preview
+                || (spacing.is_source_blank && focused_entity_id != Some(entity.entity_id()))
+        };
         let measurement_frontier = row_first_ids
             .iter()
-            .position(|id| !self.row_stride_cache.contains_key(id))
+            .enumerate()
+            .position(|(row, id)| !collapsed_blank(row) && !self.row_stride_cache.contains_key(id))
             .unwrap_or(row_first_ids.len());
         let strides: Vec<f32> = row_first_ids
             .iter()
-            .map(|id| self.row_stride_cache.get(id).copied().unwrap_or(estimate))
+            .enumerate()
+            .map(|(row, id)| {
+                if collapsed_blank(row) {
+                    1.0
+                } else {
+                    self.row_stride_cache.get(id).copied().unwrap_or(estimate)
+                }
+            })
             .collect();
 
         // Bound the cache against block churn, only when it outgrows the live rows.
@@ -296,6 +333,20 @@ impl Editor {
         {
             let descriptor_index = render_window.run_start + mounted_index;
             let render_entity_row = |entity: Entity<Block>, top_gap: f32| {
+                let spacing =
+                    entity.read_with(cx, |block, _cx| RenderedRowSpacingInfo::from_block(block));
+                let collapse_empty = spacing.is_empty_paragraph
+                    && (self.view_mode == super::ViewMode::Preview
+                        || (spacing.is_source_blank
+                            && focused_entity_id != Some(entity.entity_id())));
+                if collapse_empty {
+                    return div()
+                        .w_full()
+                        .h(px(0.0))
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .into_any_element();
+                }
                 let row = div()
                     .w_full()
                     .flex_shrink_0()
@@ -326,7 +377,7 @@ impl Editor {
                 heading,
             );
             let element = match descriptor.kind {
-                RenderedRowKind::Plain => div()
+                RenderedRowKind::Plain | RenderedRowKind::Blank => div()
                     .w(px(centered_width))
                     .max_w(relative(1.0))
                     .flex_shrink_0()
@@ -339,14 +390,18 @@ impl Editor {
                     .into_any_element(),
                 RenderedRowKind::Footnote => {
                     let mut children = Vec::with_capacity(descriptor.end - descriptor.start);
-                    let mut previous = None;
+                    let mut footnote_gaps = RenderedRowGapState::default();
                     for row_index in descriptor.start..descriptor.end {
                         let spacing = spacing_for(row_index);
-                        children.push(render_entity_row(
-                            visible_blocks[row_index].entity.clone(),
-                            footnote_row_top_gap(previous, d.block_gap),
-                        ));
-                        previous = Some(spacing);
+                        let gap = footnote_gaps.footnote_gap(spacing, d.block_gap);
+                        let entity = visible_blocks[row_index].entity.clone();
+                        let editable_blank = self.view_mode == super::ViewMode::Rendered
+                            && spacing.is_empty_paragraph
+                            && (!spacing.is_source_blank
+                                || focused_entity_id == Some(entity.entity_id()));
+                        if let Some(gap) = gap.or(editable_blank.then_some(0.0)) {
+                            children.push(render_entity_row(entity, gap));
+                        }
                     }
                     div()
                         .w(px(centered_width))
@@ -359,45 +414,54 @@ impl Editor {
                 }
                 RenderedRowKind::Callout(variant) => {
                     let mut children = Vec::new();
-                    let mut previous_callout = None;
+                    let mut callout_gaps = RenderedRowGapState::default();
                     let mut row_index = descriptor.start;
                     while row_index < descriptor.end {
                         let spacing = spacing_for(row_index);
                         if let Some(footnote_anchor) = spacing.footnote_anchor {
                             let mut footnote_children = Vec::new();
-                            let mut previous_footnote = None;
+                            let mut footnote_gaps = RenderedRowGapState::default();
                             let group_start_spacing = spacing;
                             while row_index < descriptor.end
                                 && spacing_for(row_index).footnote_anchor == Some(footnote_anchor)
                             {
                                 let footnote_spacing = spacing_for(row_index);
-                                footnote_children.push(render_entity_row(
-                                    visible_blocks[row_index].entity.clone(),
-                                    footnote_row_top_gap(previous_footnote, d.block_gap),
-                                ));
-                                previous_footnote = Some(footnote_spacing);
+                                let gap = footnote_gaps.footnote_gap(footnote_spacing, d.block_gap);
+                                let entity = visible_blocks[row_index].entity.clone();
+                                let editable_blank = self.view_mode == super::ViewMode::Rendered
+                                    && footnote_spacing.is_empty_paragraph
+                                    && (!footnote_spacing.is_source_blank
+                                        || focused_entity_id == Some(entity.entity_id()));
+                                if let Some(gap) = gap.or(editable_blank.then_some(0.0)) {
+                                    footnote_children.push(render_entity_row(entity, gap));
+                                }
                                 row_index += 1;
                             }
-                            children.push(
-                                div()
-                                    .w_full()
-                                    .flex_shrink_0()
-                                    .mt(px(callout_row_top_gap(
-                                        previous_callout,
-                                        group_start_spacing,
-                                        d,
-                                    )))
-                                    .child(footnote_group_shell(footnote_children, &theme, d))
-                                    .into_any_element(),
-                            );
-                            previous_callout = previous_footnote;
+                            if !footnote_children.is_empty() {
+                                let gap = callout_gaps
+                                    .callout_gap(group_start_spacing, d)
+                                    .unwrap_or(0.0);
+                                children.push(
+                                    div()
+                                        .w_full()
+                                        .flex_shrink_0()
+                                        .mt(px(gap))
+                                        .child(footnote_group_shell(footnote_children, &theme, d))
+                                        .into_any_element(),
+                                );
+                                callout_gaps.finish_group(footnote_gaps.last_content());
+                            }
                             continue;
                         }
-                        children.push(render_entity_row(
-                            visible_blocks[row_index].entity.clone(),
-                            callout_row_top_gap(previous_callout, spacing, d),
-                        ));
-                        previous_callout = Some(spacing);
+                        let gap = callout_gaps.callout_gap(spacing, d);
+                        let entity = visible_blocks[row_index].entity.clone();
+                        let editable_blank = self.view_mode == super::ViewMode::Rendered
+                            && spacing.is_empty_paragraph
+                            && (!spacing.is_source_blank
+                                || focused_entity_id == Some(entity.entity_id()));
+                        if let Some(gap) = gap.or(editable_blank.then_some(0.0)) {
+                            children.push(render_entity_row(entity, gap));
+                        }
                         row_index += 1;
                     }
                     let (accent, background) = callout_colors(variant, &theme);

@@ -3,6 +3,25 @@
 use super::projection_builder::*;
 use super::*;
 
+fn materialize_blank_run(
+    cx: &mut Context<Editor>,
+    preserved: usize,
+    keep_edit_host: bool,
+) -> Vec<Entity<super::Block>> {
+    let source_blank_count = if keep_edit_host {
+        preserved.saturating_sub(1)
+    } else {
+        preserved
+    };
+    let mut blocks = (0..source_blank_count)
+        .map(|_| source_blank_block(cx))
+        .collect::<Vec<_>>();
+    if keep_edit_host && preserved > 0 {
+        blocks.push(native_block(cx, BlockKind::Paragraph, String::new()));
+    }
+    blocks
+}
+
 impl Editor {
     /// Builds runtime blocks from Markdown lines.
     ///
@@ -65,10 +84,16 @@ impl Editor {
                     } else {
                         blank_run_len.saturating_sub(1)
                     };
-                    roots.extend(
-                        (0..preserved)
-                            .map(|_| native_block(cx, BlockKind::Paragraph, String::new())),
-                    );
+                    let whole_document_is_blank = roots.is_empty()
+                        && region_index + 1 == regions.len()
+                        && regions[..region_index]
+                            .iter()
+                            .all(|candidate| candidate.kind == ProjectionRegionKind::Blank);
+                    roots.extend(materialize_blank_run(
+                        cx,
+                        preserved,
+                        whole_document_is_blank,
+                    ));
                 }
                 ProjectionRegionKind::Frontmatter => roots.push(raw_block(cx, markdown())),
                 ProjectionRegionKind::FencedCode => {
@@ -210,9 +235,15 @@ impl Editor {
             } else {
                 region_lines.len().saturating_sub(1)
             };
-            return (0..preserved)
-                .map(|_| native_block(cx, BlockKind::Paragraph, String::new()))
-                .collect();
+            let whole_document_is_blank = prepared
+                .regions
+                .iter()
+                .all(|candidate| candidate.kind == ProjectionRegionKind::Blank);
+            return materialize_blank_run(
+                cx,
+                preserved,
+                whole_document_is_blank && region_index + 1 == prepared.regions.len(),
+            );
         }
 
         // 复杂区域继续复用既有权威 importer，但输入已被 region 边界限制，不会扫描全文。
@@ -280,9 +311,12 @@ impl Editor {
                     blank_run_len.saturating_sub(1)
                 };
 
-                for _ in 0..preserved_empty_blocks {
-                    roots.push(native_block(cx, BlockKind::Paragraph, String::new()));
-                }
+                let whole_document_is_blank = roots.is_empty() && index == lines.len();
+                roots.extend(materialize_blank_run(
+                    cx,
+                    preserved_empty_blocks,
+                    whole_document_is_blank,
+                ));
                 continue;
             }
 

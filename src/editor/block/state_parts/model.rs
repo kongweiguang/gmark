@@ -21,6 +21,9 @@ pub struct BlockRecord {
     /// Parsed standalone resource metadata. The source text remains in the
     /// title so focusing the block still exposes editable Markdown.
     pub resource: Option<ResourceRecord>,
+    /// 由源码空白区域物化出的编辑代理。它保留字节级往返和光标落点，但不属于
+    /// Markdown 语义内容；预览和未激活的实时编辑不得把它当作普通空段落排版。
+    source_blank: bool,
 }
 
 impl BlockRecord {
@@ -35,6 +38,7 @@ impl BlockRecord {
             content: Vec::new(),
             raw_fallback: None,
             resource: None,
+            source_blank: false,
         };
         record.sync_raw_fallback();
         if resource_capable_kind(&record.kind) {
@@ -50,6 +54,22 @@ impl BlockRecord {
 
     pub fn paragraph(text: impl Into<String>) -> Self {
         Self::with_plain_text(BlockKind::Paragraph, text)
+    }
+
+    pub(crate) fn source_blank() -> Self {
+        let mut record = Self::paragraph(String::new());
+        record.source_blank = true;
+        record
+    }
+
+    pub(crate) fn is_source_blank(&self) -> bool {
+        self.source_blank
+            && self.kind == BlockKind::Paragraph
+            && self.title.visible_text().is_empty()
+            && self.table.is_none()
+            && self.html.is_none()
+            && self.raw_fallback.is_none()
+            && self.resource.is_none()
     }
 
     pub fn resource(resource: ResourceRecord) -> Self {
@@ -199,6 +219,9 @@ impl BlockRecord {
         self.resource = resource_capable_kind(&self.kind)
             .then(|| ResourceRecord::parse(&serialized, None))
             .flatten();
+        if !title.visible_text().is_empty() {
+            self.source_blank = false;
+        }
         self.title = title;
         self.sync_raw_fallback();
     }

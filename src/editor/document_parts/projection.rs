@@ -470,9 +470,9 @@ pub(super) fn prepare_complete_nodes(
             } else {
                 blank_count.saturating_sub(1)
             };
-            roots.extend((0..preserved).map(|_| {
-                PreparedBlockNode::leaf(native_record(BlockKind::Paragraph, String::new()))
-            }));
+            roots.extend(
+                (0..preserved).map(|_| PreparedBlockNode::leaf(BlockRecord::source_blank())),
+            );
         } else {
             roots.extend(nodes?.iter().cloned());
         }
@@ -629,6 +629,10 @@ pub(super) fn native_record(kind: BlockKind, markdown: String) -> BlockRecord {
     BlockRecord::new(kind, InlineTextTree::from_markdown(&markdown))
 }
 
+pub(super) fn source_blank_block(cx: &mut Context<Editor>) -> Entity<super::Block> {
+    Editor::new_block(cx, BlockRecord::source_blank())
+}
+
 pub(super) fn standalone_image_block(
     cx: &mut Context<Editor>,
     markdown: String,
@@ -690,7 +694,7 @@ pub(super) fn append_quote_separator_children(
     cx: &mut Context<Editor>,
 ) {
     for _ in 0..count {
-        children.push(native_block(cx, BlockKind::Paragraph, String::new()));
+        children.push(source_blank_block(cx));
     }
 }
 
