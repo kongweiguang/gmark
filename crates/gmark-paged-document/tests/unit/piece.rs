@@ -2,6 +2,7 @@
 
 use std::fs;
 
+use super::test_support::{piece_clone_count, reset_piece_clone_count, root_identity};
 use super::*;
 
 fn open_document(contents: &[u8]) -> (tempfile::TempDir, PieceDocument) {
@@ -16,21 +17,21 @@ fn open_document(contents: &[u8]) -> (tempfile::TempDir, PieceDocument) {
 #[test]
 fn undo_and_redo_keep_exact_persistent_root_snapshots() {
     let (_dir, mut document) = open_document(b"alpha\nbeta\ngamma");
-    let pristine_root = document.pieces.root_identity();
+    let pristine_root = root_identity(&document.pieces);
 
     document.replace_text(6..10, "one\ntwo").unwrap();
-    let edited_root = document.pieces.root_identity();
+    let edited_root = root_identity(&document.pieces);
     assert_ne!(edited_root, pristine_root);
     assert_eq!(
-        document.undo.last().unwrap().0.root_identity(),
+        root_identity(&document.undo.last().unwrap().0),
         pristine_root
     );
 
     assert!(document.undo());
-    assert_eq!(document.pieces.root_identity(), pristine_root);
-    assert_eq!(document.redo.last().unwrap().0.root_identity(), edited_root);
+    assert_eq!(root_identity(&document.pieces), pristine_root);
+    assert_eq!(root_identity(&document.redo.last().unwrap().0), edited_root);
     assert!(document.redo());
-    assert_eq!(document.pieces.root_identity(), edited_root);
+    assert_eq!(root_identity(&document.pieces), edited_root);
 }
 
 #[test]
@@ -47,13 +48,13 @@ fn fragmented_edit_clones_only_boundary_paths() {
             (),
         ),
     };
-    PIECE_CLONE_COUNT.with(|count| count.set(0));
+    reset_piece_clone_count();
 
     document
         .replace_text(document.len / 2..document.len / 2, "insert")
         .unwrap();
 
-    let cloned_pieces = PIECE_CLONE_COUNT.with(std::cell::Cell::get);
+    let cloned_pieces = piece_clone_count();
     assert!(
         cloned_pieces < 256,
         "path-copy edit cloned {cloned_pieces} of 16,384 pieces"

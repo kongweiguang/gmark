@@ -2,13 +2,10 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui_sum_tree::{Bias, ContextLessSummary, Dimension, Dimensions, Item, SumTree};
-use regex_automata::hybrid::{dfa::DFA, regex::Regex as StreamingRegex};
-use regex_automata::{Anchored, Input};
 
 use crate::{FileSource, LineIndex, PagedDocumentError, SourceAffinity, SourceAnchor};
 
@@ -63,7 +60,7 @@ impl Default for SearchOptions {
     }
 }
 
-#[path = "piece_parts/document.rs"]
+#[path = "piece_parts/document/mod.rs"]
 mod document;
 
 #[derive(Clone, Default)]
@@ -130,6 +127,7 @@ enum PieceSource {
 }
 
 #[derive(Debug)]
+#[cfg_attr(not(test), derive(Clone))]
 struct Piece {
     source: PieceSource,
     range: Range<u64>,
@@ -137,21 +135,8 @@ struct Piece {
 }
 
 #[cfg(test)]
-thread_local! {
-    static PIECE_CLONE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-impl Clone for Piece {
-    fn clone(&self) -> Self {
-        #[cfg(test)]
-        PIECE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
-        Self {
-            source: self.source,
-            range: self.range.clone(),
-            newlines: self.newlines,
-        }
-    }
-}
+#[path = "../tests/unit/piece_support.rs"]
+mod test_support;
 
 #[derive(Clone, Debug, Default)]
 struct PieceSummary {
@@ -296,11 +281,6 @@ impl PieceTree {
             other.root = suffix;
         }
         self.root.append(other.root, ());
-    }
-
-    #[cfg(test)]
-    fn root_identity(&self) -> *const PieceSummary {
-        self.root.summary() as *const PieceSummary
     }
 }
 

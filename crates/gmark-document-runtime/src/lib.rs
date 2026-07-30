@@ -620,4 +620,5 @@ fn apply_paged_transaction(
 }
 
 #[cfg(test)]
+#[path = "../tests/unit/session.rs"]
 mod tests;

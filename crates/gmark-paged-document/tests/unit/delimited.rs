@@ -1,6 +1,9 @@
 // @author kongweiguang
 
+use super::sidecar::cleanup_delimited_sidecars;
 use super::*;
+use crate::SearchCancellation;
+use std::sync::Arc;
 
 #[test]
 fn sidecar_cleanup_preserves_current_entry_and_enforces_budget() {
