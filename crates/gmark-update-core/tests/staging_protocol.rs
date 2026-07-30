@@ -5,16 +5,20 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
 };
+#[cfg(windows)]
+use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt as _, process::Command};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signer as _, SigningKey};
 use gmark_update_core::{
     ApplyPlanV1, ApplyResultV1, BoundedTransferOutcome, CancellationV1, HelperSignalV1,
-    PartialMetadata, Platform, StartupAcknowledgementV1, UpdateCoreError, clear_helper_signal,
-    copy_and_verify_bounded, copy_bounded, helper_signal_present, read_apply_plan,
-    read_apply_result, read_partial_metadata, resume_request, validate_apply_plan,
-    validate_apply_plan_files, verify_apply_plan_artifact, verify_artifact_file, write_apply_plan,
-    write_apply_result, write_helper_signal, write_partial_metadata,
+    MAX_ENVELOPE_BYTES, PartialMetadata, Platform, StartupAcknowledgementV1, UpdateCoreError,
+    clear_helper_signal, copy_and_verify_bounded, copy_bounded, helper_signal_present,
+    read_apply_plan, read_apply_result, read_partial_metadata, read_validated_apply_plan,
+    resume_request, stage_and_verify_apply_plan_artifact, startup_acknowledgement_matches,
+    validate_apply_plan, validate_apply_plan_files, verify_apply_plan_artifact,
+    verify_artifact_file, write_apply_plan, write_apply_result, write_helper_signal,
+    write_partial_metadata,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -52,6 +56,38 @@ fn fixture_plan(root: &Path) -> ApplyPlanV1 {
     }
 }
 
+fn write_signed_v2_fixture(plan: &ApplyPlanV1, key: &SigningKey, system_trust: &str) {
+    let payload = serde_json::to_vec(&json!({
+        "schema_version": 2,
+        "channel": "stable",
+        "version": plan.target_version,
+        "published_at": "2026-07-22T12:00:00Z",
+        "notes": "fixture",
+        "paused": false,
+        "rollout_percent": 100,
+        "release_url": "https://github.com/kongweiguang/gmark/releases/tag/v0.2.0",
+        "artifacts": {
+            "fixture": {
+                "url": plan.artifact_url,
+                "size": plan.artifact_size,
+                "sha256": plan.artifact_sha256,
+                "format": plan.artifact_format,
+                "system_trust": system_trust
+            }
+        }
+    }))
+    .unwrap();
+    let signature = key.sign(&payload);
+    let envelope = serde_json::to_vec(&json!({
+        "schema_version": 1,
+        "algorithm": "Ed25519",
+        "payload": STANDARD.encode(payload),
+        "signature": STANDARD.encode(signature.to_bytes())
+    }))
+    .unwrap();
+    fs::write(&plan.signed_envelope_path, envelope).unwrap();
+}
+
 #[test]
 fn detects_artifact_tampering_after_a_successful_hash_check() {
     let root = tempfile::tempdir().unwrap();
@@ -80,35 +116,7 @@ fn helper_reverification_binds_plan_manifest_and_artifact_bytes() {
     fs::write(&plan.target_path, b"appimage").unwrap();
 
     let key = SigningKey::from_bytes(&[31; 32]);
-    let payload = serde_json::to_vec(&json!({
-        "schema_version": 2,
-        "channel": "stable",
-        "version": plan.target_version,
-        "published_at": "2026-07-22T12:00:00Z",
-        "notes": "fixture",
-        "paused": false,
-        "rollout_percent": 100,
-        "release_url": "https://github.com/kongweiguang/gmark/releases/tag/v0.2.0",
-        "artifacts": {
-            "fixture": {
-                "url": plan.artifact_url,
-                "size": plan.artifact_size,
-                "sha256": plan.artifact_sha256,
-                "format": plan.artifact_format,
-                "system_trust": "not-applicable"
-            }
-        }
-    }))
-    .unwrap();
-    let signature = key.sign(&payload);
-    let envelope = serde_json::to_vec(&json!({
-        "schema_version": 1,
-        "algorithm": "Ed25519",
-        "payload": STANDARD.encode(payload),
-        "signature": STANDARD.encode(signature.to_bytes())
-    }))
-    .unwrap();
-    fs::write(&plan.signed_envelope_path, envelope).unwrap();
+    write_signed_v2_fixture(&plan, &key, "not-applicable");
 
     verify_apply_plan_artifact(
         &plan,
@@ -116,7 +124,15 @@ fn helper_reverification_binds_plan_manifest_and_artifact_bytes() {
         &Platform::new("linux", "x86_64"),
     )
     .unwrap();
+    let staged = stage_and_verify_apply_plan_artifact(
+        &plan,
+        &key.verifying_key(),
+        &Platform::new("linux", "x86_64"),
+        root.path(),
+    )
+    .unwrap();
     fs::write(&plan.artifact_path, b"tampered!").unwrap();
+    assert_eq!(fs::read(staged.path()).unwrap(), artifact);
     assert!(matches!(
         verify_apply_plan_artifact(
             &plan,
@@ -125,6 +141,69 @@ fn helper_reverification_binds_plan_manifest_and_artifact_bytes() {
         ),
         Err(UpdateCoreError::HashMismatch { .. })
     ));
+}
+
+#[cfg(windows)]
+#[test]
+fn staged_windows_artifact_denies_mutation_until_drop_and_remains_launchable() {
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+
+    let root = tempfile::tempdir().unwrap();
+    let mut plan = fixture_plan(root.path());
+    let target = root.path().join("gmark.exe");
+    plan.target_path = target.clone();
+    plan.backup_path = root.path().join("gmark.exe.gmark-update-backup");
+    plan.relaunch_path = target;
+    plan.artifact_url =
+        "https://github.com/kongweiguang/gmark/releases/download/v0.2.0/gmark-setup.exe".to_owned();
+    plan.artifact_format = "windows-setup-exe".to_owned();
+    fs::create_dir_all(plan.artifact_path.parent().unwrap()).unwrap();
+    fs::write(&plan.target_path, b"current gmark executable").unwrap();
+    let command_processor = std::env::var_os("ComSpec").expect("Windows must provide ComSpec");
+    fs::copy(command_processor, &plan.artifact_path).unwrap();
+    let artifact = fs::read(&plan.artifact_path).unwrap();
+    plan.artifact_size = artifact.len() as u64;
+    plan.artifact_sha256 = digest(&artifact);
+    let key = SigningKey::from_bytes(&[47; 32]);
+    write_signed_v2_fixture(&plan, &key, "unsigned");
+
+    let staged = stage_and_verify_apply_plan_artifact(
+        &plan,
+        &key.verifying_key(),
+        &Platform::new("windows", "x86_64"),
+        root.path(),
+    )
+    .unwrap();
+    let staged_path = staged.path().to_path_buf();
+    let mut writer = OpenOptions::new();
+    writer
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    assert!(
+        writer.open(&staged_path).is_err(),
+        "the guarded staged artifact must deny a second writer"
+    );
+    assert!(
+        fs::remove_file(&staged_path).is_err(),
+        "the guarded staged artifact must deny deletion"
+    );
+    assert!(
+        fs::rename(&staged_path, root.path().join("renamed-installer.exe")).is_err(),
+        "the guarded staged artifact must deny rename"
+    );
+    let status = Command::new(&staged_path)
+        .args(["/C", "exit", "0"])
+        .status()
+        .expect("CreateProcess must open the guarded staged executable");
+    assert!(status.success());
+
+    drop(staged);
+    assert!(
+        !staged_path.exists(),
+        "cleanup must remove the staged artifact after its guard closes"
+    );
 }
 
 #[test]
@@ -191,6 +270,55 @@ fn apply_plan_round_trip_rejects_unknown_fields_and_validates_paths() {
     assert!(serde_json::from_value::<ApplyPlanV1>(value).is_err());
 }
 
+#[test]
+fn validated_plan_is_bound_to_its_supplied_transaction_path() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    let plan_path = root.path().join("v0.2.0/apply-plan.json");
+    write_apply_plan(&plan_path, &plan).unwrap();
+    assert_eq!(
+        read_validated_apply_plan(&plan_path, &Platform::new("linux", "x86_64")).unwrap(),
+        plan
+    );
+
+    let misplaced_plan = root.path().join("apply-plan.json");
+    write_apply_plan(&misplaced_plan, &plan).unwrap();
+    assert!(read_validated_apply_plan(&misplaced_plan, &Platform::new("linux", "x86_64")).is_err());
+
+    let mut malicious = plan.clone();
+    malicious.relaunch_path = root.path().join("attacker-relaunch");
+    malicious.helper_log_path = root.path().join("attacker-helper.log");
+    malicious.result_path = root.path().join("attacker-result.json");
+    write_apply_plan(&plan_path, &malicious).unwrap();
+    assert!(read_validated_apply_plan(&plan_path, &Platform::new("linux", "x86_64")).is_err());
+    assert!(!malicious.helper_log_path.exists());
+    assert!(!malicious.result_path.exists());
+}
+
+#[test]
+fn signed_envelope_is_bounded_before_parsing() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    fs::create_dir_all(plan.artifact_path.parent().unwrap()).unwrap();
+    fs::write(&plan.artifact_path, b"artifact!").unwrap();
+    fs::write(&plan.target_path, b"appimage").unwrap();
+    fs::write(
+        &plan.signed_envelope_path,
+        vec![b' '; MAX_ENVELOPE_BYTES + 1],
+    )
+    .unwrap();
+
+    let key = SigningKey::from_bytes(&[31; 32]);
+    assert!(
+        verify_apply_plan_artifact(
+            &plan,
+            &key.verifying_key(),
+            &Platform::new("linux", "x86_64"),
+        )
+        .is_err()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn apply_plan_is_persisted_with_private_permissions() {
@@ -254,6 +382,59 @@ fn helper_markers_and_result_json_remain_compatible() {
     .unwrap();
     let legacy = read_apply_result(&plan.result_path).unwrap();
     assert!(legacy.from_version.is_empty());
+}
+
+#[test]
+fn acknowledgement_requires_the_exact_expected_marker() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    fs::create_dir_all(plan.acknowledgement_path.parent().unwrap()).unwrap();
+    assert!(!startup_acknowledgement_matches(&plan).unwrap());
+
+    for marker in [
+        b"".as_slice(),
+        b"0.2".as_slice(),
+        b"0.1.0\n".as_slice(),
+        b"0.2.0\nextra".as_slice(),
+    ] {
+        fs::write(&plan.acknowledgement_path, marker).unwrap();
+        assert!(startup_acknowledgement_matches(&plan).is_err());
+        clear_helper_signal(&plan, HelperSignalV1::Acknowledgement).unwrap();
+    }
+
+    write_helper_signal(&plan, HelperSignalV1::Acknowledgement).unwrap();
+    assert!(startup_acknowledgement_matches(&plan).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn acknowledgement_rejects_a_symlink_marker() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    fs::create_dir_all(plan.acknowledgement_path.parent().unwrap()).unwrap();
+    let marker = root.path().join("outside-marker");
+    fs::write(&marker, b"0.2.0\n").unwrap();
+    symlink(&marker, &plan.acknowledgement_path).unwrap();
+
+    assert!(startup_acknowledgement_matches(&plan).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_plan_reader_rejects_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    let source = root.path().join("source-plan.json");
+    let linked = root.path().join("v0.2.0/apply-plan.json");
+    write_apply_plan(&source, &plan).unwrap();
+    fs::create_dir_all(linked.parent().unwrap()).unwrap();
+    symlink(&source, &linked).unwrap();
+
+    assert!(read_apply_plan(&linked).is_err());
 }
 
 #[test]

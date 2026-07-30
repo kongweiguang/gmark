@@ -4,8 +4,8 @@
 
 use std::{
     fs::{self, File},
-    io::Write,
-    path::{Path, PathBuf},
+    io::{self, Read, Write},
+    path::{Component, Path, PathBuf},
 };
 
 use ed25519_dalek::VerifyingKey;
@@ -14,16 +14,18 @@ use tempfile::NamedTempFile;
 
 use crate::{
     Result, UpdateCoreError,
-    manifest::{SignedManifest, VerifiedManifest, parse_verified_manifest},
-    policy::{
-        ArtifactFormat, Platform, validate_official_artifact_url, validate_sha256,
-        validate_system_trust,
-    },
+    manifest::VerifiedManifest,
+    policy::{ArtifactFormat, Platform, validate_official_artifact_url, validate_sha256},
     staging::verify_artifact_file,
 };
 
+mod artifact;
+
+pub use artifact::{StagedApplyArtifact, stage_and_verify_apply_plan_artifact};
+
 pub const MAX_APPLY_PLAN_BYTES: u64 = 64 * 1024;
 const MAX_APPLY_RESULT_BYTES: u64 = 64 * 1024;
+const MAX_STARTUP_ACKNOWLEDGEMENT_BYTES: usize = 1024;
 
 /// JSON plan handed to `gmark-update-helper --apply-plan`; fields are wire-compatible.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +163,20 @@ pub fn read_apply_plan(path: impl AsRef<Path>) -> Result<ApplyPlanV1> {
         .map_err(|error| UpdateCoreError::Protocol(format!("invalid apply plan: {error}")))
 }
 
+/// Reads and structurally validates the single plan explicitly supplied to the helper.
+///
+/// SECURITY: no plan-derived file is opened here. The bounded read is limited to
+/// `path`; all following validation is lexical and side-effect free.
+pub fn read_validated_apply_plan(
+    path: impl AsRef<Path>,
+    platform: &Platform,
+) -> Result<ApplyPlanV1> {
+    let path = path.as_ref();
+    let plan = read_apply_plan(path)?;
+    validate_apply_plan_at_path(&plan, path, platform)?;
+    Ok(plan)
+}
+
 /// Writes an apply plan atomically so the helper never observes a partial JSON object.
 pub fn write_apply_plan(path: impl AsRef<Path>, plan: &ApplyPlanV1) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(plan).map_err(|error| {
@@ -190,6 +206,11 @@ pub fn validate_apply_plan(plan: &ApplyPlanV1, platform: &Platform) -> Result<()
             "target version must be newer than current version".to_owned(),
         ));
     }
+    if plan.target_version.len().saturating_add(1) > MAX_STARTUP_ACKNOWLEDGEMENT_BYTES {
+        return Err(UpdateCoreError::Protocol(
+            "target version exceeds the acknowledgement size limit".to_owned(),
+        ));
+    }
     validate_plan_paths(plan)?;
     if plan.artifact_size == 0 || plan.artifact_size > crate::MAX_ARTIFACT_BYTES {
         return Err(UpdateCoreError::Protocol(
@@ -203,53 +224,41 @@ pub fn validate_apply_plan(plan: &ApplyPlanV1, platform: &Platform) -> Result<()
     validate_platform_plan(plan, platform)
 }
 
+/// Binds a plan's fixed transaction layout to the explicitly supplied plan location.
+pub fn validate_apply_plan_at_path(
+    plan: &ApplyPlanV1,
+    plan_path: impl AsRef<Path>,
+    platform: &Platform,
+) -> Result<()> {
+    validate_apply_plan(plan, platform)?;
+    validate_plan_path(plan, plan_path.as_ref())
+}
+
 /// Performs the helper's filesystem checks after the pure plan checks succeed.
 pub fn validate_apply_plan_files(plan: &ApplyPlanV1, platform: &Platform) -> Result<()> {
-    if !plan.artifact_path.is_file() || !plan.signed_envelope_path.is_file() {
+    // SECURITY: establish all structural/path invariants before touching any
+    // pathname obtained from a plan.
+    validate_apply_plan(plan, platform)?;
+    if !artifact::is_regular_non_reparse_file(&plan.artifact_path)
+        || !artifact::is_regular_non_reparse_file(&plan.signed_envelope_path)
+    {
         return Err(UpdateCoreError::Protocol(
             "verified update files are missing".to_owned(),
         ));
     }
-    validate_apply_plan(plan, platform)?;
     validate_platform_target_on_disk(plan, platform)
 }
 
-/// Revalidates the signed v2 manifest and artifact bytes before a helper applies a plan.
+/// Revalidates the signed v2 manifest and artifact bytes for callers that do not consume it.
+///
+/// The helper must use [`stage_and_verify_apply_plan_artifact`] so the artifact
+/// it consumes is the exact file whose bytes were checked.
 pub fn verify_apply_plan_artifact(
     plan: &ApplyPlanV1,
     key: &VerifyingKey,
     platform: &Platform,
 ) -> Result<VerifiedManifest> {
-    validate_apply_plan_files(plan, platform)?;
-    let envelope = fs::read(&plan.signed_envelope_path)
-        .map_err(|error| UpdateCoreError::Io(format!("failed to read signed manifest: {error}")))?;
-    let verified = parse_verified_manifest(&envelope, key)?;
-    let SignedManifest::V2(manifest) = &verified.manifest else {
-        return Err(UpdateCoreError::Protocol(
-            "signed manifest does not match the apply plan".to_owned(),
-        ));
-    };
-    if manifest.version != plan.target_version || manifest.paused {
-        return Err(UpdateCoreError::Protocol(
-            "signed manifest does not match the apply plan".to_owned(),
-        ));
-    }
-    let artifact = manifest
-        .artifacts
-        .values()
-        .find(|artifact| artifact.url == plan.artifact_url)
-        .ok_or_else(|| {
-            UpdateCoreError::Protocol("apply artifact is absent from signed manifest".to_owned())
-        })?;
-    if artifact.size != plan.artifact_size
-        || !artifact.sha256.eq_ignore_ascii_case(&plan.artifact_sha256)
-        || artifact.format.as_protocol_name() != plan.artifact_format
-        || validate_system_trust(artifact.system_trust, platform).is_err()
-    {
-        return Err(UpdateCoreError::Protocol(
-            "signed artifact metadata does not match the apply plan".to_owned(),
-        ));
-    }
+    let verified = artifact::verify_apply_plan_manifest(plan, key, platform)?;
     verify_artifact_file(
         &plan.artifact_path,
         plan.artifact_size,
@@ -294,33 +303,72 @@ pub fn write_apply_result(path: impl AsRef<Path>, result: &ApplyResultV1) -> Res
     write_atomic(path.as_ref(), &bytes, "update result")
 }
 
-/// Writes the version-text acknowledgement or cancellation marker expected by the helper.
-pub fn write_helper_signal(plan: &ApplyPlanV1, signal: HelperSignalV1) -> Result<()> {
-    let path = signal.path(plan);
-    let parent = path.parent().ok_or_else(|| {
-        UpdateCoreError::Protocol("helper signal path has no parent directory".to_owned())
-    })?;
-    fs::create_dir_all(parent).map_err(|error| {
-        UpdateCoreError::Io(format!("failed to create helper signal directory: {error}"))
-    })?;
-    let mut file = File::create(path)
-        .map_err(|error| UpdateCoreError::Io(format!("failed to create helper signal: {error}")))?;
-    let bytes = match signal {
-        HelperSignalV1::Acknowledgement => {
-            StartupAcknowledgementV1::for_target_version(&plan.target_version).marker_bytes()
-        }
-        HelperSignalV1::Cancellation => CancellationV1::MARKER_BYTES.to_vec(),
-    };
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| UpdateCoreError::Io(format!("failed to persist helper signal: {error}")))
+/// Writes an exact, bounded version acknowledgement without following a marker pathname.
+pub fn write_startup_acknowledgement(path: impl AsRef<Path>, target_version: &str) -> Result<()> {
+    let marker = StartupAcknowledgementV1::for_target_version(target_version).marker_bytes();
+    if marker.len() > MAX_STARTUP_ACKNOWLEDGEMENT_BYTES {
+        return Err(UpdateCoreError::Protocol(
+            "startup acknowledgement exceeds its size limit".to_owned(),
+        ));
+    }
+    write_atomic(path.as_ref(), &marker, "startup acknowledgement")
 }
 
-/// Returns whether the corresponding marker file has been written by the peer process.
+/// Writes the version-text acknowledgement or cancellation marker expected by the helper.
+pub fn write_helper_signal(plan: &ApplyPlanV1, signal: HelperSignalV1) -> Result<()> {
+    match signal {
+        HelperSignalV1::Acknowledgement => {
+            write_startup_acknowledgement(&plan.acknowledgement_path, &plan.target_version)
+        }
+        HelperSignalV1::Cancellation => write_atomic(
+            &plan.cancellation_path,
+            CancellationV1::MARKER_BYTES,
+            "cancellation marker",
+        ),
+    }
+}
+
+/// Returns whether the peer wrote the corresponding valid marker.
+///
+/// Acknowledgements must match the target version byte-for-byte. This rejects empty,
+/// partial, stale, symlinked, and otherwise substituted markers instead of treating
+/// pathname existence as proof that the relaunched app started.
 pub fn helper_signal_present(plan: &ApplyPlanV1, signal: HelperSignalV1) -> Result<bool> {
-    match fs::metadata(signal.path(plan)) {
-        Ok(metadata) => Ok(metadata.is_file()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+    match signal {
+        HelperSignalV1::Acknowledgement => startup_acknowledgement_matches(plan),
+        HelperSignalV1::Cancellation => marker_file_present(&plan.cancellation_path),
+    }
+}
+
+/// Checks the exact V1 acknowledgement marker expected for this transaction.
+pub fn startup_acknowledgement_matches(plan: &ApplyPlanV1) -> Result<bool> {
+    let expected =
+        StartupAcknowledgementV1::for_target_version(&plan.target_version).marker_bytes();
+    if expected.len() > MAX_STARTUP_ACKNOWLEDGEMENT_BYTES {
+        return Err(UpdateCoreError::Protocol(
+            "startup acknowledgement exceeds its size limit".to_owned(),
+        ));
+    }
+    let Some(actual) = read_bounded_if_exists(
+        &plan.acknowledgement_path,
+        MAX_STARTUP_ACKNOWLEDGEMENT_BYTES as u64,
+        "startup acknowledgement",
+    )?
+    else {
+        return Ok(false);
+    };
+    if actual != expected {
+        return Err(UpdateCoreError::Protocol(
+            "startup acknowledgement does not match the update target".to_owned(),
+        ));
+    }
+    Ok(true)
+}
+
+fn marker_file_present(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_file() && !metadata.file_type().is_symlink()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(UpdateCoreError::Io(format!(
             "failed to inspect helper signal: {error}"
         ))),
@@ -339,6 +387,19 @@ pub fn clear_helper_signal(plan: &ApplyPlanV1, signal: HelperSignalV1) -> Result
 }
 
 fn validate_plan_paths(plan: &ApplyPlanV1) -> Result<()> {
+    for (label, path) in [
+        ("update artifact", &plan.artifact_path),
+        ("signed manifest", &plan.signed_envelope_path),
+        ("update target", &plan.target_path),
+        ("update backup", &plan.backup_path),
+        ("update relaunch", &plan.relaunch_path),
+        ("startup acknowledgement", &plan.acknowledgement_path),
+        ("cancellation marker", &plan.cancellation_path),
+        ("update result", &plan.result_path),
+        ("helper log", &plan.helper_log_path),
+    ] {
+        validate_clean_absolute_path(path, label)?;
+    }
     let transaction_dir = plan.artifact_path.parent().ok_or_else(|| {
         UpdateCoreError::Protocol("update artifact has no transaction directory".to_owned())
     })?;
@@ -355,6 +416,40 @@ fn validate_plan_paths(plan: &ApplyPlanV1) -> Result<()> {
         return Err(UpdateCoreError::Protocol(
             "apply plan paths do not match the versioned update protocol".to_owned(),
         ));
+    }
+    let expected_transaction = format!("v{}", plan.target_version);
+    if transaction_dir.file_name().and_then(|name| name.to_str())
+        != Some(expected_transaction.as_str())
+    {
+        return Err(UpdateCoreError::Protocol(
+            "apply plan transaction does not match the target version".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_plan_path(plan: &ApplyPlanV1, plan_path: &Path) -> Result<()> {
+    validate_clean_absolute_path(plan_path, "apply plan")?;
+    let transaction_dir = plan.artifact_path.parent().ok_or_else(|| {
+        UpdateCoreError::Protocol("update artifact has no transaction directory".to_owned())
+    })?;
+    if plan_path != transaction_dir.join("apply-plan.json") {
+        return Err(UpdateCoreError::Protocol(
+            "apply plan path does not match the versioned update protocol".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_clean_absolute_path(path: &Path, label: &str) -> Result<()> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(UpdateCoreError::Protocol(format!(
+            "{label} path is not an absolute normalized path"
+        )));
     }
     Ok(())
 }
@@ -424,23 +519,23 @@ fn validate_platform_plan(plan: &ApplyPlanV1, platform: &Platform) -> Result<()>
 
 fn validate_platform_target_on_disk(plan: &ApplyPlanV1, platform: &Platform) -> Result<()> {
     match platform.os.as_str() {
-        "windows" if !is_regular_non_symlink(&plan.target_path) => Err(UpdateCoreError::Protocol(
-            "Windows update target is not the installed gmark executable".to_owned(),
-        )),
-        "macos" if !plan.target_path.is_dir() => Err(UpdateCoreError::Protocol(
-            "macOS update target is not a gmark application bundle".to_owned(),
-        )),
-        "linux" if !is_regular_non_symlink(&plan.target_path) => Err(UpdateCoreError::Protocol(
-            "Linux update target is not a regular AppImage file".to_owned(),
-        )),
+        "windows" if !artifact::is_regular_non_reparse_file(&plan.target_path) => {
+            Err(UpdateCoreError::Protocol(
+                "Windows update target is not the installed gmark executable".to_owned(),
+            ))
+        }
+        "macos" if !artifact::is_directory_non_reparse(&plan.target_path) => {
+            Err(UpdateCoreError::Protocol(
+                "macOS update target is not a gmark application bundle".to_owned(),
+            ))
+        }
+        "linux" if !artifact::is_regular_non_reparse_file(&plan.target_path) => {
+            Err(UpdateCoreError::Protocol(
+                "Linux update target is not a regular AppImage file".to_owned(),
+            ))
+        }
         _ => Ok(()),
     }
-}
-
-fn is_regular_non_symlink(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
-        .unwrap_or(false)
 }
 
 fn validate_apply_result_for_write(result: &ApplyResultV1) -> Result<()> {
@@ -477,7 +572,7 @@ fn write_apply_plan_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .write_all(bytes)
         .and_then(|()| temporary.as_file().sync_all())
         .map_err(|error| UpdateCoreError::Io(format!("failed to write {label}: {error}")))?;
-    set_apply_plan_private(temporary.as_file())?;
+    artifact::set_private_file(temporary.as_file())?;
     temporary
         .persist(path)
         .map(|_| ())
@@ -489,18 +584,28 @@ fn write_apply_plan_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     write_atomic(path, bytes, "update apply plan")
 }
 
-#[cfg(unix)]
-fn set_apply_plan_private(file: &File) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|error| {
-            UpdateCoreError::Io(format!("failed to secure update apply plan: {error}"))
-        })
+fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
+    let file = artifact::open_regular_file_no_follow(path)
+        .map_err(|error| UpdateCoreError::Io(format!("failed to open {label}: {error}")))?;
+    read_bounded_file(file, max_bytes, label)
 }
 
-fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
-    let length = fs::metadata(path)
+fn read_bounded_if_exists(path: &Path, max_bytes: u64, label: &str) -> Result<Option<Vec<u8>>> {
+    let file = match artifact::open_regular_file_no_follow(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(UpdateCoreError::Io(format!(
+                "failed to open {label}: {error}"
+            )));
+        }
+    };
+    read_bounded_file(file, max_bytes, label).map(Some)
+}
+
+fn read_bounded_file(file: File, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
+    let length = file
+        .metadata()
         .map_err(|error| UpdateCoreError::Io(format!("failed to inspect {label}: {error}")))?
         .len();
     if length == 0 || length > max_bytes {
@@ -508,7 +613,21 @@ fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
             "{label} exceeds its size limit"
         )));
     }
-    fs::read(path).map_err(|error| UpdateCoreError::Io(format!("failed to read {label}: {error}")))
+    let capacity = usize::try_from(length)
+        .map_err(|_| UpdateCoreError::Protocol(format!("{label} exceeds its size limit")))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    let maximum_read = max_bytes
+        .checked_add(1)
+        .ok_or_else(|| UpdateCoreError::Protocol(format!("{label} exceeds its size limit")))?;
+    file.take(maximum_read)
+        .read_to_end(&mut bytes)
+        .map_err(|error| UpdateCoreError::Io(format!("failed to read {label}: {error}")))?;
+    if bytes.is_empty() || bytes.len() as u64 > max_bytes {
+        return Err(UpdateCoreError::Protocol(format!(
+            "{label} exceeds its size limit"
+        )));
+    }
+    Ok(bytes)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8], label: &str) -> Result<()> {
@@ -524,6 +643,7 @@ fn write_atomic(path: &Path, bytes: &[u8], label: &str) -> Result<()> {
         .write_all(bytes)
         .and_then(|()| temporary.as_file().sync_all())
         .map_err(|error| UpdateCoreError::Io(format!("failed to write {label}: {error}")))?;
+    artifact::set_private_file(temporary.as_file())?;
     temporary
         .persist(path)
         .map(|_| ())

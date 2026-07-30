@@ -3,7 +3,7 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer as _, SigningKey};
-use gmark_update_core::MAX_APPLY_PLAN_BYTES;
+use gmark_update_core::{MAX_APPLY_PLAN_BYTES, write_apply_plan};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
@@ -139,6 +139,32 @@ fn oversized_apply_plan_is_rejected_before_deserialization() {
 }
 
 #[test]
+fn invalid_plan_never_touches_attacker_controlled_destinations() {
+    let root = tempfile::tempdir().unwrap();
+    let attacker = tempfile::tempdir().unwrap();
+    let mut plan = fixture_plan(root.path());
+    let plan_path = plan.artifact_path.parent().unwrap().join("apply-plan.json");
+    let attacker_log = attacker.path().join("helper.log");
+    let attacker_result = attacker.path().join("result.json");
+    let attacker_relaunch = attacker.path().join("relaunch-target");
+    fs::write(&attacker_relaunch, b"not an application").unwrap();
+    plan.helper_log_path = attacker_log.clone();
+    plan.result_path = attacker_result.clone();
+    plan.relaunch_path = attacker_relaunch;
+    write_apply_plan(&plan_path, &plan).unwrap();
+
+    let args = vec![
+        OsString::from("gmark-update-helper"),
+        OsString::from("--apply-plan"),
+        plan_path.clone().into_os_string(),
+    ];
+    assert_eq!(run_from_args(&args), ExitCode::FAILURE);
+    assert!(!attacker_log.exists());
+    assert!(!attacker_result.exists());
+    assert!(plan_path.exists());
+}
+
+#[test]
 fn helper_reverifies_manifest_signature_and_artifact_bytes() {
     let root = tempfile::tempdir().unwrap();
     let mut plan = fixture_plan(root.path());
@@ -187,4 +213,45 @@ fn helper_reverifies_manifest_signature_and_artifact_bytes() {
     assert!(verify_signed_artifact_with_key(&plan, &signing_key.verifying_key()).is_ok());
     fs::write(&plan.artifact_path, b"tampered").unwrap();
     assert!(verify_signed_artifact_with_key(&plan, &signing_key.verifying_key()).is_err());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn file_backup_cleanup_rejects_a_directory_without_removing_it() {
+    let root = tempfile::tempdir().unwrap();
+    let backup = root.path().join("gmark.gmark-update-backup");
+    fs::create_dir_all(&backup).unwrap();
+    fs::write(backup.join("must-not-be-recursively-removed"), b"keep").unwrap();
+
+    assert!(clear_backup_path(&backup).is_err());
+    assert!(backup.is_dir());
+    assert!(backup.join("must-not-be-recursively-removed").is_file());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn rollback_restores_an_expected_regular_file_backup() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    fs::write(&plan.target_path, b"new executable").unwrap();
+    fs::write(&plan.backup_path, b"previous executable").unwrap();
+
+    rollback(&plan).unwrap();
+
+    assert_eq!(fs::read(&plan.target_path).unwrap(), b"previous executable");
+    assert!(!plan.backup_path.exists());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn rollback_rejects_an_unexpected_directory_target() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(root.path());
+    fs::remove_file(&plan.target_path).unwrap();
+    fs::create_dir(&plan.target_path).unwrap();
+    fs::write(&plan.backup_path, b"previous executable").unwrap();
+
+    assert!(rollback(&plan).is_err());
+    assert!(plan.target_path.is_dir());
+    assert_eq!(fs::read(&plan.backup_path).unwrap(), b"previous executable");
 }
