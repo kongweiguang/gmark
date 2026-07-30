@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use std::fs;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use gmark_export::{
@@ -52,6 +53,25 @@ fn html_export_replaces_invalid_mermaid_with_a_safe_error_projection() {
 }
 
 #[test]
+fn html_export_sanitizes_raw_html_events_without_stripping_safe_markup_or_the_shell() {
+    let html = render_html(
+        "before <script>alert('inline')</script> after\n\n<div onclick=\"alert('block')\">block</div>\n\n<a href=\"java&#x73;cript:alert('url')\">unsafe link</a>\n\nprefix <span class=\"safe-inline\" title=\"still safe\">benign</span> suffix",
+        &ExportTheme::default(),
+        "Doc",
+    );
+    let lower = html.to_ascii_lowercase();
+
+    assert!(!lower.contains("<script"));
+    assert!(!lower.contains("onclick"));
+    assert!(!lower.contains("javascript:"));
+    assert!(!lower.contains("href=\"java"));
+    assert!(html.contains("<span class=\"safe-inline\" title=\"still safe\">benign</span>"));
+    assert!(html.contains("<!doctype html>"));
+    assert!(html.contains("<style>"));
+    assert!(html.contains("<main class=\"vlt-document\">"));
+}
+
+#[test]
 fn html_export_inlines_local_images() {
     let root = std::env::temp_dir().join(format!("gmark-export-image-{}", Uuid::new_v4()));
     fs::create_dir_all(&root).unwrap();
@@ -94,6 +114,66 @@ fn resource_cleanup_removes_only_owned_files() {
     prepared.cleanup_created();
     assert!(!root.join("note.assets/demo.pdf").exists());
     let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn resource_export_rejects_a_precreated_redirected_assets_directory() {
+    let root = std::env::temp_dir().join(format!("gmark-export-resource-{}", Uuid::new_v4()));
+    let outside = std::env::temp_dir().join(format!("gmark-export-outside-{}", Uuid::new_v4()));
+    let assets = root.join("note.assets");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(root.join("demo.pdf"), b"fixture").unwrap();
+    create_directory_link(&assets, &outside).unwrap();
+
+    let cancelled = AtomicBool::new(false);
+    let result = prepare_html_resources(
+        "[Demo](./demo.pdf \"gmark:resource\")",
+        Some(&root),
+        &root.join("note.html"),
+        &cancelled,
+    );
+    let wrote_outside = outside.join("demo.pdf").exists();
+
+    let _ = remove_directory_link(&assets);
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&outside);
+
+    assert!(result.is_err());
+    assert!(!wrote_outside);
+}
+
+#[cfg(unix)]
+fn create_directory_link(link: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn create_directory_link(link: &Path, target: &Path) -> std::io::Result<()> {
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "failed to create test junction: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+#[cfg(unix)]
+fn remove_directory_link(link: &Path) -> std::io::Result<()> {
+    fs::remove_file(link)
+}
+
+#[cfg(windows)]
+fn remove_directory_link(link: &Path) -> std::io::Result<()> {
+    fs::remove_dir(link)
 }
 
 #[test]

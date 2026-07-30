@@ -78,10 +78,11 @@ fn render_browser_html_body(
     theme: &ExportTheme,
     base_dir: Option<&Path>,
 ) -> String {
-    let rewritten = rewrite_standalone_resource_cards(markdown, base_dir);
+    let rewritten = rewrite_unsafe_html_blocks(markdown, base_dir, markdown_options());
+    let rewritten = rewrite_standalone_resource_cards(&rewritten, base_dir);
     let rewritten = rewrite_scaled_standalone_images(&rewritten);
     let rewritten = rewrite_visible_comment_blocks(&rewritten);
-    let rewritten = rewrite_unsafe_html_blocks(&rewritten, base_dir);
+    let rewritten = rewrite_unsafe_html_blocks(&rewritten, base_dir, markdown_options());
     let rewritten = rewrite_display_math_blocks(&rewritten, theme);
     let rewritten = rewrite_inline_math(&rewritten, theme);
     let rewritten = rewrite_mermaid_blocks(&rewritten, theme);

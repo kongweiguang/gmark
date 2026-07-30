@@ -7,6 +7,9 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
+
 use anyhow::{Context as _, anyhow};
 use gmark_markdown::{ResourceKind, ResourceLocation, ResourceRecord, escape_html};
 
@@ -24,6 +27,8 @@ pub struct PreparedHtmlResources {
     pub created_files: Vec<PathBuf>,
     /// Directory created exclusively for this export, when applicable.
     pub created_asset_dir: Option<PathBuf>,
+    owned_files: Vec<PathBuf>,
+    owned_asset_dir: Option<PathBuf>,
 }
 
 impl PreparedHtmlResources {
@@ -31,12 +36,29 @@ impl PreparedHtmlResources {
     /// resources remain untouched, and directory removal succeeds only when it
     /// became empty after owned files were removed.
     pub fn cleanup_created(&self) {
-        for path in &self.created_files {
-            let _ = fs::remove_file(path);
+        cleanup_created_resources(&self.owned_files, self.owned_asset_dir.as_deref());
+    }
+}
+
+#[derive(Debug)]
+struct ExportAssetDirectory {
+    path: PathBuf,
+    canonical_path: PathBuf,
+    canonical_export_directory: PathBuf,
+    created_by_export: bool,
+}
+
+impl ExportAssetDirectory {
+    fn ensure_current(&self) -> anyhow::Result<()> {
+        let canonical_path =
+            validate_export_asset_directory(&self.path, &self.canonical_export_directory)?;
+        if canonical_path != self.canonical_path {
+            return Err(anyhow!(
+                "asset directory '{}' changed while preparing the export",
+                self.path.display()
+            ));
         }
-        if let Some(directory) = self.created_asset_dir.as_deref() {
-            let _ = fs::remove_dir(directory);
-        }
+        Ok(())
     }
 }
 
@@ -64,6 +86,11 @@ pub fn prepare_html_resources_with_progress<C: ExportCancellation + ?Sized>(
     let export_directory = export_path
         .parent()
         .ok_or_else(|| anyhow!("HTML export path has no parent directory"))?;
+    let export_directory = if export_directory.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        export_directory
+    };
     let stem = export_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -71,7 +98,10 @@ pub fn prepare_html_resources_with_progress<C: ExportCancellation + ?Sized>(
         .unwrap_or("untitled");
     let asset_directory = export_directory.join(format!("{stem}.assets"));
     let mut created_files = Vec::new();
+    let mut owned_files = Vec::new();
     let mut created_asset_dir = None;
+    let mut owned_asset_dir = None;
+    let mut prepared_asset_directory = None;
     let mut rewritten = Vec::with_capacity(markdown.lines().count());
     let mut active_fence = None;
 
@@ -99,34 +129,30 @@ pub fn prepare_html_resources_with_progress<C: ExportCancellation + ?Sized>(
 
             let (href, status) = match &record.location {
                 ResourceLocation::Local(path) if path.is_file() => {
-                    if !asset_directory.exists() {
-                        fs::create_dir_all(&asset_directory).with_context(|| {
-                            format!("failed to create '{}'", asset_directory.display())
-                        })?;
-                        created_asset_dir = Some(asset_directory.clone());
-                    }
+                    let asset_directory = ensure_export_asset_directory(
+                        &mut prepared_asset_directory,
+                        export_directory,
+                        &asset_directory,
+                        &mut created_asset_dir,
+                        &mut owned_asset_dir,
+                    )?;
                     let file_name = path
                         .file_name()
                         .and_then(|name| name.to_str())
                         .filter(|name| !name.is_empty())
                         .unwrap_or("resource");
-                    let preferred = asset_directory.join(file_name);
-                    let (target, reused) = if preferred.exists() {
-                        // 附件可能很大，相同内容比较不能同时整文件读入内存。
-                        if files_have_same_contents(path, &preferred).unwrap_or(false) {
-                            (preferred, true)
-                        } else {
-                            (unique_export_asset_path(&asset_directory, file_name), false)
-                        }
-                    } else {
-                        (preferred, false)
-                    };
+                    let (target, reused) =
+                        select_export_asset_target(path, asset_directory, file_name)?;
                     if !reused {
+                        validate_export_asset_target(asset_directory, &target)?;
                         copy_export_asset_cancellable(path, &target, cancelled)?;
-                        created_files.push(target.clone());
+                        owned_files.push(target.clone());
+                        created_files.push(public_export_asset_path(asset_directory, &target));
+                        asset_directory.ensure_current()?;
                     }
                     let href = relative_export_asset_href(
                         asset_directory
+                            .path
                             .file_name()
                             .and_then(|name| name.to_str())
                             .unwrap_or("assets"),
@@ -155,12 +181,7 @@ pub fn prepare_html_resources_with_progress<C: ExportCancellation + ?Sized>(
     })();
 
     if let Err(error) = result {
-        for path in &created_files {
-            let _ = fs::remove_file(path);
-        }
-        if let Some(directory) = created_asset_dir.as_deref() {
-            let _ = fs::remove_dir(directory);
-        }
+        cleanup_created_resources(&owned_files, owned_asset_dir.as_deref());
         return Err(error);
     }
 
@@ -168,7 +189,216 @@ pub fn prepare_html_resources_with_progress<C: ExportCancellation + ?Sized>(
         markdown: rewritten.join("\n"),
         created_files,
         created_asset_dir,
+        owned_files,
+        owned_asset_dir,
     })
+}
+
+fn ensure_export_asset_directory<'a>(
+    prepared: &'a mut Option<ExportAssetDirectory>,
+    export_directory: &Path,
+    asset_directory: &Path,
+    created_asset_dir: &mut Option<PathBuf>,
+    owned_asset_dir: &mut Option<PathBuf>,
+) -> anyhow::Result<&'a ExportAssetDirectory> {
+    if prepared.is_none() {
+        let directory = prepare_export_asset_directory(export_directory, asset_directory)?;
+        if directory.created_by_export {
+            *created_asset_dir = Some(directory.path.clone());
+            *owned_asset_dir = Some(directory.canonical_path.clone());
+        }
+        *prepared = Some(directory);
+    }
+    let Some(directory) = prepared.as_ref() else {
+        return Err(anyhow!("failed to retain the export asset directory"));
+    };
+    directory.ensure_current()?;
+    Ok(directory)
+}
+
+fn prepare_export_asset_directory(
+    export_directory: &Path,
+    asset_directory: &Path,
+) -> anyhow::Result<ExportAssetDirectory> {
+    fs::create_dir_all(export_directory).with_context(|| {
+        format!(
+            "failed to create HTML export parent directory '{}'",
+            export_directory.display()
+        )
+    })?;
+    let canonical_export_directory = canonical_directory(export_directory, "HTML export parent")?;
+    let created_by_export = match fs::symlink_metadata(asset_directory) {
+        Ok(_) => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match fs::create_dir(asset_directory) {
+                Ok(()) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to create asset directory '{}'",
+                            asset_directory.display()
+                        )
+                    });
+                }
+            }
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to inspect asset directory '{}'",
+                    asset_directory.display()
+                )
+            });
+        }
+    };
+    let canonical_path =
+        validate_export_asset_directory(asset_directory, &canonical_export_directory)?;
+    Ok(ExportAssetDirectory {
+        path: asset_directory.to_owned(),
+        canonical_path,
+        canonical_export_directory,
+        created_by_export,
+    })
+}
+
+fn canonical_directory(path: &Path, description: &str) -> anyhow::Result<PathBuf> {
+    let canonical = fs::canonicalize(path)
+        .with_context(|| format!("failed to canonicalize {description} '{}'", path.display()))?;
+    if !fs::metadata(&canonical)
+        .with_context(|| format!("failed to inspect {description} '{}'", canonical.display()))?
+        .is_dir()
+    {
+        return Err(anyhow!(
+            "{description} '{}' is not a directory",
+            path.display()
+        ));
+    }
+    Ok(canonical)
+}
+
+fn validate_export_asset_directory(
+    asset_directory: &Path,
+    canonical_export_directory: &Path,
+) -> anyhow::Result<PathBuf> {
+    let metadata = fs::symlink_metadata(asset_directory).with_context(|| {
+        format!(
+            "failed to inspect asset directory '{}'",
+            asset_directory.display()
+        )
+    })?;
+    if is_link_or_reparse_point(&metadata) {
+        return Err(anyhow!(
+            "refusing redirected asset directory '{}'",
+            asset_directory.display()
+        ));
+    }
+    if !metadata.file_type().is_dir() {
+        return Err(anyhow!(
+            "asset path '{}' is not a directory",
+            asset_directory.display()
+        ));
+    }
+
+    let canonical_path = canonical_directory(asset_directory, "asset directory")?;
+    if !canonical_path.starts_with(canonical_export_directory) {
+        return Err(anyhow!(
+            "asset directory '{}' resolves outside HTML export parent '{}'",
+            asset_directory.display(),
+            canonical_export_directory.display()
+        ));
+    }
+    Ok(canonical_path)
+}
+
+fn validate_export_asset_target(
+    asset_directory: &ExportAssetDirectory,
+    target: &Path,
+) -> anyhow::Result<()> {
+    asset_directory.ensure_current()?;
+    if target.parent() != Some(asset_directory.canonical_path.as_path()) {
+        return Err(anyhow!(
+            "resource target '{}' is outside the validated asset directory '{}'",
+            target.display(),
+            asset_directory.canonical_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn public_export_asset_path(asset_directory: &ExportAssetDirectory, target: &Path) -> PathBuf {
+    target.file_name().map_or_else(
+        || target.to_owned(),
+        |file_name| asset_directory.path.join(file_name),
+    )
+}
+
+fn select_export_asset_target(
+    source: &Path,
+    asset_directory: &ExportAssetDirectory,
+    file_name: &str,
+) -> anyhow::Result<(PathBuf, bool)> {
+    asset_directory.ensure_current()?;
+    let preferred = asset_directory.canonical_path.join(file_name);
+    match fs::symlink_metadata(&preferred) {
+        Ok(metadata) if is_regular_asset_file(&metadata) => {
+            // 附件可能很大，相同内容比较不能同时整文件读入内存。
+            if files_have_same_contents(source, &preferred)
+                .with_context(|| format!("failed to compare resource '{}'", preferred.display()))?
+            {
+                Ok((preferred, true))
+            } else {
+                Ok((
+                    unique_export_asset_path(&asset_directory.canonical_path, file_name)?,
+                    false,
+                ))
+            }
+        }
+        Ok(_) => Ok((
+            unique_export_asset_path(&asset_directory.canonical_path, file_name)?,
+            false,
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((preferred, false)),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to inspect resource target '{}'",
+                preferred.display()
+            )
+        }),
+    }
+}
+
+fn is_regular_asset_file(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_file() && !is_link_or_reparse_point(metadata)
+}
+
+fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn cleanup_created_resources(created_files: &[PathBuf], created_asset_dir: Option<&Path>) {
+    for path in created_files {
+        let remove = fs::symlink_metadata(path)
+            .map(|metadata| is_regular_asset_file(&metadata))
+            .unwrap_or(false);
+        if remove {
+            let _ = fs::remove_file(path);
+        }
+    }
+    if let Some(directory) = created_asset_dir {
+        let _ = fs::remove_dir(directory);
+    }
 }
 
 /// Counts local standalone resource cards while ignoring fenced snippets.
@@ -371,7 +601,7 @@ fn render_resource_card_html(record: &ResourceRecord, href: Option<&str>, status
     }
 }
 
-fn unique_export_asset_path(directory: &Path, preferred_name: &str) -> PathBuf {
+fn unique_export_asset_path(directory: &Path, preferred_name: &str) -> anyhow::Result<PathBuf> {
     let preferred = Path::new(preferred_name);
     let stem = preferred
         .file_stem()
@@ -388,8 +618,17 @@ fn unique_export_asset_path(directory: &Path, preferred_name: &str) -> PathBuf {
             format!("{stem}{index}")
         };
         let candidate = directory.join(name);
-        if !candidate.exists() {
-            return candidate;
+        match fs::symlink_metadata(&candidate) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect resource target '{}'",
+                        candidate.display()
+                    )
+                });
+            }
         }
     }
     unreachable!("unbounded asset name search should always return")

@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use gmark_markdown::escape_html;
+use pulldown_cmark::{Event, Options, Parser};
 
 use crate::images::{local_image_data_uri, render_image_html, sanitize_image_style};
 
@@ -45,8 +46,39 @@ pub(crate) fn is_root_comment_start(line: &str) -> bool {
     trimmed.starts_with("<!--") && line.len() - trimmed.len() <= 3
 }
 
-/// Sanitizes root HTML blocks and inlines local image bytes as data URIs.
-pub(crate) fn rewrite_unsafe_html_blocks(markdown: &str, base_dir: Option<&Path>) -> String {
+/// Sanitizes raw HTML events before later passes add GMark-owned markup.
+pub(crate) fn rewrite_unsafe_html_blocks(
+    markdown: &str,
+    base_dir: Option<&Path>,
+    options: Options,
+) -> String {
+    let markdown = rewrite_root_html_blocks(markdown, base_dir);
+    let mut replacements = Vec::new();
+    for (event, range) in Parser::new_ext(&markdown, options).into_offset_iter() {
+        let sanitized = sanitize_html_event(event, base_dir);
+        if let Event::Html(value) | Event::InlineHtml(value) = sanitized {
+            replacements.push((range, value.into_string()));
+        }
+    }
+    if replacements.is_empty() {
+        return markdown;
+    }
+
+    let mut rewritten = String::with_capacity(markdown.len());
+    let mut copied_until = 0;
+    for (range, replacement) in replacements {
+        if range.start < copied_until {
+            continue;
+        }
+        rewritten.push_str(&markdown[copied_until..range.start]);
+        rewritten.push_str(&replacement);
+        copied_until = range.end;
+    }
+    rewritten.push_str(&markdown[copied_until..]);
+    rewritten
+}
+
+fn rewrite_root_html_blocks(markdown: &str, base_dir: Option<&Path>) -> String {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let mut rewritten = Vec::with_capacity(lines.len());
     let mut index = 0;
@@ -80,11 +112,19 @@ pub(crate) fn rewrite_unsafe_html_blocks(markdown: &str, base_dir: Option<&Path>
     rewritten.join("\n")
 }
 
+/// Replaces unsafe raw HTML emitted by either pulldown-cmark HTML event variant.
+pub(crate) fn sanitize_html_event<'a>(event: Event<'a>, base_dir: Option<&Path>) -> Event<'a> {
+    match event {
+        Event::Html(raw) => Event::Html(sanitize_html_block(&raw, base_dir).into()),
+        Event::InlineHtml(raw) => Event::InlineHtml(sanitize_html_inline(&raw, base_dir).into()),
+        event => event,
+    }
+}
+
 #[derive(Clone, Debug)]
 struct HtmlTag {
     name: String,
     closing: bool,
-    self_closing: bool,
     attributes: Vec<(String, Option<String>)>,
 }
 
@@ -100,9 +140,11 @@ fn root_html_start(line: &str) -> Option<HtmlStart> {
     if line.len() - trimmed.len() > 3 || trimmed.starts_with("<!--") {
         return None;
     }
-    let tag = parse_html_tag(trimmed)?;
+    let end = html_tag_end(trimmed, 0)?;
+    let token = &trimmed[..end];
+    let tag = parse_html_tag(token)?;
     (!tag.closing).then_some(HtmlStart {
-        self_closing: tag.self_closing || is_void_tag(&tag.name),
+        self_closing: token.trim_end().ends_with("/>") || is_void_tag(&tag.name),
         closes_same_line: trimmed
             .to_ascii_lowercase()
             .contains(&format!("</{}>", tag.name)),
@@ -129,11 +171,22 @@ fn collect_html_region(lines: &[&str], start: usize, html: &HtmlStart) -> usize 
 }
 
 fn sanitize_html_block(raw: &str, base_dir: Option<&Path>) -> String {
+    sanitize_html(raw, base_dir, true)
+}
+
+fn sanitize_html_inline(raw: &str, base_dir: Option<&Path>) -> String {
+    sanitize_html(raw, base_dir, false)
+}
+
+fn sanitize_html(raw: &str, base_dir: Option<&Path>, display_dangerous_block: bool) -> String {
     let trimmed = raw.trim_start();
-    if trimmed.starts_with("<script")
-        || trimmed.starts_with("<iframe")
-        || trimmed.starts_with("<object")
-        || trimmed.starts_with("<embed")
+    if trimmed.starts_with("<!--") {
+        return raw.to_owned();
+    }
+    if display_dangerous_block
+        && html_tag_end(trimmed, 0)
+            .and_then(|end| parse_html_tag(&trimmed[..end]))
+            .is_some_and(|tag| is_dangerous_tag(&tag.name) && !tag.closing)
     {
         return format!("<pre class=\"vlt-raw-html\">{}</pre>", escape_html(raw));
     }
@@ -259,7 +312,9 @@ fn css_color(value: &str) -> Option<String> {
         "yellow" => Some((255, 255, 0)),
         _ => None,
     };
-    let rgb = named.or_else(|| hex_color(&lower))?;
+    let rgb = named
+        .or_else(|| hex_color(&lower))
+        .or_else(|| normalized_rgba_color(&lower))?;
     Some(format!("rgba({},{},{},1.000)", rgb.0, rgb.1, rgb.2))
 }
 
@@ -278,6 +333,15 @@ fn hex_color(value: &str) -> Option<(u8, u8, u8)> {
         )),
         _ => None,
     }
+}
+
+fn normalized_rgba_color(value: &str) -> Option<(u8, u8, u8)> {
+    let values = value.strip_prefix("rgba(")?.strip_suffix(')')?;
+    let mut values = values.split(',').map(str::trim);
+    let red = values.next()?.parse().ok()?;
+    let green = values.next()?.parse().ok()?;
+    let blue = values.next()?.parse().ok()?;
+    (values.next()? == "1.000" && values.next().is_none()).then_some((red, green, blue))
 }
 
 fn safe_font_size(value: &str) -> bool {
@@ -304,11 +368,81 @@ fn safe_attribute(tag: &str, name: &str, value: Option<&str>) -> bool {
 }
 
 fn safe_url(value: &str, is_image: bool) -> bool {
-    let lower = value.trim().to_ascii_lowercase();
+    let lower = normalized_url(value);
     !lower.starts_with("javascript:")
         && !lower.starts_with("vbscript:")
         && !lower.starts_with("data:text/html")
         && (!lower.starts_with("data:") || (is_image && lower.starts_with("data:image/")))
+}
+
+fn normalized_url(value: &str) -> String {
+    decode_html_entities(value)
+        .chars()
+        .filter(|character| !character.is_ascii_control() && !character.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn decode_html_entities(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut index = 0;
+    while let Some(offset) = value[index..].find('&') {
+        let start = index + offset;
+        decoded.push_str(&value[index..start]);
+        if let Some((character, end)) = decode_html_entity(value, start) {
+            decoded.push(character);
+            index = end;
+        } else {
+            decoded.push('&');
+            index = start + 1;
+        }
+    }
+    decoded.push_str(&value[index..]);
+    decoded
+}
+
+fn decode_html_entity(value: &str, start: usize) -> Option<(char, usize)> {
+    let bytes = value.as_bytes();
+    let mut index = start.checked_add(1)?;
+    if bytes.get(index) == Some(&b'#') {
+        index += 1;
+        let hexadecimal = matches!(bytes.get(index), Some(b'x' | b'X'));
+        index += usize::from(hexadecimal);
+        let digits_start = index;
+        while bytes.get(index).is_some_and(|byte| {
+            if hexadecimal {
+                byte.is_ascii_hexdigit()
+            } else {
+                byte.is_ascii_digit()
+            }
+        }) {
+            index += 1;
+        }
+        if index == digits_start {
+            return None;
+        }
+        let digits = &value[digits_start..index];
+        let radix = if hexadecimal { 16 } else { 10 };
+        let code_point = u32::from_str_radix(digits, radix).ok()?;
+        let character = char::from_u32(code_point)?;
+        index += usize::from(bytes.get(index) == Some(&b';'));
+        return Some((character, index));
+    }
+
+    let name_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_alphanumeric) {
+        index += 1;
+    }
+    let name = value.get(name_start..index)?;
+    let character = match name {
+        "amp" => '&',
+        "colon" => ':',
+        "NewLine" | "newline" => '\n',
+        "Tab" | "tab" => '\t',
+        _ => return None,
+    };
+    index += usize::from(bytes.get(index) == Some(&b';'));
+    Some((character, index))
 }
 
 fn is_safe_tag(name: &str) -> bool {
@@ -385,7 +519,6 @@ fn parse_html_tag(token: &str) -> Option<HtmlTag> {
     let (closing, content) = content
         .strip_prefix('/')
         .map_or((false, content), |value| (true, value.trim_start()));
-    let self_closing = content.trim_end().ends_with('/');
     let content = content.trim_end_matches('/').trim_end();
     let name_length = content
         .chars()
@@ -395,12 +528,17 @@ fn parse_html_tag(token: &str) -> Option<HtmlTag> {
     if name_length == 0 {
         return None;
     }
+    if let Some(next) = content.as_bytes().get(name_length)
+        && !next.is_ascii_whitespace()
+        && *next != b'/'
+    {
+        return None;
+    }
     let name = content[..name_length].to_ascii_lowercase();
     let attributes = parse_attributes(&content[name_length..]);
     Some(HtmlTag {
         name,
         closing,
-        self_closing,
         attributes,
     })
 }
