@@ -16,6 +16,7 @@ use super::Editor;
 use super::projection::{
     PreparedBlockNode, PreparedSplitProjection, ProjectionRegion, ProjectionRegionKind,
 };
+use crate::components::markdown::fence::is_closing_fence as is_commonmark_closing_fence;
 use crate::components::{
     Block, BlockKind, BlockRecord, CalloutVariant, CodeFenceOpening, InlineTextTree,
     ResourceRecord, parse_footnote_definition_head,
@@ -42,7 +43,7 @@ pub(in crate::editor) fn parse_markdown_value(source: &str) -> gmark_markdown::M
 /// Parsed opening code-fence metadata.
 ///
 /// The opening fence records both the marker character and its run length so
-/// only a matching closing fence can terminate the block.
+/// only a same-marker closing fence at least as long can terminate the block.
 type FenceInfo = CodeFenceOpening;
 
 /// HTML block form recognized by the Markdown importer.
@@ -163,17 +164,10 @@ fn parse_opening_fence(line: &str) -> Option<FenceInfo> {
 }
 
 fn is_closing_fence(line: &str, opener: &FenceInfo) -> bool {
-    let Some(trimmed) = strip_fence_indent(line).map(str::trim_end) else {
+    let Some(line) = strip_fence_indent(line) else {
         return false;
     };
-    if !trimmed.starts_with(opener.ch) {
-        return false;
-    }
-    let run_len = trimmed.chars().take_while(|&c| c == opener.ch).count();
-    if run_len != opener.len {
-        return false;
-    }
-    trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
+    is_commonmark_closing_fence(line, opener.ch, opener.len)
 }
 
 fn find_matching_closing_fence(

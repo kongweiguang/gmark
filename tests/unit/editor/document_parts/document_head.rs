@@ -2,7 +2,7 @@
 
     use gpui::{App, AppContext, Entity, TestAppContext};
 
-    use super::super::projection::PreparedSplitProjection;
+    use super::super::projection::{PreparedSplitProjection, ProjectionRegionKind};
     use super::{
         collect_block_html_region, find_matching_closing_fence, is_closing_fence,
         is_reference_definition_start, parse_list_marker, parse_opening_fence,
@@ -75,13 +75,20 @@
     }
 
     #[test]
-    fn closing_fence_must_match_exact_opening_run_length() {
-        let opener = parse_opening_fence("````rust").expect("opening fence");
+    fn closing_fence_matches_the_marker_with_at_least_the_opening_length() {
+        let backtick = parse_opening_fence("```rust").expect("opening fence");
 
-        assert!(is_closing_fence("````", &opener));
-        assert!(is_closing_fence("  ````   ", &opener));
-        assert!(!is_closing_fence("```", &opener));
-        assert!(!is_closing_fence("`````", &opener));
+        assert!(is_closing_fence("```", &backtick));
+        assert!(is_closing_fence("  ````   ", &backtick));
+        assert!(!is_closing_fence("``", &backtick));
+        assert!(!is_closing_fence("~~~", &backtick));
+        assert!(!is_closing_fence("```` trailing", &backtick));
+        assert!(!is_closing_fence("    ````", &backtick));
+
+        let tilde = parse_opening_fence("~~~sql").expect("opening fence");
+        assert!(is_closing_fence("~~~~", &tilde));
+        assert!(!is_closing_fence("~~", &tilde));
+        assert!(!is_closing_fence("```", &tilde));
     }
 
     #[test]
@@ -104,15 +111,43 @@
     }
 
     #[test]
-    fn matching_closing_fence_can_skip_inner_non_closing_backtick_runs() {
+    fn matching_closing_fence_can_skip_inner_too_short_backtick_runs() {
         let lines = vec![
             "```rust".to_string(),
-            "````".to_string(),
+            "``".to_string(),
             "body".to_string(),
             "```".to_string(),
         ];
         let opener = parse_opening_fence(&lines[0]).expect("opening fence");
         assert_eq!(find_matching_closing_fence(&lines, 0, &opener), Some(3));
+    }
+
+    #[test]
+    fn longer_closing_fences_match_production_parser_and_editor_projection() {
+        for (source, expected_content) in [
+            ("```rust\nlet answer = 42;\n````", "let answer = 42;"),
+            ("~~~sql\nselect 1;\n~~~~", "select 1;"),
+        ] {
+            let production = gmark_markdown::parse_markdown(source);
+            assert_eq!(production.blocks.len(), 1);
+            let gmark_markdown::BlockKind::CodeBlock(code) = &production.blocks[0].kind else {
+                panic!("production parser must recognize a fenced code block");
+            };
+            assert_eq!(code.fence, gmark_markdown::CodeFence::Fenced);
+
+            let projection = PreparedSplitProjection::from_snapshot(
+                gmark_document::SourceDocument::new(source).snapshot(),
+            );
+            assert_eq!(projection.regions.len(), 1);
+            assert_eq!(projection.regions[0].kind, ProjectionRegionKind::FencedCode);
+
+            let nodes = projection.nodes[0]
+                .as_ref()
+                .expect("fenced code projection should prepare its block");
+            assert_eq!(nodes.len(), 1);
+            assert!(nodes[0].record.kind.is_code_block());
+            assert_eq!(nodes[0].record.title.visible_text(), expected_content);
+        }
     }
 
     #[test]

@@ -63,6 +63,29 @@ fn parses_container_scoped_link_reference_definitions_and_skips_raw_blocks() {
 }
 
 #[test]
+fn discovers_link_reference_definitions_after_a_longer_closing_fence() {
+    let definitions = parse_link_reference_definitions(
+        [
+            "```md",
+            "[code link]: https://ignored.example",
+            "````",
+            "[live link]: https://resolved.example",
+        ]
+        .join("\n")
+        .as_str(),
+    );
+
+    assert!(!definitions.contains_key("code link"));
+    assert_eq!(
+        definitions.get("live link"),
+        Some(&LinkReferenceDefinition {
+            destination: "https://resolved.example".to_string(),
+            title: None,
+        })
+    );
+}
+
+#[test]
 fn supports_http_https_and_mailto_autolinks() {
     assert!(is_supported_autolink_target("https://example.com"));
     assert!(is_supported_autolink_target("http://example.com"));

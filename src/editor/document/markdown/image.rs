@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use gpui::{SharedUri, http_client::Uri};
 
+use super::fence::is_closing_fence;
 use crate::net;
 
 /// Active fenced code block while scanning for image reference definitions.
@@ -571,16 +572,7 @@ fn parse_reference_scan_opening_fence(line: &str) -> Option<FenceInfo> {
 }
 
 fn is_reference_scan_closing_fence(line: &str, opener: FenceInfo) -> bool {
-    let trimmed = line.trim_end();
-    if !trimmed.starts_with(opener.ch) {
-        return false;
-    }
-
-    let run_len = trimmed
-        .chars()
-        .take_while(|current| *current == opener.ch)
-        .count();
-    run_len == opener.len && trimmed[opener.ch.len_utf8() * run_len..].trim().is_empty()
+    is_closing_fence(line, opener.ch, opener.len)
 }
 
 fn parse_reference_scan_html_block_start(line: &str) -> Option<HtmlBlockStart> {

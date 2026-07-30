@@ -428,3 +428,26 @@ fn ignores_reference_definitions_inside_code_fences_and_html_blocks() {
         })
     );
 }
+
+#[test]
+fn discovers_image_reference_definitions_after_a_longer_closing_fence() {
+    let definitions = parse_image_reference_definitions(
+        [
+            "```md",
+            "[code image]: ./ignored.png",
+            "````",
+            "[live image]: ./resolved.png",
+        ]
+        .join("\n")
+        .as_str(),
+    );
+
+    assert!(!definitions.contains_key("code image"));
+    assert_eq!(
+        definitions.get("live image"),
+        Some(&ImageReferenceDefinition {
+            src: "./resolved.png".to_string(),
+            title: None,
+        })
+    );
+}
