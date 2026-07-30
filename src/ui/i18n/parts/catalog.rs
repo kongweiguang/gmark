@@ -87,7 +87,7 @@ impl I18nManager {
         self.import_language_config_with_dirs(path, &dirs)
     }
 
-    pub(in crate::i18n) fn import_language_config_with_dirs(
+    pub(in crate::ui::i18n) fn import_language_config_with_dirs(
         &mut self,
         path: impl AsRef<Path>,
         dirs: &GmarkConfigDirs,
@@ -119,7 +119,9 @@ impl I18nManager {
 
 impl I18nStrings {
     /// Projects a complete domain bundle onto the existing strongly typed UI API.
-    pub(in crate::i18n) fn from_translation_bundle(bundle: &gmark_i18n::TranslationBundle) -> Self {
+    pub(in crate::ui::i18n) fn from_translation_bundle(
+        bundle: &gmark_i18n::TranslationBundle,
+    ) -> Self {
         let mut values = Map::new();
         for (key, text) in bundle.scalars() {
             values.insert(key.clone(), Value::String(text.clone()));

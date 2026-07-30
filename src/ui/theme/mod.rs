@@ -237,19 +237,30 @@ pub struct ThemeColors {
     /// Background of the active document tab.
     pub tab_active_background: Hsla,
 }
-#[path = "theme_parts/dimensions.rs"]
+#[path = "parts/colors.rs"]
+mod colors;
+#[path = "parts/dimensions.rs"]
 mod dimensions;
 pub use dimensions::{Placeholders, ThemeDimensions, ThemeTypography};
 
-#[path = "theme_parts/model.rs"]
+#[path = "parts/model.rs"]
 mod model;
 pub use model::Theme;
 
-#[path = "theme_parts/catalog.rs"]
+#[path = "parts/claude.rs"]
+mod claude;
+#[path = "parts/fleet.rs"]
+mod fleet;
+#[path = "parts/obsidian.rs"]
+mod obsidian;
+#[path = "parts/xcode.rs"]
+mod xcode;
+
+#[path = "parts/catalog.rs"]
 mod catalog;
 #[cfg(test)]
 use catalog::resolved_theme_id;
 pub use catalog::{ThemeAppearance, ThemeManager, ThemePalette};
 #[cfg(test)]
-#[path = "../../tests/unit/theme/theme.rs"]
+#[path = "../../../tests/unit/theme/theme.rs"]
 mod tests;

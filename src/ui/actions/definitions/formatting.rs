@@ -1,0 +1,148 @@
+// @author kongweiguang
+
+//! Stable default shortcut definitions.
+
+use super::super::*;
+
+pub(super) const DEFINITIONS: &[ShortcutDefinition] = &[
+    ShortcutDefinition {
+        command: ShortcutCommand::BoldSelection,
+        id: "bold_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &["cmd-b", "ctrl-b"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ItalicSelection,
+        id: "italic_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &["cmd-i", "ctrl-i"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::StrikethroughSelection,
+        id: "strikethrough_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &["cmd-shift-x", "ctrl-shift-x"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::UnderlineSelection,
+        id: "underline_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &["cmd-u", "ctrl-u"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::CodeSelection,
+        id: "code_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &["cmd-`", "ctrl-`"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::LinkSelection,
+        id: "link_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &["cmd-k", "ctrl-k"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::HighlightSelection,
+        id: "highlight_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &[],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SuperscriptSelection,
+        id: "superscript_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &[],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SubscriptSelection,
+        id: "subscript_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &[],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::InlineMathSelection,
+        id: "inline_math_selection",
+        category: ShortcutCategory::Formatting,
+        default_keys: &[],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetParagraph,
+        id: "set_paragraph",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-alt-0", "ctrl-alt-0"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading1,
+        id: "set_heading_1",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-alt-1", "ctrl-alt-1"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading2,
+        id: "set_heading_2",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-alt-2", "ctrl-alt-2"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading3,
+        id: "set_heading_3",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-alt-3", "ctrl-alt-3"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading4,
+        id: "set_heading_4",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-alt-4", "ctrl-alt-4"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading5,
+        id: "set_heading_5",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-alt-5", "ctrl-alt-5"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading6,
+        id: "set_heading_6",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-alt-6", "ctrl-alt-6"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::IndentBlock,
+        id: "indent_block",
+        category: ShortcutCategory::Block,
+        default_keys: &["tab"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::OutdentBlock,
+        id: "outdent_block",
+        category: ShortcutCategory::Block,
+        default_keys: &["shift-tab"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ExitCodeBlock,
+        id: "exit_code_block",
+        category: ShortcutCategory::Block,
+        default_keys: &["cmd-enter", "ctrl-enter"],
+        context: BLOCK_CONTEXT,
+    },
+];

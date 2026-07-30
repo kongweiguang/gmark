@@ -1,9 +1,8 @@
 // @author kongweiguang
 
-//! Theme configuration and global theme access.
+//! Backwards-compatible theme facade.
 //!
-//! Built-in themes are JSON-serializable for export and regression fixtures so
-//! editor colors, spacing, and typography stay separate from render logic.
+//! Theme implementation lives in `crate::ui::theme`; this module preserves
+//! established crate-local imports while callers migrate gradually.
 
-mod theme;
-pub use theme::*;
+pub use crate::ui::theme::*;

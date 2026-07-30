@@ -3,7 +3,7 @@
 use super::*;
 
 pub(crate) fn shortcut_definitions() -> &'static [ShortcutDefinition] {
-    SHORTCUT_DEFINITIONS
+    super::definitions::all()
 }
 
 pub(crate) fn normalize_shortcut_keys(keys: &[String]) -> Option<Vec<String>> {
@@ -72,7 +72,7 @@ pub(crate) fn normalize_shortcut_config(
     config: &BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, Vec<String>> {
     let mut effective: BTreeMap<&'static str, (bool, Vec<String>)> = BTreeMap::new();
-    for definition in SHORTCUT_DEFINITIONS {
+    for definition in shortcut_definitions() {
         let custom = configured_shortcut_keys(*definition, config);
         effective.insert(
             definition.id,
@@ -85,9 +85,9 @@ pub(crate) fn normalize_shortcut_config(
 
     loop {
         let mut conflicted = BTreeSet::new();
-        for (index, left) in SHORTCUT_DEFINITIONS.iter().enumerate() {
+        for (index, left) in shortcut_definitions().iter().enumerate() {
             let (left_custom, left_keys) = effective.get(left.id).expect("known shortcut");
-            for right in SHORTCUT_DEFINITIONS.iter().skip(index + 1) {
+            for right in shortcut_definitions().iter().skip(index + 1) {
                 let (right_custom, right_keys) = effective.get(right.id).expect("known shortcut");
                 if shortcuts_conflict(*left, left_keys, *right, right_keys) {
                     if *left_custom {
@@ -105,7 +105,7 @@ pub(crate) fn normalize_shortcut_config(
         }
 
         for id in conflicted {
-            if let Some(definition) = SHORTCUT_DEFINITIONS
+            if let Some(definition) = shortcut_definitions()
                 .iter()
                 .find(|definition| definition.id == id)
             {
@@ -125,7 +125,7 @@ pub(crate) fn resolved_shortcut_keys(
     command: ShortcutCommand,
 ) -> Vec<String> {
     let normalized = normalize_shortcut_config(config);
-    let definition = SHORTCUT_DEFINITIONS
+    let definition = shortcut_definitions()
         .iter()
         .find(|definition| definition.command == command)
         .expect("known shortcut command");
@@ -140,11 +140,11 @@ pub(crate) fn shortcut_conflict_for(
     proposed_keys: &[String],
     config: &BTreeMap<String, Vec<String>>,
 ) -> Option<ShortcutDefinition> {
-    let definition = SHORTCUT_DEFINITIONS
+    let definition = shortcut_definitions()
         .iter()
         .find(|definition| definition.command == command)?;
     let proposed_keys = normalize_shortcut_keys(proposed_keys)?;
-    for other in SHORTCUT_DEFINITIONS
+    for other in shortcut_definitions()
         .iter()
         .filter(|other| other.command != command)
     {
@@ -262,7 +262,7 @@ fn key_binding_for(
 pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
     let normalized = normalize_shortcut_config(config);
     let mut bindings = Vec::new();
-    for definition in SHORTCUT_DEFINITIONS {
+    for definition in shortcut_definitions() {
         let keys = normalized
             .get(definition.id)
             .cloned()
