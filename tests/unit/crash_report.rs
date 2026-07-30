@@ -133,12 +133,9 @@ fn panic_hook_subprocess_child() {
 #[test]
 fn installed_hook_writes_a_redacted_report_before_process_failure() {
     let temp = tempfile::tempdir().unwrap();
+    // 模块完整路径会随目录重整变化；按唯一测试名过滤，避免子进程静默执行零项测试。
     let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "crash_report::tests::panic_hook_subprocess_child",
-            "--nocapture",
-        ])
+        .args(["panic_hook_subprocess_child", "--nocapture"])
         .env("GMARK_CRASH_TEST_DIR", temp.path())
         .output()
         .unwrap();

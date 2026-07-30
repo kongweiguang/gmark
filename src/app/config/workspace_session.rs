@@ -59,5 +59,5 @@ fn remove_paths_from_workspace_sessions_with_dirs(
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/config/workspace_session.rs"]
+#[path = "../../../tests/unit/config/workspace_session.rs"]
 mod tests;

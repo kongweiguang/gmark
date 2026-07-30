@@ -90,7 +90,7 @@ pub(crate) fn import_language_config_and_select(
     Ok(imported_id)
 }
 
-// reason: PreferencesWindow keeps the established per-setting compatibility list for legacy UI state and persisted fields; remove when it passes a dedicated preferences-save parameter object.
+// 原因: PreferencesWindow 需要逐字段承接既有 UI 草稿和持久化兼容字段，暂时不能改变调用形状；移除条件: 窗口保存改为传递专用的 preferences-save 参数对象。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn save_preferences_from_window(
     startup_open: StartupOpenPreference,
@@ -140,7 +140,7 @@ pub(crate) fn save_preferences_from_window(
     )
 }
 
-// reason: The explicit-directory persistence adapter mirrors the legacy window argument list so tests and TOML-compatible writes use the same field mapping; remove when both save paths accept the shared preferences-save parameter object.
+// 原因: 显式目录 adapter 必须镜像旧窗口参数列表，保证测试和 TOML 兼容写入共享同一字段映射；移除条件: 两个保存路径都改为接受共享的 preferences-save 参数对象。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn save_preferences_from_window_with_dirs(
     startup_open: StartupOpenPreference,
