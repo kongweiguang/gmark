@@ -325,6 +325,32 @@ fn staged_helper_launch_guard_blocks_mutation_until_drop() {
     std::fs::remove_file(renamed).unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn staged_helper_launch_guard_rejects_a_reparse_leaf() {
+    let root = tempfile::tempdir().unwrap();
+    let transaction = root.path().join("v1.1.0");
+    std::fs::create_dir(&transaction).unwrap();
+    let command_shell =
+        PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+    let staged = stage_update_helper(&transaction, &command_shell).unwrap();
+    let original = transaction.join("verified-helper.exe");
+    std::fs::rename(&staged.path, &original).unwrap();
+    if let Err(error) = std::os::windows::fs::symlink_file(&original, &staged.path) {
+        std::fs::rename(&original, &staged.path).unwrap();
+        if error.kind() == std::io::ErrorKind::PermissionDenied
+            || error.raw_os_error() == Some(1314)
+        {
+            return;
+        }
+        panic!("failed to create staged-helper symlink: {error}");
+    }
+
+    assert!(verify_staged_helper_for_launch(&staged).is_err());
+    std::fs::remove_file(&staged.path).unwrap();
+    std::fs::rename(original, &staged.path).unwrap();
+}
+
 fn release_fixture() -> UpdateRelease {
     UpdateRelease {
         current_version: "1.0.0".to_owned(),

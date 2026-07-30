@@ -238,7 +238,7 @@ pub(super) fn verify_staged_helper_for_launch(
 ) -> Result<StagedHelperLaunchGuard, String> {
     let metadata = fs::symlink_metadata(&helper.path)
         .map_err(|error| format!("failed to inspect staged helper: {error}"))?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+    if !is_real_regular_file(&metadata) {
         return Err("staged helper is not a regular file".to_owned());
     }
     if metadata.len() != helper.length {
@@ -255,29 +255,48 @@ pub(super) fn verify_staged_helper_for_launch(
             .ok_or_else(|| "staged helper has no transaction directory".to_owned())?;
         let directory_metadata = fs::symlink_metadata(transaction_dir)
             .map_err(|error| format!("failed to inspect staged helper directory: {error}"))?;
-        if !directory_metadata.file_type().is_dir() || directory_metadata.file_type().is_symlink() {
+        if !is_real_directory(&directory_metadata) {
             return Err("staged helper directory is not a real directory".to_owned());
         }
-        // Security: FILE_FLAG_BACKUP_SEMANTICS permits a directory handle; denying
-        // write/delete sharing prevents replacing the verified path before launch.
-        OpenOptions::new()
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        let directory = OpenOptions::new()
             .read(true)
-            .custom_flags(0x0200_0000)
-            .share_mode(0x0000_0001)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ)
             .open(transaction_dir)
-            .map_err(|error| format!("failed to lock staged helper directory: {error}"))?
+            .map_err(|error| format!("failed to lock staged helper directory: {error}"))?;
+        if !is_real_directory(
+            &directory
+                .metadata()
+                .map_err(|error| format!("failed to verify staged helper directory: {error}"))?,
+        ) {
+            return Err("opened staged helper directory is not a real directory".to_owned());
+        }
+        directory
     };
     #[cfg(windows)]
     let mut file = {
         use std::os::windows::fs::OpenOptionsExt as _;
 
-        // Security: deny write/delete sharing until CreateProcess has opened the
-        // verified image. FILE_SHARE_READ still permits normal Windows execution.
-        OpenOptions::new()
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        // Security: open the leaf itself, reject every reparse point, and deny
+        // write/delete sharing until CreateProcess has opened the verified image.
+        let file = OpenOptions::new()
             .read(true)
-            .share_mode(0x0000_0001)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(&helper.path)
-            .map_err(|error| format!("failed to lock staged helper for launch: {error}"))?
+            .map_err(|error| format!("failed to lock staged helper for launch: {error}"))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| format!("failed to verify staged helper handle: {error}"))?;
+        if !is_real_regular_file(&opened) || opened.len() != helper.length {
+            return Err("opened staged helper is not the verified regular file".to_owned());
+        }
+        file
     };
     #[cfg(not(windows))]
     let mut file = File::open(&helper.path)
@@ -297,7 +316,7 @@ pub(super) fn verify_staged_helper_for_launch(
 fn harden_transaction_directory(transaction_dir: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(transaction_dir)
         .map_err(|error| format!("failed to inspect update transaction directory: {error}"))?;
-    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+    if !is_real_directory(&metadata) {
         return Err("update transaction directory is not a real directory".to_owned());
     }
     #[cfg(unix)]
@@ -372,7 +391,7 @@ fn copy_helper_exclusive(source: &Path, destination: &Path) -> Result<(u64, [u8;
 fn harden_staged_helper(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect staged helper: {error}"))?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+    if !is_real_regular_file(&metadata) {
         return Err("staged helper is not a regular file".to_owned());
     }
     #[cfg(unix)]
@@ -383,6 +402,33 @@ fn harden_staged_helper(path: &Path) -> Result<(), String> {
             .map_err(|error| format!("failed to secure staged helper: {error}"))?;
     }
     Ok(())
+}
+
+fn is_real_regular_file(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_file()
+        && !metadata.file_type().is_symlink()
+        && !is_windows_reparse_point(metadata)
+}
+
+fn is_real_directory(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_dir()
+        && !metadata.file_type().is_symlink()
+        && !is_windows_reparse_point(metadata)
+}
+
+fn is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 fn hash_file_exact(file: &mut File, expected_length: u64, label: &str) -> Result<[u8; 32], String> {
