@@ -1,8 +1,10 @@
 // @author kongweiguang
 
-use gmark_fuzz_support::{run_recovery_frame_program, run_source_document_program};
+use gmark_fuzz_support::{
+    run_markdown_parser_program, run_recovery_frame_program, run_source_document_program,
+};
 
-const CORPUS: &[(&str, &[u8])] = &[
+const SOURCE_DOCUMENT_CORPUS: &[(&str, &[u8])] = &[
     (
         "ascii",
         include_bytes!("../../../fuzz/corpus/source_document_transactions/ascii.seed"),
@@ -26,6 +28,21 @@ const CORPUS: &[(&str, &[u8])] = &[
     (
         "invalid",
         include_bytes!("../../../fuzz/corpus/source_document_transactions/invalid.seed"),
+    ),
+];
+
+const MARKDOWN_CORPUS: &[(&str, &[u8])] = &[
+    (
+        "commonmark-gfm",
+        include_bytes!("../../../fuzz/corpus/markdown_parser/commonmark-gfm.seed"),
+    ),
+    (
+        "unicode",
+        include_bytes!("../../../fuzz/corpus/markdown_parser/unicode.seed"),
+    ),
+    (
+        "extended",
+        include_bytes!("../../../fuzz/corpus/markdown_parser/extended.seed"),
     ),
 ];
 
@@ -70,9 +87,34 @@ const RECOVERY_CORPUS: &[(&str, &[u8])] = &[
 
 #[test]
 fn replays_persistent_transaction_corpus() {
-    for (name, input) in CORPUS {
+    for (name, input) in SOURCE_DOCUMENT_CORPUS {
         std::panic::catch_unwind(|| run_source_document_program(input))
             .unwrap_or_else(|_| panic!("transaction corpus seed '{name}' failed"));
+    }
+}
+
+#[test]
+fn replays_markdown_parser_corpus() {
+    for (name, input) in MARKDOWN_CORPUS {
+        std::panic::catch_unwind(|| run_markdown_parser_program(input))
+            .unwrap_or_else(|_| panic!("Markdown corpus seed '{name}' failed"));
+    }
+}
+
+#[test]
+fn deterministic_random_markdown_streams_keep_ranges_and_round_trips_valid() {
+    const ALPHABET: &[u8] = b"#*_-`[]()<>|\\~! abcdef0123456789\n";
+    for seed in 0_u64..128 {
+        let mut state = seed.wrapping_add(0xA076_1D64_78BD_642F);
+        let mut input = vec![0_u8; 1_024];
+        for byte in &mut input {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *byte = ALPHABET[state as usize % ALPHABET.len()];
+        }
+        std::panic::catch_unwind(|| run_markdown_parser_program(&input))
+            .unwrap_or_else(|_| panic!("deterministic Markdown seed {seed} failed"));
     }
 }
 

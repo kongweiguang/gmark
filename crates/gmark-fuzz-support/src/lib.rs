@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use gmark_document::{
     DocumentError, DocumentSnapshot, Revision, SourceDocument, TextEdit, Transaction,
 };
+use gmark_markdown::{parse_markdown, serialize_canonical_markdown, serialize_markdown};
 use gmark_recovery_codec::{MAX_RECORD_BYTES, decode_record};
 
 const HISTORY_LIMIT: usize = 64;
@@ -21,6 +22,30 @@ const MAX_RECOVERY_FRAMES: usize = 4_096;
 pub struct RecoveryFrameRun {
     pub accepted_frames: usize,
     pub accepted_bytes: usize,
+}
+
+/// Parses one UTF-8 Markdown input through the production value model and both serializers.
+///
+/// Preserve-source serialization must remain byte exact. Canonical output is reparsed so fuzzing
+/// also covers ranges and value construction produced by the serializer itself.
+pub fn run_markdown_parser_program(data: &[u8]) {
+    let Ok(source) = std::str::from_utf8(data) else {
+        return;
+    };
+    let document = parse_markdown(source);
+    document
+        .source_map
+        .validate(source)
+        .expect("parsed Markdown source map must stay within UTF-8 boundaries");
+    assert_eq!(serialize_markdown(&document), source);
+
+    let canonical = serialize_canonical_markdown(&document);
+    let reparsed = parse_markdown(&canonical);
+    reparsed
+        .source_map
+        .validate(&canonical)
+        .expect("canonical Markdown source map must stay within UTF-8 boundaries");
+    assert_eq!(serialize_markdown(&reparsed), canonical);
 }
 
 /// Walks a bounded recovery-journal byte stream and checks the decoder's progress invariants.

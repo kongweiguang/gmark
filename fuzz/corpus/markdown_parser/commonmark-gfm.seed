@@ -1,0 +1,10 @@
+# Heading with *emphasis*
+
+- [x] task
+- [ ] second
+
+| name | value |
+| --- | ---: |
+| alpha | `1` |
+
+[link](https://example.com "title") and ~~strike~~.

@@ -15,4 +15,5 @@ workspace = true
 
 [dependencies]
 gmark-document = { path = "../gmark-document" }
+gmark-markdown = { path = "../gmark-markdown" }
 gmark-recovery-codec = { path = "../gmark-recovery-codec" }

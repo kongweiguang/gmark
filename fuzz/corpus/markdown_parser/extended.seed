@@ -1,0 +1,15 @@
+---
+title: Extended syntax
+---
+
+```rust
+fn main() { println!("``` is data here"); }
+```
+
+$$
+\frac{1}{2}
+$$
+
+<span style="color: red">safe text</span>
+
+!resource[clip](./media/demo.mp4 "video")

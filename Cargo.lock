@@ -4278,6 +4278,7 @@ name = "gmark-fuzz-support"
 version = "0.1.0"
 dependencies = [
  "gmark-document",
+ "gmark-markdown",
  "gmark-recovery-codec",
 ]
 

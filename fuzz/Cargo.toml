@@ -17,7 +17,6 @@ cargo-fuzz = true
 [dependencies]
 gmark-fuzz-support = { path = "../crates/gmark-fuzz-support" }
 libfuzzer-sys = "0.4"
-pulldown-cmark = "=0.13.4"
 
 [[bin]]
 name = "source_document_transactions"
