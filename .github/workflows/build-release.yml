@@ -79,6 +79,11 @@ jobs:
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      - run: cargo run -p xtask -- quality
+      - run: cargo check -p gmark --locked --no-default-features
+      - run: cargo check -p gmark --locked --no-default-features --features code-highlight-core,html-native
+      - run: cargo check -p gmark --locked
+      - run: cargo check -p gmark --locked --all-features
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked -j 1
       - run: cargo test -p gmark-fuzz-support --test corpus_replay --locked -j 1
