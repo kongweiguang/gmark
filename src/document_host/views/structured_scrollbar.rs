@@ -44,7 +44,7 @@ impl DocumentHost {
         } else {
             0.0
         };
-        let structured_scrollbar = (structured_max_top_row > 0).then(|| {
+        (structured_max_top_row > 0).then(|| {
             let track_top = structured_track_bounds.top();
             div()
                 .id("document-host-structured-scrollbar")
@@ -113,8 +113,6 @@ impl DocumentHost {
                         .rounded(px(999.0))
                         .bg(colors.scrollbar_thumb),
                 )
-        });
-
-        structured_scrollbar
+        })
     }
 }

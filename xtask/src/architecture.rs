@@ -311,7 +311,7 @@ fn forbidden_domain_source_path(tokens: &[Token]) -> Option<String> {
     for dependency in ["gpui", "accesskit"]
         .into_iter()
         .chain(WINDOW_PLATFORM_PACKAGES.iter().copied())
-        .chain(["windows", "windows_sys"].into_iter())
+        .chain(["windows", "windows_sys"])
     {
         let source_name = dependency.replace('-', "_");
         if contains_path(tokens, &[source_name.as_str()]) {

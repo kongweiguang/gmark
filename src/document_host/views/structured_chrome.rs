@@ -15,7 +15,7 @@ impl DocumentHost {
     ) -> Option<Stateful<Div>> {
         let structured_width = width;
 
-        let markdown_table_switcher = match self.structured_index.as_ref() {
+        match self.structured_index.as_ref() {
             Some(StructuredIndex::MarkdownTables { tables, selected }) if tables.len() > 1 => {
                 let selected = *selected;
                 let table_count = tables.len();
@@ -91,9 +91,7 @@ impl DocumentHost {
                 )
             }
             _ => None,
-        };
-
-        markdown_table_switcher
+        }
     }
 
     pub(super) fn render_structured_operation_bar(
@@ -106,57 +104,54 @@ impl DocumentHost {
             .structured_column_progress
             .as_ref()
             .map(|(processed, total)| (processed.load(Ordering::Relaxed), *total));
-        let structured_operation_bar =
-            (column_progress.is_some() || !self.hidden_structured_columns.is_empty()).then(|| {
-                div()
-                    .id("document-host-structured-operation-bar")
-                    .debug_selector(|| "document-host-structured-operation-bar".to_owned())
-                    .h(px(34.0))
-                    .px(px(8.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .border_b(px(1.0))
-                    .border_color(colors.dialog_border)
-                    .when_some(column_progress, |bar, (processed, total)| {
-                        bar.child(
-                            strings
-                                .large_document_text("updating_columns_progress_template")
-                                .replace("{processed}", &processed.to_string())
-                                .replace("{total}", &total.to_string()),
-                        )
-                        .child(
-                            div()
-                                .id("document-host-cancel-column-update")
-                                .px(px(8.0))
-                                .py(px(4.0))
-                                .rounded(px(4.0))
-                                .cursor_pointer()
-                                .bg(colors.dialog_secondary_button_bg)
-                                .child(strings.large_document_text("cancel").to_owned())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.cancel_delimited_column_transform(cx)
-                                })),
-                        )
-                    })
-                    .when(!self.hidden_structured_columns.is_empty(), |bar| {
-                        bar.child(
-                            div()
-                                .id("document-host-show-all-columns")
-                                .px(px(8.0))
-                                .py(px(4.0))
-                                .rounded(px(4.0))
-                                .bg(colors.dialog_secondary_button_bg)
-                                .child(strings.large_document_text("show_all_columns").to_owned())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.hidden_structured_columns.clear();
-                                    cx.notify();
-                                })),
-                        )
-                    })
-            });
-
-        structured_operation_bar
+        (column_progress.is_some() || !self.hidden_structured_columns.is_empty()).then(|| {
+            div()
+                .id("document-host-structured-operation-bar")
+                .debug_selector(|| "document-host-structured-operation-bar".to_owned())
+                .h(px(34.0))
+                .px(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .border_b(px(1.0))
+                .border_color(colors.dialog_border)
+                .when_some(column_progress, |bar, (processed, total)| {
+                    bar.child(
+                        strings
+                            .large_document_text("updating_columns_progress_template")
+                            .replace("{processed}", &processed.to_string())
+                            .replace("{total}", &total.to_string()),
+                    )
+                    .child(
+                        div()
+                            .id("document-host-cancel-column-update")
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .bg(colors.dialog_secondary_button_bg)
+                            .child(strings.large_document_text("cancel").to_owned())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cancel_delimited_column_transform(cx)
+                            })),
+                    )
+                })
+                .when(!self.hidden_structured_columns.is_empty(), |bar| {
+                    bar.child(
+                        div()
+                            .id("document-host-show-all-columns")
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .rounded(px(4.0))
+                            .bg(colors.dialog_secondary_button_bg)
+                            .child(strings.large_document_text("show_all_columns").to_owned())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.hidden_structured_columns.clear();
+                                cx.notify();
+                            })),
+                    )
+                })
+        })
     }
 
     pub(super) fn render_structured_add_row(
@@ -166,7 +161,7 @@ impl DocumentHost {
         strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
-        let add_row = structured_live.then(|| {
+        structured_live.then(|| {
             let row_count = self
                 .structured_index
                 .as_ref()
@@ -186,9 +181,7 @@ impl DocumentHost {
                 .on_click(
                     cx.listener(move |this, _, _, cx| this.insert_delimited_row(row_count, cx)),
                 )
-        });
-
-        add_row
+        })
     }
 
     pub(super) fn render_structured_context_menu(
@@ -197,7 +190,7 @@ impl DocumentHost {
         strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
-        let context_menu = self.structured_context_target.map(|target| {
+        self.structured_context_target.map(|target| {
             let row_count = self
                 .structured_index
                 .as_ref()
@@ -297,8 +290,6 @@ impl DocumentHost {
                         },
                     ))),
             }
-        });
-
-        context_menu
+        })
     }
 }

@@ -165,21 +165,20 @@ fn is_test_fixture_component(component: &str) -> bool {
         .strip_suffix(".rs")
         .unwrap_or(component)
         .to_ascii_lowercase();
-    name.split(|character| matches!(character, '_' | '-'))
-        .any(|segment| {
-            matches!(
-                segment,
-                "test"
-                    | "tests"
-                    | "fixture"
-                    | "fixtures"
-                    | "testdata"
-                    | "mock"
-                    | "mocks"
-                    | "fake"
-                    | "fakes"
-            )
-        })
+    name.split(['_', '-']).any(|segment| {
+        matches!(
+            segment,
+            "test"
+                | "tests"
+                | "fixture"
+                | "fixtures"
+                | "testdata"
+                | "mock"
+                | "mocks"
+                | "fake"
+                | "fakes"
+        )
+    })
 }
 
 pub(crate) fn is_production_rust(root: &Path, path: &Path) -> bool {

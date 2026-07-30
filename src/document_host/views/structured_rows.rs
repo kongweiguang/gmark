@@ -24,7 +24,7 @@ impl DocumentHost {
         let structured_border_color = colors.dialog_border;
         let structured_selection_color = colors.table_axis_selected_bg;
 
-        let structured_list = uniform_list(
+        uniform_list(
             "document-host-structured-rows",
             structured_count,
             cx.processor(move |this, range: Range<usize>, _window, _cx| {
@@ -235,8 +235,6 @@ impl DocumentHost {
         )
         .track_scroll(self.structured_scroll_handle.clone())
         .h_full()
-        .w(px(structured_width));
-
-        structured_list
+        .w(px(structured_width))
     }
 }

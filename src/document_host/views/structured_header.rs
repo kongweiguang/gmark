@@ -18,7 +18,7 @@ impl DocumentHost {
         let structured_live = layout.structured_live;
         let structured_selection_color = colors.table_axis_selected_bg;
 
-        let structured_header = div()
+        div()
             .h(px(30.0))
             .w(px(structured_width))
             .flex()
@@ -129,9 +129,7 @@ impl DocumentHost {
                                 )
                             })
                     }),
-            );
-
-        structured_header
+            )
     }
 
     pub(super) fn render_structured_column_pager(
@@ -144,82 +142,77 @@ impl DocumentHost {
         let structured_width = layout.width;
         let structured_column_count = layout.column_count;
 
-        let structured_column_pager =
-            (structured_column_count > STRUCTURED_COLUMN_WINDOW).then(|| {
-                let start = self.structured_column_window_start;
-                let end = start
-                    .saturating_add(STRUCTURED_COLUMN_WINDOW)
-                    .min(structured_column_count);
-                let previous = start.saturating_sub(STRUCTURED_COLUMN_WINDOW);
-                let next = start
-                    .saturating_add(STRUCTURED_COLUMN_WINDOW)
-                    .min(structured_column_count.saturating_sub(1));
-                div()
-                    .id("document-host-structured-column-pager")
-                    .debug_selector(|| "document-host-structured-column-pager".to_owned())
-                    .h(px(32.0))
-                    .w(px(structured_width))
-                    .px(px(8.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .border_b(px(1.0))
-                    .border_color(colors.dialog_border)
-                    .text_size(px(12.0))
-                    .text_color(colors.dialog_muted)
-                    .child(
-                        div()
-                            .id("document-host-structured-columns-previous")
-                            .debug_selector(|| {
-                                "document-host-structured-columns-previous".to_owned()
-                            })
-                            .size(px(24.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.0))
-                            .cursor_pointer()
-                            .text_color(if start == 0 {
-                                colors.text_placeholder
-                            } else {
-                                colors.text_default
-                            })
-                            .hover(|button| button.bg(colors.dialog_secondary_button_hover))
-                            .child("‹")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_structured_column_window_start(previous, cx);
-                            })),
-                    )
-                    .child(
-                        strings
-                            .large_document_text("columns_window_template")
-                            .replace("{start}", &(start + 1).to_string())
-                            .replace("{end}", &end.to_string())
-                            .replace("{total}", &structured_column_count.to_string()),
-                    )
-                    .child(
-                        div()
-                            .id("document-host-structured-columns-next")
-                            .debug_selector(|| "document-host-structured-columns-next".to_owned())
-                            .size(px(24.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.0))
-                            .cursor_pointer()
-                            .text_color(if end == structured_column_count {
-                                colors.text_placeholder
-                            } else {
-                                colors.text_default
-                            })
-                            .hover(|button| button.bg(colors.dialog_secondary_button_hover))
-                            .child("›")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_structured_column_window_start(next, cx);
-                            })),
-                    )
-            });
-
-        structured_column_pager
+        (structured_column_count > STRUCTURED_COLUMN_WINDOW).then(|| {
+            let start = self.structured_column_window_start;
+            let end = start
+                .saturating_add(STRUCTURED_COLUMN_WINDOW)
+                .min(structured_column_count);
+            let previous = start.saturating_sub(STRUCTURED_COLUMN_WINDOW);
+            let next = start
+                .saturating_add(STRUCTURED_COLUMN_WINDOW)
+                .min(structured_column_count.saturating_sub(1));
+            div()
+                .id("document-host-structured-column-pager")
+                .debug_selector(|| "document-host-structured-column-pager".to_owned())
+                .h(px(32.0))
+                .w(px(structured_width))
+                .px(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .border_b(px(1.0))
+                .border_color(colors.dialog_border)
+                .text_size(px(12.0))
+                .text_color(colors.dialog_muted)
+                .child(
+                    div()
+                        .id("document-host-structured-columns-previous")
+                        .debug_selector(|| "document-host-structured-columns-previous".to_owned())
+                        .size(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .text_color(if start == 0 {
+                            colors.text_placeholder
+                        } else {
+                            colors.text_default
+                        })
+                        .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                        .child("‹")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_structured_column_window_start(previous, cx);
+                        })),
+                )
+                .child(
+                    strings
+                        .large_document_text("columns_window_template")
+                        .replace("{start}", &(start + 1).to_string())
+                        .replace("{end}", &end.to_string())
+                        .replace("{total}", &structured_column_count.to_string()),
+                )
+                .child(
+                    div()
+                        .id("document-host-structured-columns-next")
+                        .debug_selector(|| "document-host-structured-columns-next".to_owned())
+                        .size(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .text_color(if end == structured_column_count {
+                            colors.text_placeholder
+                        } else {
+                            colors.text_default
+                        })
+                        .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                        .child("›")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_structured_column_window_start(next, cx);
+                        })),
+                )
+        })
     }
 }

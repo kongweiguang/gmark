@@ -281,13 +281,13 @@ impl DocumentRegistryKey {
     pub fn for_file(identity: &FileIdentity) -> Self {
         #[cfg(target_os = "windows")]
         {
-            return Self::File(PathBuf::from(
+            Self::File(PathBuf::from(
                 identity
                     .canonical_path
                     .as_os_str()
                     .to_string_lossy()
                     .to_lowercase(),
-            ));
+            ))
         }
         #[cfg(not(target_os = "windows"))]
         {

@@ -182,7 +182,7 @@ pub(super) fn recovery_view_id(mode: DocumentHostViewMode) -> DocumentViewId {
 /// most recent probe. This keeps a resident session on the runtime journal contract
 /// even when its on-disk file later grows past the open threshold.
 pub(crate) enum DocumentRecoveryJournal {
-    Resident(ResidentRecoveryJournal),
+    Resident(Box<ResidentRecoveryJournal>),
     Paged(PagedRecoveryJournal),
 }
 
@@ -206,7 +206,7 @@ impl DocumentRecoveryJournal {
                     source_document.text(),
                     source_document.source_format(),
                 )
-                .map(Self::Resident)
+                .map(|journal| Self::Resident(Box::new(journal)))
                 .map_err(map_resident_recovery_error)
             }
             gmark_document_core::DocumentBackendKind::Paged => {

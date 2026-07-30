@@ -372,12 +372,12 @@ fn declared_module_files(root: &Path, sources: &[SourceFile]) -> BTreeSet<PathBu
             }
         }
         for index in 0..file.tokens.len() {
-            if is_allowed_generated_catalog_include(root, file, index) {
-                if let Some(path) = include_argument(&file.tokens, index) {
-                    reachable.insert(normalized_path(
-                        &file.path.parent().unwrap_or(root).join(path),
-                    ));
-                }
+            if is_allowed_generated_catalog_include(root, file, index)
+                && let Some(path) = include_argument(&file.tokens, index)
+            {
+                reachable.insert(normalized_path(
+                    &file.path.parent().unwrap_or(root).join(path),
+                ));
             }
         }
     }
