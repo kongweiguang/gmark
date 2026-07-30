@@ -46,7 +46,15 @@ dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
 
+[lints.rust]
+# 主包平台桥需要少量经审计的原生调用；默认拒绝 unsafe，仅允许源码中的窄作用域例外。
+unsafe_code = "deny"
+unused_must_use = "deny"
+
 [lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
 # Allow stylistic patterns the project doesn't enforce. These mirror the
 # spirit of gpui-component's workspace lints — categorically silence
 # noise (range-loop indexing, identical-block flagging, helper-arg

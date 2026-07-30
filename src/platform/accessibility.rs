@@ -144,6 +144,8 @@ type PlatformAdapter = accesskit_unix::Adapter;
 
 impl AccessibilityBridge {
     /// 必须在原生窗口第一次显示前安装；调用方应在 `open_window` 构造闭包内执行。
+    // reason: AccessKit 适配器必须接收原生句柄并调用平台 API；remove when: 上游提供覆盖三平台的安全构造接口。
+    #[allow(unsafe_code)]
     pub(crate) fn new(
         window: &Window,
         initial: EditorAccessibilitySnapshot,
