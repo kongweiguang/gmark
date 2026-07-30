@@ -239,7 +239,7 @@ fn domain_crates_reject_ui_accessibility_window_and_main_application_edges() {
     fixture.package("gmark-update-core", "");
     fixture.write(
         "crates/gmark-update-core/src/lib.rs",
-        &with_author("use std::os::windows::ffi::OsStringExt;\n"),
+        &with_author("use std::os::windows::process::CommandExt;\n"),
     );
 
     let error = xtask::run_at(fixture.path(), "architecture").unwrap_err();
@@ -255,10 +255,21 @@ fn domain_crates_reject_ui_accessibility_window_and_main_application_edges() {
         "windows",
         "main application package",
         "raw-window-handle",
-        "std::os::windows",
+        "std::os::windows::process",
     ] {
         assert!(error.contains(expected), "missing {expected} in {error}");
     }
+}
+
+#[test]
+fn domain_crates_accept_platform_filesystem_extensions() {
+    let fixture = Fixture::new();
+    fixture.add_domain_packages();
+    fixture.write(
+        "crates/gmark-update-core/src/lib.rs",
+        &with_author("use std::os::windows::fs::{MetadataExt, OpenOptionsExt};\n"),
+    );
+    xtask::run_at(fixture.path(), "architecture").unwrap();
 }
 
 #[test]

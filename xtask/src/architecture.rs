@@ -303,10 +303,11 @@ fn is_window_platform_package(dependency: &str) -> bool {
 }
 
 fn forbidden_domain_source_path(tokens: &[Token]) -> Option<String> {
-    for platform in ["windows", "macos", "ios"] {
-        if contains_path(tokens, &["std", "os", platform]) {
-            return Some(format!("std::os::{platform}"));
-        }
+    // Domain crates may use OS-specific filesystem extensions for no-follow,
+    // reparse-point, permission, and atomic-I/O guarantees. Process extensions
+    // remain forbidden because they cross the pure-domain/side-effect boundary.
+    if contains_path(tokens, &["std", "os", "windows", "process"]) {
+        return Some("std::os::windows::process".to_owned());
     }
     for dependency in ["gpui", "accesskit"]
         .into_iter()
@@ -314,11 +315,23 @@ fn forbidden_domain_source_path(tokens: &[Token]) -> Option<String> {
         .chain(["windows", "windows_sys"])
     {
         let source_name = dependency.replace('-', "_");
-        if contains_path(tokens, &[source_name.as_str()]) {
+        if contains_root_path(tokens, source_name.as_str()) {
             return Some(source_name);
         }
     }
     None
+}
+
+fn contains_root_path(tokens: &[Token], name: &str) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        token.is(name)
+            && tokens.get(index + 1).is_some_and(|token| token.is("::"))
+            && (index == 0
+                || !tokens
+                    .get(index.wrapping_sub(1))
+                    .is_some_and(|token| token.is("::"))
+                || index == 1)
+    })
 }
 
 fn contains_path(tokens: &[Token], path: &[&str]) -> bool {
