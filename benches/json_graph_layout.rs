@@ -10,7 +10,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 #[allow(dead_code)]
-#[path = "../src/document_views/json_graph/model.rs"]
+#[path = "../src/document_host/views/json_graph/model.rs"]
 mod model;
 
 fn fixture(node_count: usize, wide: bool) -> JsonGraphProjection {

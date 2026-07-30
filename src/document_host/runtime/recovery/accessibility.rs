@@ -1,0 +1,177 @@
+// @author kongweiguang
+
+//! Status and accessibility projections.
+
+use super::*;
+
+impl DocumentHost {
+    /// 大文件的运行状态由 Editor 的统一状态栏承载，内容视图不再绘制第二条状态栏。
+    pub(crate) fn status_text(&self, strings: &I18nStrings) -> SharedString {
+        if let Some(error) = &self.error {
+            return error.clone();
+        }
+        if self.reloading {
+            return strings.large_document_text("reloading").into();
+        }
+        if self.saving {
+            return strings.large_document_text("saving").into();
+        }
+        if let Some(notice) = &self.mode_notice {
+            return notice.clone();
+        }
+        if self
+            .document
+            .as_ref()
+            .and_then(DocumentSession::resident_growth_reason)
+            .is_some()
+        {
+            return strings
+                .large_document_text("resident_growth_reopen_source")
+                .into();
+        }
+        if self.index.is_none() {
+            return strings
+                .large_document_text("indexing_status_template")
+                .replace(
+                    "{mib}",
+                    &format!("{:.1}", self.probe.len as f64 / (1024.0 * 1024.0)),
+                )
+                .into();
+        }
+        strings
+            .large_document_text("size_lines_template")
+            .replace(
+                "{mib}",
+                &format!("{:.1}", self.probe.len as f64 / (1024.0 * 1024.0)),
+            )
+            .replace("{lines}", &self.line_count().to_string())
+            .into()
+    }
+
+    pub(crate) fn accessibility_snapshot(
+        &self,
+        cx: &App,
+    ) -> crate::accessibility::EditorAccessibilitySnapshot {
+        let title = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                cx.global::<I18nManager>()
+                    .strings()
+                    .large_document_text("untitled")
+            });
+        let lines = self
+            .displayed_screen_lines
+            .rows
+            .iter()
+            .map(|(line, row)| (*line as u64, row.text.to_string()))
+            .collect();
+        let folds = self
+            .fold_projection
+            .regions()
+            .iter()
+            .filter(|region| {
+                self.displayed_screen_lines
+                    .rows
+                    .contains_key(&region.start_line)
+            })
+            .map(|region| crate::accessibility::AccessibilityFold {
+                start_line: region.start_line as u64,
+                end_line: region.end_line as u64,
+                collapsed: self.fold_projection.is_collapsed(region.id),
+            })
+            .collect();
+        let error = self
+            .error
+            .as_ref()
+            .or(self.coordinator.recovery_error.as_ref())
+            .or(self.structure_error.as_ref())
+            .map(ToString::to_string);
+        crate::accessibility::EditorAccessibilitySnapshot {
+            title,
+            dirty: document_dirty_state(&self.document, &self.pending_dirty),
+            status: self
+                .status_text(cx.global::<I18nManager>().strings())
+                .to_string(),
+            error,
+            busy: self.saving || self.reloading || self.index.is_none() || self.search_running,
+            search_visible: self.search_visible,
+            navigation_visible: self.navigation_visible,
+            caret: Some(self.accessibility_caret(cx)),
+            lines,
+            folds,
+        }
+    }
+
+    pub(crate) fn accessibility_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let flags = u64::from(document_dirty_state(&self.document, &self.pending_dirty))
+            | (u64::from(self.saving) << 1)
+            | (u64::from(self.reloading) << 2)
+            | (u64::from(self.search_running) << 3)
+            | (u64::from(self.search_visible) << 4)
+            | (u64::from(self.navigation_visible) << 5)
+            | (u64::from(self.error.is_some()) << 6)
+            | (u64::from(self.structure_error.is_some()) << 7)
+            | (u64::from(self.coordinator.recovery_error.is_some()) << 8);
+        let row_signature = self
+            .displayed_screen_lines
+            .rows
+            .first_key_value()
+            .map_or(0, |(line, _)| *line as u64)
+            .wrapping_mul(31)
+            .wrapping_add(
+                self.displayed_screen_lines
+                    .rows
+                    .last_key_value()
+                    .map_or(0, |(line, _)| *line as u64),
+            )
+            .wrapping_mul(31)
+            .wrapping_add(self.displayed_screen_lines.rows.len() as u64);
+        let fold_signature = self
+            .fold_projection
+            .regions()
+            .iter()
+            .fold(0_u64, |hash, region| {
+                hash.wrapping_mul(31)
+                    .wrapping_add(region.start_line as u64)
+                    .wrapping_mul(31)
+                    .wrapping_add(u64::from(self.fold_projection.is_collapsed(region.id)))
+            });
+        let mut message_hasher = std::collections::hash_map::DefaultHasher::new();
+        self.error.hash(&mut message_hasher);
+        self.structure_error.hash(&mut message_hasher);
+        self.coordinator.recovery_error.hash(&mut message_hasher);
+        self.mode_notice.hash(&mut message_hasher);
+        self.coordinator.external_status.hash(&mut message_hasher);
+        self.displayed_screen_lines
+            .cache_epoch
+            .wrapping_mul(31)
+            .wrapping_add(self.displayed_screen_lines.document_revision)
+            .wrapping_mul(31)
+            .wrapping_add(self.displayed_screen_lines.generation)
+            .wrapping_mul(31)
+            .wrapping_add(self.displayed_screen_lines.column_window_start)
+            .wrapping_mul(31)
+            .wrapping_add(row_signature)
+            .wrapping_mul(31)
+            .wrapping_add(fold_signature)
+            .wrapping_mul(31)
+            .wrapping_add(self.coordinator.search_generation)
+            .wrapping_mul(31)
+            .wrapping_add(self.coordinator.external_generation)
+            .wrapping_mul(31)
+            .wrapping_add(message_hasher.finish())
+            .wrapping_mul(512)
+            .wrapping_add(flags)
+    }
+
+    pub(crate) fn activate_accessibility_error(&mut self, cx: &mut Context<Self>) {
+        if let Some(offset) = self.structure_error_byte {
+            self.jump_byte_offset_to_source(offset, cx);
+        }
+    }
+}

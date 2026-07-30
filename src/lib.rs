@@ -6,21 +6,18 @@
 //! Reads file paths from command-line arguments and opens one GPUI window per
 //! file. With no arguments, a single empty window is created.
 
+mod adapters;
 mod app;
 mod components;
 mod document_host;
-mod document_io;
-mod document_runtime;
 mod editor;
-mod export;
 mod net;
 mod platform;
-mod recovery;
-mod resource_io;
 mod source_tools;
 mod spellcheck;
 mod ui;
 
+pub(crate) use adapters::{document_io, export, recovery, resource_io};
 pub(crate) use app::bootstrap::cli;
 pub(crate) use app::diagnostics::{crash_report, perf};
 pub(crate) use app::{app_menu, config, preferences, updater};

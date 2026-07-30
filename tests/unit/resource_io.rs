@@ -8,6 +8,16 @@ fn temp_root() -> tempfile::TempDir {
     tempfile::tempdir().expect("temporary resource root should exist")
 }
 
+fn unique_file_path(dir: &Path, preferred_name: &str) -> PathBuf {
+    for index in 0.. {
+        let candidate = resource_candidate_path(dir, preferred_name, index);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("deterministic resource name search is unbounded")
+}
+
 #[test]
 fn copies_without_overwriting_and_returns_relative_target() {
     let root = temp_root();

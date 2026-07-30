@@ -1,0 +1,356 @@
+// @author kongweiguang
+
+//! Selection export and line-edit event handling.
+
+use super::*;
+
+impl DocumentHost {
+    pub(super) fn on_export_selection(
+        &mut self,
+        _: &ExportSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_selection_export(false, window, cx);
+    }
+
+    pub(crate) fn export_selection_from_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_selection_export(false, window, cx);
+    }
+
+    pub(super) fn export_selection_as_utf8(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_selection_export(true, window, cx);
+    }
+
+    fn start_selection_export(
+        &mut self,
+        force_utf8: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(range) = self.selected_source_byte_range() else {
+            return;
+        };
+        let Some(document) = self.document.clone() else {
+            return;
+        };
+        let default_dir = self
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("selection");
+        let suggested_name = if force_utf8 {
+            format!("{file_name}.selection.utf8.txt")
+        } else {
+            format!("{file_name}.selection.txt")
+        };
+        let prompt = cx.prompt_for_new_path(&default_dir, Some(&suggested_name));
+        let encoded_plan: Option<EncodedSavePlan> = (!force_utf8)
+            .then(|| {
+                self.prepared_source
+                    .as_ref()
+                    .and_then(PreparedUtf8Source::save_plan)
+            })
+            .flatten();
+        if let Some(cancellation) = self.selection_export_cancellation.take() {
+            cancellation.cancel();
+        }
+        let cancellation = SearchCancellation::default();
+        self.selection_export_cancellation = Some(cancellation.clone());
+        self.selection_export_generation = self.selection_export_generation.wrapping_add(1);
+        let generation = self.selection_export_generation;
+        let task_stamp = DocumentTaskStamp::capture(self, generation);
+        let export_bytes = range.end.saturating_sub(range.start);
+        self.metrics.export_requests = self.metrics.export_requests.saturating_add(1);
+        self.selection_export_task = cx.spawn(async move |this, cx| {
+            let path = match prompt.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) | Err(_) => {
+                    let _ = this.update(cx, |view, _cx| {
+                        if task_stamp.accepts_identity(view, view.selection_export_generation) {
+                            view.selection_export_cancellation = None;
+                        }
+                    });
+                    return;
+                }
+                Ok(Err(_error)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        if task_stamp.accepts_identity(view, view.selection_export_generation) {
+                            view.selection_export_cancellation = None;
+                            view.error = Some(
+                                cx.global::<I18nManager>()
+                                    .strings()
+                                    .large_document_text("error_export_selection")
+                                    .into(),
+                            );
+                            cx.notify();
+                        }
+                    });
+                    return;
+                }
+            };
+            let result = cx
+                .background_spawn(async move {
+                    if let Some(plan) = encoded_plan {
+                        let encoding = plan.encoding_name();
+                        document
+                            .save_encoded_range_atomic_cancellable(
+                                &plan,
+                                range,
+                                path,
+                                &cancellation,
+                            )
+                            .map(|_| encoding)
+                    } else {
+                        document
+                            .save_range_atomic_cancellable(range, path, &cancellation)
+                            .map(|_| "UTF-8".to_owned())
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if !task_stamp.accepts_identity(view, view.selection_export_generation) {
+                    return;
+                }
+                view.selection_export_cancellation = None;
+                match result {
+                    Ok(encoding) => {
+                        view.metrics.exported_bytes =
+                            view.metrics.exported_bytes.saturating_add(export_bytes);
+                        view.coordinator.external_status = Some(
+                            cx.global::<I18nManager>()
+                                .strings()
+                                .large_document_text("selection_exported_template")
+                                .replace("{encoding}", &encoding)
+                                .into(),
+                        );
+                        view.error = None;
+                    }
+                    Err(PagedDocumentError::UnrepresentableEncoding { encoding }) => {
+                        view.error = Some(
+                            cx.global::<I18nManager>()
+                                .strings()
+                                .large_document_text("selection_encoding_error_template")
+                                .replace("{encoding}", &encoding)
+                                .into(),
+                        );
+                    }
+                    Err(error) => view.error = Some(localized_document_error(&error, cx)),
+                }
+                cx.notify();
+            });
+        });
+    }
+
+    pub(super) fn on_line_edit_event(
+        &mut self,
+        block: Entity<Block>,
+        event: &BlockEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, BlockEvent::SelectionChanged) {
+            self.sync_selection_from_active_source_block(&block, cx);
+            return;
+        }
+        if matches!(event, BlockEvent::RequestRenderedSelectAll)
+            && self
+                .active_edit
+                .as_ref()
+                .is_some_and(|active| active.block == block)
+        {
+            self.active_edit = None;
+            self.select_source_lines(0..self.line_count(), false);
+            self.sync_source_selection_visuals(cx);
+            cx.notify();
+            return;
+        }
+        if !matches!(event, BlockEvent::Changed) {
+            return;
+        }
+        if self.saving || self.reloading {
+            return;
+        }
+        if self
+            .suppressed_line_edit_text
+            .as_deref()
+            .is_some_and(|expected| expected == block.read(cx).display_text())
+        {
+            self.suppressed_line_edit_text = None;
+            return;
+        }
+        let Some(active) = &self.active_edit else {
+            return;
+        };
+        if active.block != block {
+            return;
+        }
+        if block.read(cx).marked_range.is_some() {
+            // IME composition belongs to the platform input transaction. Keep the
+            // transient marked text in the mounted Source Block and commit it to
+            // PieceTree/recovery only when the composition is finalized; otherwise
+            // every pinyin candidate update would become a separate undo step.
+            cx.notify();
+            return;
+        }
+        let text = block.read(cx).display_text().to_owned();
+        let caret_in_text = block.read(cx).selected_range.end.min(text.len());
+        let range = active.range.clone();
+        let ending = active.ending.clone();
+        let replacement = format!("{text}{ending}");
+        let recovery_selection = block.read(cx).selected_range.clone();
+        let recovery_selection = u64::try_from(recovery_selection.start)
+            .ok()
+            .zip(u64::try_from(recovery_selection.end).ok())
+            .and_then(|(start, end)| {
+                let start =
+                    SourceAnchor::new(range.start.checked_add(start)?, SourceAffinity::Before);
+                let end = SourceAnchor::new(range.start.checked_add(end)?, SourceAffinity::After);
+                Some(if block.read(cx).selection_reversed {
+                    SourceSelection {
+                        anchor: end,
+                        head: start,
+                    }
+                } else {
+                    SourceSelection {
+                        anchor: start,
+                        head: end,
+                    }
+                })
+            });
+        let edit_lines = self.document.as_ref().map(|document| {
+            let start = document
+                .line_for_offset(range.start.min(document.len()))
+                .and_then(|line| usize::try_from(line).ok())
+                .unwrap_or(active.line);
+            let end = document
+                .line_for_offset(range.end.min(document.len()))
+                .and_then(|line| usize::try_from(line).ok())
+                .unwrap_or(start);
+            (start, end)
+        });
+        let Some(mut next_document) = self.document.clone() else {
+            return;
+        };
+        match next_document.replace_text(range.clone(), &replacement) {
+            Ok(()) => {
+                // 先在持久根的廉价快照上验证范围与 UTF-8 边界，再追加恢复记录；
+                // 失败输入不得留下一个正文从未接受过的 journal 事务。
+                if let Some(journal) = self.coordinator.recovery_journal.as_mut()
+                    && let Err(error) = record_recovery_transaction(
+                        journal,
+                        &next_document,
+                        next_document.revision().saturating_sub(1),
+                        range.clone(),
+                        replacement.as_str(),
+                        recovery_selection,
+                        DocumentViewId::source(),
+                    )
+                {
+                    self.coordinator.recovery_error = Some(error.to_string().into());
+                }
+                let reanchored = text
+                    .contains(['\r', '\n'])
+                    .then(|| {
+                        let caret_offset = range.start.saturating_add(caret_in_text as u64);
+                        let line =
+                            next_document.line_for_offset(caret_offset.min(next_document.len()))?;
+                        let line_range = next_document.line_range(line)?;
+                        let requested = caret_offset
+                            .saturating_sub(line_range.start)
+                            .saturating_sub(MAX_RENDERED_LINE_BYTES / 2);
+                        let windowed = read_bounded_line_window(&next_document, line, requested)
+                            .ok()
+                            .flatten()?;
+                        let caret = usize::try_from(
+                            caret_offset.saturating_sub(windowed.content_range.start),
+                        )
+                        .ok()?
+                        .min(windowed.text.len());
+                        let window_start = windowed
+                            .content_range
+                            .start
+                            .saturating_sub(line_range.start);
+                        Some((usize::try_from(line).ok()?, windowed, caret, window_start))
+                    })
+                    .flatten();
+                if let Some((line, windowed, caret, window_start)) = reanchored {
+                    let line_text = windowed.text.to_string();
+                    self.source_row_blocks
+                        .retain(|_, candidate| *candidate != block);
+                    self.source_row_blocks.insert(line, block.clone());
+                    if let Some(active) = self.active_edit.as_mut() {
+                        active.line = line;
+                        active.range = windowed.replace_range;
+                        active.ending = windowed.ending;
+                        active.leading_truncated = windowed.leading_truncated;
+                        active.trailing_truncated = windowed.trailing_truncated;
+                    }
+                    self.source_window_start = window_start;
+                    self.suppressed_line_edit_text = Some(line_text.clone());
+                    block.update(cx, |block, cx| {
+                        let old_len = block.display_text().len();
+                        block.replace_text_in_visible_range(
+                            0..old_len,
+                            &line_text,
+                            Some(caret..caret),
+                            false,
+                            cx,
+                        );
+                    });
+                    self.selection_anchor = Some(line);
+                    self.selected_lines = Some(line..line.saturating_add(1));
+                    self.scroll_handle
+                        .scroll_to_item(line, ScrollStrategy::Center);
+                } else if let Some(active) = self.active_edit.as_mut() {
+                    active.range = range.start..range.start + replacement.len() as u64;
+                }
+                if let Some(selection) = recovery_selection {
+                    next_document.set_source_selection(selection);
+                }
+                if let Some((start_line, end_line)) = edit_lines {
+                    self.fold_projection.apply_source_edit(
+                        range.clone(),
+                        start_line,
+                        end_line,
+                        &replacement,
+                    );
+                }
+                let dirty = !next_document.is_pristine();
+                next_document.dirty = dirty;
+                self.install_document_session(next_document);
+                self.tail_enabled = false;
+                self.coordinator.external_status = Some(
+                    cx.global::<I18nManager>()
+                        .strings()
+                        .large_document_text("tailing_paused_after_edit")
+                        .into(),
+                );
+                let preserve_json_split = self.probe.format == DocumentFormat::Json
+                    && self.view_mode == DocumentHostViewMode::Split;
+                if !preserve_json_split {
+                    self.view_mode = DocumentHostViewMode::Source;
+                    self.sync_tab_active_view();
+                }
+                self.structured_index = None;
+                self.invalidate_structured_runtime();
+                self.clear_structure_error();
+                self.error = None;
+                self.invalidate_source_rows();
+                self.schedule_search(cx);
+                self.schedule_json_graph_projection(cx);
+                cx.emit(DocumentHostEvent::StateChanged);
+            }
+            Err(error) => self.error = Some(localized_document_error(&error, cx)),
+        }
+        cx.notify();
+    }
+}

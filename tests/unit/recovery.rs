@@ -1,34 +1,19 @@
 // @author kongweiguang
 
 use super::*;
+use gmark_recovery_codec::RecordKind;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 
-fn selection(offset: usize) -> RecoverySelection {
-    RecoverySelection {
-        start: offset,
-        end: offset,
-        reversed: false,
-        anchor_affinity: None,
-        head_affinity: None,
-    }
-}
+#[path = "document_runtime/recovery_fixtures.rs"]
+mod fixtures;
 
-fn crc_valid_frame_counts(path: &std::path::Path) -> (usize, usize) {
-    let bytes = std::fs::read(path).expect("read compacted recovery journal");
-    let mut cursor = 0usize;
-    let mut bases = 0usize;
-    let mut edits = 0usize;
-    while cursor < bytes.len() {
-        let record = gmark_recovery_codec::decode_record(&bytes, cursor)
-            .expect("decode CRC-valid recovery frame")
-            .expect("complete recovery frame");
-        match record.kind {
-            gmark_recovery_codec::RecordKind::Base => bases += 1,
-            gmark_recovery_codec::RecordKind::Edit => edits += 1,
-        }
-        cursor = record.next;
-    }
-    (bases, edits)
-}
+use fixtures::{
+    BaseRecord, EditRecord, RecoveryFormatPatch, RecoveryLineEnding, append_record,
+    crc_valid_frame_counts, default_source_format, encode_record, selection,
+};
+pub(crate) use fixtures::{fingerprint_contents, replay_journal};
 
 #[test]
 fn recovery_journal_preserves_source_anchor_affinity_and_direction() {
@@ -69,7 +54,7 @@ fn journal_replays_utf8_edits_and_selection() {
             .unwrap()
     );
 
-    let recovered = replay_journal(&journal.journal_path).unwrap();
+    let recovered = replay_journal(journal.path()).unwrap();
     assert_eq!(recovered.source, "alpha 世界!");
     assert_eq!(recovered.selection, selection(12));
     assert_eq!(recovered.view_mode, "source");
@@ -97,7 +82,7 @@ fn journal_restores_bom_and_mixed_line_ending_patches() {
         )
         .unwrap();
 
-    let recovered = replay_journal(&journal.journal_path).unwrap();
+    let recovered = replay_journal(journal.path()).unwrap();
     let restored = gmark_document::SourceDocument::from_normalized(
         &recovered.source,
         recovered.source_format,
@@ -134,11 +119,11 @@ fn truncated_or_corrupt_tail_recovers_last_crc_valid_record() {
     journal
         .record("one two three", selection(13), "rendered")
         .unwrap();
-    let mut bytes = fs::read(&journal.journal_path).unwrap();
+    let mut bytes = fs::read(journal.path()).unwrap();
     bytes.truncate(bytes.len() - 8);
-    fs::write(&journal.journal_path, bytes).unwrap();
+    fs::write(journal.path(), bytes).unwrap();
 
-    let recovered = replay_journal(&journal.journal_path).unwrap();
+    let recovered = replay_journal(journal.path()).unwrap();
     assert_eq!(recovered.source, "one two");
     assert_eq!(recovered.selection, selection(7));
     assert_eq!(recovered.read_status, RecoveryReadStatus::TruncatedTail);
@@ -182,8 +167,9 @@ fn forced_process_termination_recovers_last_synced_record() {
     let temp = tempfile::tempdir().expect("create parent recovery directory");
     let current_test = std::env::current_exe().expect("resolve current test executable");
     let status = std::process::Command::new(current_test)
-        .arg("--exact")
-        .arg("recovery::tests::forced_process_termination_recovers_last_synced_record")
+        // Keep this robust when registry wiring moves the test module: the function name is
+        // unique within this binary, so the standard substring filter selects exactly one test.
+        .arg("forced_process_termination_recovers_last_synced_record")
         .arg("--nocapture")
         .env(CHILD_DIR_ENV, temp.path())
         .status()
@@ -217,7 +203,7 @@ fn invalid_format_patch_recovers_previous_valid_record() {
         )
         .unwrap();
     append_record(
-        &journal.journal_path,
+        journal.path(),
         RecordKind::Edit,
         &EditRecord {
             start: 0,
@@ -236,7 +222,7 @@ fn invalid_format_patch_recovers_previous_valid_record() {
     )
     .unwrap();
 
-    let recovered = replay_journal(&journal.journal_path).unwrap();
+    let recovered = replay_journal(journal.path()).unwrap();
     assert_eq!(recovered.source, "a\nB");
     assert_eq!(recovered.read_status, RecoveryReadStatus::TruncatedTail);
 }
@@ -246,14 +232,11 @@ fn checkpoint_removes_session_and_restarts_from_saved_base() {
     let temp = tempfile::tempdir().unwrap();
     let mut journal = RecoveryJournal::create(temp.path(), None, "one".to_owned()).unwrap();
     journal.record("two", selection(3), "rendered").unwrap();
-    assert!(journal.journal_path.exists());
+    assert!(journal.path().exists());
     journal.checkpoint(None, "two".to_owned()).unwrap();
-    assert!(!journal.journal_path.exists());
+    assert!(!journal.path().exists());
     journal.record("three", selection(5), "rendered").unwrap();
-    assert_eq!(
-        replay_journal(&journal.journal_path).unwrap().source,
-        "three"
-    );
+    assert_eq!(replay_journal(journal.path()).unwrap().source, "three");
 }
 
 #[test]
@@ -267,7 +250,7 @@ fn fingerprint_marks_external_base_change_without_losing_recovery() {
     fs::write(&file, "external").unwrap();
     journal.record("edited", selection(6), "rendered").unwrap();
 
-    let recovered = replay_journal(&journal.journal_path).unwrap();
+    let recovered = replay_journal(journal.path()).unwrap();
     assert_eq!(recovered.source, "edited");
     assert!(recovered.base_file_changed);
 }
@@ -333,7 +316,7 @@ fn append_failure_does_not_advance_in_memory_source_and_retry_is_complete() {
     let temp = tempfile::tempdir().unwrap();
     let mut journal = RecoveryJournal::create(temp.path(), None, "a".to_owned()).unwrap();
     journal.record("ab", selection(2), "rendered").unwrap();
-    let path = journal.journal_path.clone();
+    let path = journal.path().to_path_buf();
     let valid_prefix = fs::read(&path).unwrap();
 
     fs::remove_file(&path).unwrap();
@@ -358,10 +341,7 @@ fn base_write_failure_remains_retryable_without_creating_false_session() {
     fs::remove_file(&recovery_dir).unwrap();
     fs::create_dir(&recovery_dir).unwrap();
     assert!(journal.record("edited", selection(6), "rendered").unwrap());
-    assert_eq!(
-        replay_journal(&journal.journal_path).unwrap().source,
-        "edited"
-    );
+    assert_eq!(replay_journal(journal.path()).unwrap().source, "edited");
 }
 
 #[test]
@@ -380,7 +360,7 @@ fn long_session_compacts_atomically_and_preserves_latest_mode_and_selection() {
             .unwrap();
     }
 
-    let recovered = replay_journal(&journal.journal_path).unwrap();
+    let recovered = replay_journal(journal.path()).unwrap();
     assert_eq!(recovered.source, source);
     assert_eq!(recovered.selection, selection(source.len()));
     assert_eq!(recovered.view_mode, "rendered");
@@ -412,7 +392,7 @@ fn resident_recovery_backend_accepts_the_shared_source_transaction_contract() {
     )
     .unwrap();
 
-    let recovered = replay_journal(&journal.journal_path).unwrap();
+    let recovered = replay_journal(journal.path()).unwrap();
     assert_eq!(recovered.source, "edited");
     assert_eq!(
         recovered.selection,

@@ -94,11 +94,6 @@ pub(crate) fn source_editor_top_padding(dimensions: &ThemeDimensions) -> f32 {
     dimensions.editor_padding
 }
 
-/// Source 需要为 gutter 留出空间，正文左右留白保持为编辑器基础间距的一半。
-pub(crate) fn source_editor_horizontal_padding(dimensions: &ThemeDimensions) -> f32 {
-    dimensions.editor_padding * 0.5
-}
-
 pub(super) fn editor_bottom_padding(viewport_height: f32, dimensions: &ThemeDimensions) -> f32 {
     let scroll_trigger_padding = (dimensions.block_min_height * 0.75).max(16.0);
     dimensions.editor_padding + scroll_trigger_padding + viewport_height.max(0.0) * 0.5

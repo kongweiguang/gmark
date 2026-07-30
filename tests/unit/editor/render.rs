@@ -8,9 +8,9 @@ use super::{
     import_menu_split_index, in_window_menu_chrome_layout, menu_bar_button_width, menu_icon_slot,
     menu_items_visual_height_with_gaps, menu_panel_left, menu_panel_width_for_labels,
     menu_shortcut_slot, menu_shortcut_text, owned_menu_item_labels, rendered_row_top_gap,
-    scrollable_import_menu_scroll_height, source_editor_horizontal_padding,
-    submenu_bridge_geometry, supports_in_window_menu_for_target_os,
-    tibetan_font_fallbacks_for_target_os, top_level_menu_button_width, visible_menu_button_count,
+    scrollable_import_menu_scroll_height, submenu_bridge_geometry,
+    supports_in_window_menu_for_target_os, tibetan_font_fallbacks_for_target_os,
+    top_level_menu_button_width, visible_menu_button_count,
 };
 use crate::components::{AddLanguageConfig, SaveDocument, Undo};
 use crate::theme::Theme;
@@ -27,14 +27,6 @@ fn split_pane_ratio_keeps_both_panes_above_minimum_width() {
     assert_eq!(clamped_split_pane_ratio(0.2, 700.0), 0.4);
     assert_eq!(clamped_split_pane_ratio(0.8, 700.0), 0.6);
     assert_eq!(clamped_split_pane_ratio(0.1, 500.0), 0.5);
-}
-
-#[test]
-fn source_surface_uses_compact_horizontal_padding() {
-    let theme = Theme::default_theme();
-
-    assert_eq!(theme.dimensions.editor_padding, 24.0);
-    assert_eq!(source_editor_horizontal_padding(&theme.dimensions), 12.0);
 }
 
 #[test]

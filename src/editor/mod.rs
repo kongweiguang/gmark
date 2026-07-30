@@ -52,7 +52,6 @@ mod persistence;
 mod projection;
 mod recovery;
 pub(crate) mod render;
-pub(crate) use render::{source_editor_horizontal_padding, source_editor_top_padding};
 mod runtime_context;
 mod selection;
 mod source_format;

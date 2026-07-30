@@ -1,7 +1,7 @@
 // @author kongweiguang
 
+use super::super::html::render_chromium_pdf_html_with_base_dir;
 use super::{chromium_pdf_params, file_url_from_path, render_pdf, render_pdf_cancellable};
-use crate::export::html::render_chromium_pdf_html_with_base_dir;
 use crate::theme::Theme;
 use std::sync::atomic::AtomicBool;
 
