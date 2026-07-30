@@ -177,6 +177,7 @@ impl Editor {
             opened.text_encoding.clone(),
             opened.file_identity.clone(),
         );
+        #[cfg(not(test))]
         let source = source_document.text();
         #[cfg(not(test))]
         let recovery_journal = crate::config::GmarkConfigDirs::from_system()
@@ -219,7 +220,6 @@ impl Editor {
             virtual_undo_selections: Vec::new(),
             virtual_redo_selections: Vec::new(),
             pending_virtual_undo_selection: None,
-            last_stable_source_text: source,
             recovery_journal,
             external_file_conflict: false,
             recovered_session: false,
@@ -270,7 +270,6 @@ impl Editor {
             virtual_undo_selections: Vec::new(),
             virtual_redo_selections: Vec::new(),
             pending_virtual_undo_selection: None,
-            last_stable_source_text: source.to_owned(),
             recovery_journal,
             external_file_conflict: false,
             recovered_session: false,
@@ -391,7 +390,6 @@ impl Editor {
             virtual_undo_selections: Vec::new(),
             virtual_redo_selections: Vec::new(),
             pending_virtual_undo_selection: None,
-            last_stable_source_text: source,
             recovery_journal: Some(Arc::new(Mutex::new(
                 crate::recovery::RecoveryJournal::resume(&recovered),
             ))),
@@ -436,9 +434,11 @@ impl Editor {
             document_host.update(cx, |view, _cx| view.suspend_for_closed_tab());
         }
         self.tabs.closed.push(snapshot);
-        if self.tabs.closed.len() > CLOSED_TAB_LIMIT {
-            self.tabs.closed.remove(0);
-        }
+        enforce_closed_tab_budget(
+            &mut self.tabs.closed,
+            CLOSED_TAB_LIMIT,
+            CLOSED_TAB_RETAINED_BYTES_LIMIT,
+        );
     }
 
     pub(in crate::editor) fn request_close_tab_index(

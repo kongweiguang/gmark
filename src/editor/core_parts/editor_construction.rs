@@ -358,6 +358,7 @@ impl Editor {
             })
             .or_else(|| document.first_root())
             .map(|block| block.entity_id());
+        let last_stable_source = HistorySource::capture(source_document.snapshot(), normalized);
 
         let mut editor = Self {
             accessibility_bridge: None,
@@ -491,7 +492,7 @@ impl Editor {
             virtual_redo_selections: Vec::new(),
             pending_virtual_undo_selection: None,
             last_selection_snapshot: Self::empty_selection_snapshot(),
-            last_stable_source_text: normalized,
+            last_stable_source,
             pending_dirty_source: None,
             history_restore_in_progress: false,
             image_reference_definitions: Arc::default(),

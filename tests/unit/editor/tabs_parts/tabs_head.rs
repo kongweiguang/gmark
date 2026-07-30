@@ -186,7 +186,6 @@ async fn switching_tabs_restores_document_history_view_and_selection(
         let first = editor.capture_active_tab(cx);
         let mut second = first;
         second.source_document = SourceDocument::new("second").into();
-        second.last_stable_source_text = "second".to_owned();
         second.view_mode = ViewMode::Source;
         second.selection = UndoSelectionSnapshot::collapsed(3, SourceAffinity::Before);
         editor.tabs.records.push(super::TabRecord {
@@ -197,16 +196,59 @@ async fn switching_tabs_restores_document_history_view_and_selection(
         // Restore the first snapshot as active after the fixture used ownership transfer.
         let first_snapshot = editor.tabs.records[1].snapshot.as_ref().unwrap();
         editor.source_document = SourceDocument::new("first").into();
-        editor.last_stable_source_text = "first".to_owned();
+        editor.last_stable_source = crate::editor::HistorySource::capture(
+            editor.source_document.snapshot(),
+            "first".to_owned(),
+        );
         let _ = first_snapshot;
         assert!(editor.switch_to_tab_index(1, cx));
         assert_eq!(editor.source_document.text(), "second");
+        assert!(editor.last_stable_source.matches_text("second"));
         assert_eq!(editor.view_mode, ViewMode::Source);
         assert_eq!(editor.last_selection_snapshot.range(), 3..3);
         assert_eq!(editor.inactive_tab_count(), 1);
         assert!(editor.switch_to_tab_index(0, cx));
         assert_eq!(editor.source_document.text(), "first");
     });
+}
+
+#[test]
+fn closed_tab_budget_evicts_oldest_complete_snapshots() {
+    let snapshot = |text: &str, path: &str| {
+        super::Editor::snapshot_for_opened_document(
+            crate::document_io::OpenedMarkdown {
+                text: text.to_owned(),
+                encoding: crate::document_io::DocumentEncoding::Utf8,
+                text_encoding: gmark_document_core::TextEncoding::Utf8 { bom: false },
+                file_identity: None,
+                loading_limits: gmark_document_core::LoadingPolicy::default().effective_limits(),
+            },
+            PathBuf::from(path),
+        )
+    };
+    let mut closed = vec![
+        snapshot("aaaa", "oldest.md"),
+        snapshot("bbbb", "middle.md"),
+        snapshot("cccc", "latest.md"),
+    ];
+
+    super::enforce_closed_tab_budget(&mut closed, 20, 8);
+    assert_eq!(closed.len(), 2);
+    assert_eq!(
+        closed[0].file_path.as_deref(),
+        Some(std::path::Path::new("middle.md"))
+    );
+    assert_eq!(
+        closed[1].file_path.as_deref(),
+        Some(std::path::Path::new("latest.md"))
+    );
+
+    super::enforce_closed_tab_budget(&mut closed, 1, usize::MAX);
+    assert_eq!(closed.len(), 1);
+    assert_eq!(
+        closed[0].file_path.as_deref(),
+        Some(std::path::Path::new("latest.md"))
+    );
 }
 
 #[gpui::test]

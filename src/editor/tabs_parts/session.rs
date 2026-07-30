@@ -632,6 +632,7 @@ impl Editor {
         self.recovery_task = None;
         self.file_watch_task = None;
         self.file_watch_guard = None;
+        self.last_stable_source = HistorySource::empty();
 
         DocumentTabSnapshot {
             document_host: self.document_host.take(),
@@ -659,7 +660,6 @@ impl Editor {
             virtual_undo_selections: mem::take(&mut self.virtual_undo_selections),
             virtual_redo_selections: mem::take(&mut self.virtual_redo_selections),
             pending_virtual_undo_selection: self.pending_virtual_undo_selection.take(),
-            last_stable_source_text: mem::take(&mut self.last_stable_source_text),
             recovery_journal: self.recovery_journal.take(),
             external_file_conflict: self.external_file_conflict,
             recovered_session: self.recovered_session,
@@ -696,7 +696,7 @@ impl Editor {
         // 搜索结果导航属于即将安装的目标标签。replace_document 会提前消费该请求，
         // 因此先暂存，待快照选择恢复完毕后再执行，避免目标行被旧光标覆盖。
         let pending_navigation = self.take_pending_workspace_navigation();
-        self.replace_document_from_markdown(source, target_path, cx);
+        self.replace_document_from_markdown(source.clone(), target_path, cx);
 
         self.source_document = snapshot.source_document;
         self.source_encoding = snapshot.source_encoding;
@@ -720,7 +720,7 @@ impl Editor {
         self.virtual_undo_selections = snapshot.virtual_undo_selections;
         self.virtual_redo_selections = snapshot.virtual_redo_selections;
         self.pending_virtual_undo_selection = snapshot.pending_virtual_undo_selection;
-        self.last_stable_source_text = snapshot.last_stable_source_text;
+        self.last_stable_source = HistorySource::capture(self.source_document.snapshot(), source);
         self.recovery_journal = snapshot.recovery_journal;
         self.external_file_conflict = snapshot.external_file_conflict;
         self.recovered_session = snapshot.recovered_session;

@@ -17,7 +17,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::{
-    DocumentKind, Editor, ExternalConflictPreview, FileOpenFailure, HistoryEntry,
+    DocumentKind, Editor, ExternalConflictPreview, FileOpenFailure, HistoryEntry, HistorySource,
     PendingUndoCapture, UndoSelectionSnapshot, ViewMode,
     render::{
         DialogButtonKind, DialogTitleIcon, DocumentToolbarAction, clamped_floating_panel_origin,
@@ -29,6 +29,7 @@ use crate::config::EditorSettings;
 use crate::window_chrome::middle_ellipsis;
 
 const CLOSED_TAB_LIMIT: usize = 20;
+const CLOSED_TAB_RETAINED_BYTES_LIMIT: usize = 64 * 1024 * 1024;
 const TAB_CLOSE_ICON: &str = "icon/ui/close.svg";
 const NEW_TAB_ICON: &str = "icon/ui/plus.svg";
 const TAB_DOCUMENT_ICON: &str = "icon/workspace/markdown.svg";
@@ -144,13 +145,49 @@ struct DocumentTabSnapshot {
     virtual_undo_selections: Vec<UndoSelectionSnapshot>,
     virtual_redo_selections: Vec<UndoSelectionSnapshot>,
     pending_virtual_undo_selection: Option<UndoSelectionSnapshot>,
-    last_stable_source_text: String,
     recovery_journal: Option<Arc<Mutex<crate::recovery::RecoveryJournal>>>,
     external_file_conflict: bool,
     recovered_session: bool,
     show_encoding_conversion_dialog: bool,
     external_conflict_preview: Option<ExternalConflictPreview>,
     allow_external_overwrite_once: bool,
+}
+
+impl DocumentTabSnapshot {
+    /// 以逻辑源码量约束关闭历史；Rope 共享会让实际驻留更低，但绝不能让大量
+    /// 大文档及其历史因固定条数上限长期留在进程中。
+    fn retained_source_bytes(&self) -> usize {
+        let history_bytes = self
+            .undo_history
+            .iter()
+            .chain(&self.redo_history)
+            .map(|entry| entry.source.len())
+            .chain(
+                self.pending_undo_capture
+                    .iter()
+                    .map(|pending| pending.snapshot.source.len()),
+            )
+            .fold(0usize, usize::saturating_add);
+        self.source_document.len().saturating_add(history_bytes)
+    }
+}
+
+fn enforce_closed_tab_budget(
+    closed: &mut Vec<DocumentTabSnapshot>,
+    count_limit: usize,
+    retained_bytes_limit: usize,
+) {
+    // 最新一项始终可恢复；超限时按关闭顺序淘汰更旧的完整状态。
+    while closed.len() > 1
+        && (closed.len() > count_limit
+            || closed
+                .iter()
+                .map(DocumentTabSnapshot::retained_source_bytes)
+                .fold(0usize, usize::saturating_add)
+                > retained_bytes_limit)
+    {
+        closed.remove(0);
+    }
 }
 
 struct TabRecord {

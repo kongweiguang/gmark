@@ -164,7 +164,6 @@ impl Editor {
         self.split_projection_task = None;
         self.split_projection_scheduled_revision = None;
         self.source_document = gmark_document::SourceDocument::new(&markdown).into();
-        let normalized = self.source_document.text();
         self.projection_cache = None;
         self.table_cells.clear();
         self.rebuild_primary_projection_from_source(cx);
@@ -201,7 +200,6 @@ impl Editor {
         self.redo_history.clear();
         self.pending_undo_capture = None;
         self.last_selection_snapshot = Self::empty_selection_snapshot();
-        self.last_stable_source_text = normalized;
         self.history_restore_in_progress = false;
         self.checkpoint_recovery_journal();
         self.refresh_stable_document_snapshot(cx);

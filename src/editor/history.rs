@@ -69,8 +69,9 @@ impl Editor {
     }
 
     pub(super) fn capture_history_entry(&self, kind: UndoCaptureKind, cx: &App) -> HistoryEntry {
+        let source_text = self.current_document_source(cx);
         HistoryEntry {
-            source_text: self.current_document_source(cx),
+            source: HistorySource::capture(self.source_document.snapshot(), source_text),
             source_format: self.source_document.source_format(),
             selection: self.capture_source_selection_snapshot(cx),
             timestamp: Instant::now(),
@@ -79,13 +80,13 @@ impl Editor {
     }
 
     pub(super) fn capture_stable_history_entry(&self, kind: UndoCaptureKind) -> HistoryEntry {
-        let source_text = self.last_stable_source_text.clone();
+        let source_text = self.last_stable_source.text();
         HistoryEntry {
             source_format: source_format_for_history_text(
                 &source_text,
                 self.source_document.source_format(),
             ),
-            source_text,
+            source: self.last_stable_source.clone(),
             selection: self.last_selection_snapshot,
             timestamp: Instant::now(),
             kind,
@@ -127,13 +128,15 @@ impl Editor {
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         if self.virtual_surface.is_some() {
             self.pending_dirty_source = None;
-            self.last_stable_source_text.clear();
+            self.last_stable_source = HistorySource::empty();
             return;
         }
-        self.last_stable_source_text = self
+        let source_text = self
             .pending_dirty_source
             .take()
             .unwrap_or_else(|| self.current_document_source_from_cache(cx));
+        self.last_stable_source =
+            HistorySource::capture(self.source_document.snapshot(), source_text);
     }
 
     pub(super) fn finalize_pending_undo_capture(&mut self, cx: &mut Context<Self>) {
@@ -161,15 +164,17 @@ impl Editor {
             .unwrap_or_else(|| self.current_document_source(cx));
         let Some(pending) = self.pending_undo_capture.take() else {
             self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
-            self.last_stable_source_text = current_source;
+            self.last_stable_source =
+                HistorySource::capture(self.source_document.snapshot(), current_source);
             return;
         };
 
-        if current_source == pending.snapshot.source_text
+        if pending.snapshot.source.matches_text(&current_source)
             && self.source_document.source_format() == pending.snapshot.source_format
         {
             self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
-            self.last_stable_source_text = current_source;
+            self.last_stable_source =
+                HistorySource::capture(self.source_document.snapshot(), current_source);
             return;
         }
 
@@ -203,7 +208,8 @@ impl Editor {
             entry.kind = UndoCaptureKind::ImeCompositionCommit;
         }
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
-        self.last_stable_source_text = current_source;
+        self.last_stable_source =
+            HistorySource::capture(self.source_document.snapshot(), current_source);
     }
 
     pub(super) fn apply_selection_snapshot_in_current_mode(
@@ -340,18 +346,19 @@ impl Editor {
     }
 
     pub(super) fn restore_history_entry(&mut self, entry: &HistoryEntry, cx: &mut Context<Self>) {
-        self.sync_source_document_from_projection(&entry.source_text);
+        // 只有真正执行 undo/redo 时才物化完整正文，历史长期驻留保持 Rope COW。
+        let source_text = entry.source.text();
+        self.sync_source_document_from_projection(&source_text);
         // 历史快照来自 UI 输入与源码同步的交界处。即使旧版本或异常事件顺序留下了
         // 换行数量不匹配的快照，也必须修复为可序列化格式，不能在撤销时终止主线程。
-        let format =
-            source_format_for_history_text(&entry.source_text, entry.source_format.clone());
+        let format = source_format_for_history_text(&source_text, entry.source_format.clone());
         let _ = self.source_document.restore_source_format(format);
         match self.view_mode {
             ViewMode::Rendered | ViewMode::Preview => {
                 self.rebuild_primary_projection_from_source_reusing(cx);
             }
             ViewMode::Source | ViewMode::Split => {
-                let block = Self::new_block(cx, BlockRecord::paragraph(entry.source_text.clone()));
+                let block = Self::new_block(cx, BlockRecord::paragraph(source_text));
                 block.update(cx, |block, _cx| block.set_source_document_mode());
                 self.document.replace_roots(vec![block], cx);
                 self.table_cells.clear();

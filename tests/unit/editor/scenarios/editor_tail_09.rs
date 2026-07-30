@@ -665,7 +665,7 @@ async fn virtualized_undo_redo_uses_rope_inverse_without_full_editor_snapshot(
         });
     });
     editor.update(cx, |editor, cx| {
-        assert!(editor.last_stable_source_text.is_empty());
+        assert!(editor.last_stable_source.is_empty());
         assert_eq!(editor.virtual_undo_selections.len(), 1);
 
         editor.undo_document(cx);
@@ -676,7 +676,7 @@ async fn virtualized_undo_redo_uses_rope_inverse_without_full_editor_snapshot(
         let redone = editor.source_document.text();
         assert!(redone.starts_with("paragraph 0!"));
         assert!(redone.ends_with("paragraph 9999"));
-        assert!(editor.last_stable_source_text.is_empty());
+        assert!(editor.last_stable_source.is_empty());
     });
 }
 

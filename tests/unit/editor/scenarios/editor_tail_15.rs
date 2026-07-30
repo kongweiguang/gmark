@@ -1,5 +1,49 @@
 // @author kongweiguang
 
+#[test]
+fn history_source_uses_rope_snapshot_and_falls_back_only_when_projection_differs() {
+    let document = gmark_document::SourceDocument::new("alpha\n世界🙂");
+    let shared = crate::editor::HistorySource::capture(document.snapshot(), document.text());
+    assert!(matches!(
+        shared,
+        crate::editor::HistorySource::Snapshot(_)
+    ));
+    assert!(shared.matches_text("alpha\n世界🙂"));
+
+    let divergent =
+        crate::editor::HistorySource::capture(document.snapshot(), "projection lag".to_owned());
+    assert!(matches!(
+        divergent,
+        crate::editor::HistorySource::Materialized(_)
+    ));
+    assert!(divergent.matches_text("projection lag"));
+}
+
+#[test]
+fn two_hundred_large_document_history_entries_retain_rope_snapshots() {
+    let mut document = gmark_document::SourceDocument::new(&"x".repeat(256 * 1024));
+    let mut history = Vec::with_capacity(200);
+
+    for _ in 0..200 {
+        history.push(crate::editor::HistorySource::capture(
+            document.snapshot(),
+            document.text(),
+        ));
+        let end = document.len();
+        document
+            .apply_transaction(gmark_document::Transaction::new(
+                document.revision(),
+                vec![gmark_document::TextEdit::new(end..end, "x")],
+            ))
+            .expect("append transaction should succeed");
+    }
+
+    assert_eq!(history.len(), 200);
+    assert!(history
+        .iter()
+        .all(|source| matches!(source, crate::editor::HistorySource::Snapshot(_))));
+}
+
 #[gpui::test]
 async fn dirty_editor_flushes_replayable_recovery_and_save_checkpoints_it(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
@@ -256,7 +300,8 @@ async fn malformed_history_line_endings_are_repaired_without_panicking(cx: &mut 
     editor.update(cx, |editor, cx| {
         let mut history =
             editor.capture_history_entry(crate::components::UndoCaptureKind::NonCoalescible, cx);
-        history.source_text = "a\nb".to_owned();
+        history.source =
+            crate::editor::HistorySource::Materialized(std::sync::Arc::from("a\nb"));
         history.source_format = gmark_document::SourceFormatSnapshot {
             utf8_bom: false,
             endings: Vec::new(),

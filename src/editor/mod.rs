@@ -374,7 +374,8 @@ pub struct Editor {
     virtual_redo_selections: Vec<UndoSelectionSnapshot>,
     pending_virtual_undo_selection: Option<UndoSelectionSnapshot>,
     last_selection_snapshot: UndoSelectionSnapshot,
-    last_stable_source_text: String,
+    /// 最近一次稳定投影的正文；正常路径共享 SourceDocument Rope，不另存完整 String。
+    last_stable_source: HistorySource,
     /// `mark_dirty` 已物化的当前源码，供同一事务的历史收尾复用，避免长文档重复序列化。
     pending_dirty_source: Option<String>,
     history_restore_in_progress: bool,
@@ -529,10 +530,57 @@ fn saturating_source_offset(offset: u64) -> usize {
     offset.min(usize::MAX as u64) as usize
 }
 
+/// 历史正文优先共享 SourceDocument 的 Rope；投影暂时不同步时才保留独立文本。
+#[derive(Clone, Debug)]
+enum HistorySource {
+    Snapshot(gmark_document::DocumentSnapshot),
+    Materialized(Arc<str>),
+}
+
+impl HistorySource {
+    fn capture(snapshot: gmark_document::DocumentSnapshot, text: String) -> Self {
+        if snapshot.matches_text(&text) {
+            Self::Snapshot(snapshot)
+        } else {
+            Self::Materialized(text.into())
+        }
+    }
+
+    fn matches_text(&self, text: &str) -> bool {
+        match self {
+            Self::Snapshot(snapshot) => snapshot.matches_text(text),
+            Self::Materialized(source) => source.as_ref() == text,
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            Self::Snapshot(snapshot) => snapshot.text(),
+            Self::Materialized(source) => source.to_string(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Snapshot(snapshot) => snapshot.len(),
+            Self::Materialized(source) => source.len(),
+        }
+    }
+
+    fn empty() -> Self {
+        Self::Materialized(Arc::from(""))
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// One undo history entry containing source text and selection state.
 #[derive(Clone, Debug)]
 struct HistoryEntry {
-    source_text: String,
+    source: HistorySource,
     source_format: gmark_document::SourceFormatSnapshot,
     selection: UndoSelectionSnapshot,
     timestamp: Instant,
