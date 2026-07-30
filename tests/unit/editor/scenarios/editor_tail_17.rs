@@ -1,5 +1,7 @@
 // @author kongweiguang
 
+include!("editor_tail_17/smooth_scroll.rs");
+
 #[gpui::test]
 async fn table_fragment_merge_is_explicit_and_one_undo_step(cx: &mut TestAppContext) {
     init_editor_test_app(cx);

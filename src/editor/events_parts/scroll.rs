@@ -196,40 +196,69 @@ impl Editor {
 
     pub(crate) fn on_editor_scroll_wheel(
         &mut self,
-        _event: &ScrollWheelEvent,
-        _window: &mut Window,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.handle_scroll_wheel(SplitScrollDriver::Source, event, window, cx);
         if let Some(state) = self.split_preview.as_mut() {
             state.scroll_driver = Some(SplitScrollDriver::Source);
         }
-        self.bump_scrollbar_visibility(cx);
+        if self.extend_scrollbar_visibility(cx) {
+            cx.notify();
+        }
     }
 
     pub(crate) fn on_split_preview_scroll_wheel(
         &mut self,
-        _event: &ScrollWheelEvent,
-        _window: &mut Window,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.handle_scroll_wheel(SplitScrollDriver::Preview, event, window, cx);
         if let Some(state) = self.split_preview.as_mut() {
             state.scroll_driver = Some(SplitScrollDriver::Preview);
-            self.bump_split_preview_scrollbar_visibility(cx);
+            if self.extend_split_preview_scrollbar_visibility(cx) {
+                cx.notify();
+            }
         }
     }
 
-    pub(crate) fn bump_split_preview_scrollbar_visibility(&mut self, cx: &mut Context<Self>) {
+    fn extend_split_preview_scrollbar_visibility(&mut self, cx: &mut Context<Self>) -> bool {
         let duration = Duration::from_millis(900);
-        self.split_preview_scrollbar_visible_until = Instant::now() + duration;
-        let weak_editor = cx.entity().downgrade();
-        self.split_preview_scrollbar_fade_task = Some(cx.spawn(
-            async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                cx.background_executor()
-                    .timer(duration + Duration::from_millis(50))
-                    .await;
-                let _ = weak_editor.update(cx, |_this, cx| cx.notify());
-            },
-        ));
+        let now = Instant::now();
+        let became_visible = now > self.split_preview_scrollbar_visible_until;
+        self.split_preview_scrollbar_visible_until = now + duration;
+
+        if self.split_preview_scrollbar_fade_task.is_none() {
+            self.split_preview_scrollbar_fade_task = Some(cx.spawn(
+                async move |this: WeakEntity<Self>, cx: &mut AsyncApp| loop {
+                    let remaining = match this.update(cx, |this, _cx| {
+                        this.split_preview_scrollbar_visible_until
+                            .checked_duration_since(Instant::now())
+                    }) {
+                        Ok(Some(remaining)) if !remaining.is_zero() => remaining,
+                        Ok(_) => {
+                            let _ = this.update(cx, |this, cx| {
+                                this.split_preview_scrollbar_fade_task = None;
+                                cx.notify();
+                            });
+                            break;
+                        }
+                        Err(_) => break,
+                    };
+                    cx.background_executor()
+                        .timer(remaining + Duration::from_millis(50))
+                        .await;
+                },
+            ));
+        }
+
+        became_visible
+    }
+
+    pub(crate) fn bump_split_preview_scrollbar_visibility(&mut self, cx: &mut Context<Self>) {
+        self.extend_split_preview_scrollbar_visibility(cx);
         cx.notify();
     }
 
@@ -297,15 +326,16 @@ impl Editor {
     /// Applies an absolute vertical scroll offset, clamped to the scrollable
     /// range. Offsets run from 0 at the top to `-max_offset` at the bottom.
     pub(super) fn set_vertical_scroll_offset(&mut self, target_y: Pixels, cx: &mut Context<Self>) {
+        self.cancel_smooth_scroll();
         let max_offset_y = self.scroll_handle.max_offset().height.max(px(0.0));
         let mut offset = self.scroll_handle.offset();
-        offset.y = target_y.min(px(0.0)).max(-max_offset_y);
+        offset.y = Self::clamp_vertical_scroll_offset(target_y, max_offset_y);
         self.scroll_handle.set_offset(offset);
         // A direct viewport scroll should stick, so cancel any queued pass that
         // would otherwise re-center the active block on the next frame.
         self.pending_scroll_active_block_into_view = false;
         self.pending_scroll_recheck_after_layout = false;
-        self.bump_scrollbar_visibility(cx);
+        self.extend_scrollbar_visibility(cx);
         cx.notify();
     }
 
@@ -317,6 +347,7 @@ impl Editor {
         max_scroll_y: f32,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_smooth_scroll();
         self.scrollbar_drag = Some(super::ScrollbarDragSession {
             pointer_offset_y: pointer_offset_y.clamp(0.0, thumb_height.max(0.0)),
             track_height,
@@ -325,7 +356,7 @@ impl Editor {
         });
         self.pending_scroll_active_block_into_view = false;
         self.pending_scroll_recheck_after_layout = false;
-        self.bump_scrollbar_visibility(cx);
+        self.extend_scrollbar_visibility(cx);
         cx.notify();
     }
 
@@ -334,6 +365,7 @@ impl Editor {
         pointer_y_in_track: f32,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_smooth_scroll();
         let Some(drag) = self.scrollbar_drag else {
             return;
         };
@@ -350,13 +382,13 @@ impl Editor {
         let mut offset = self.scroll_handle.offset();
         offset.y = -px(scroll_y);
         self.scroll_handle.set_offset(offset);
-        self.bump_scrollbar_visibility(cx);
+        self.extend_scrollbar_visibility(cx);
         cx.notify();
     }
 
     pub(crate) fn end_scrollbar_drag(&mut self, cx: &mut Context<Self>) {
         if self.scrollbar_drag.take().is_some() {
-            self.bump_scrollbar_visibility(cx);
+            self.extend_scrollbar_visibility(cx);
             cx.notify();
         }
     }
@@ -369,6 +401,7 @@ impl Editor {
         max_scroll_y: f32,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_smooth_scroll();
         self.split_preview_scrollbar_drag = Some(super::ScrollbarDragSession {
             pointer_offset_y: pointer_offset_y.clamp(0.0, thumb_height.max(0.0)),
             track_height,
@@ -386,6 +419,7 @@ impl Editor {
         pointer_y_in_track: f32,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_smooth_scroll();
         let Some(drag) = self.split_preview_scrollbar_drag else {
             return;
         };

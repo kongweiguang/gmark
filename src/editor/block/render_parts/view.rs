@@ -12,6 +12,7 @@ impl Render for Block {
         let focused = !self.is_read_only() && self.focus_handle.is_focused(window);
         let code_language_focused =
             !self.is_read_only() && self.code_language_focus_handle.is_focused(window);
+        let window_active = window.is_window_active();
         let selection_link_focused = self
             .selection_toolbar_link_input
             .as_ref()
@@ -20,7 +21,7 @@ impl Render for Block {
         if !code_language_focused {
             self.code_language_menu_open = false;
         }
-        let input_active = focused || code_language_focused;
+        let input_active = window_active && (focused || code_language_focused);
         if contextual_editing_focused {
             self.refresh_slash_menu(cx);
             self.refresh_selection_toolbar();
@@ -206,9 +207,9 @@ impl Render for Block {
                     BlockKind::HtmlBlock | BlockKind::MathBlock | BlockKind::MermaidBlock
                 ))
         {
-            if focused && self.cursor_blink_task.is_none() {
+            if window_active && focused && self.cursor_blink_task.is_none() {
                 self.start_cursor_blink(cx);
-            } else if !focused && self.cursor_blink_task.is_some() {
+            } else if (!window_active || !focused) && self.cursor_blink_task.is_some() {
                 self.cursor_blink_task = None;
             }
             let compact_source_host = self.compact_source_host();

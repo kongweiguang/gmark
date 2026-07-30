@@ -522,7 +522,13 @@ impl Editor {
         }
         self.menu_window_activation_subscription =
             Some(cx.observe_window_activation(window, |editor, window, cx| {
-                if !window.is_window_active() {
+                let window_active = window.is_window_active();
+                if let Some(block) = editor.focused_edit_target(window, cx) {
+                    block.update(cx, |block, cx| {
+                        block.set_cursor_blink_window_active(window_active, cx)
+                    });
+                }
+                if !window_active {
                     // 失焦只需关闭瞬时下拉面板，不隐藏一级导航。否则窗口重回前台时
                     // 会看起来像菜单丢失，也与高频浏览路径相冲突。
                     editor.close_menu_panels(cx);

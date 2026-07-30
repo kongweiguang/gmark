@@ -348,6 +348,9 @@ pub struct Editor {
     scrollbar_thumb_hovered: bool,
     scrollbar_visible_until: Instant,
     scrollbar_fade_task: Option<Task<()>>,
+    /// 鼠标滚轮的行级输入在短时间内插值；触控板像素输入始终绕过该状态。
+    smooth_scroll_animation: Option<SmoothScrollAnimation>,
+    smooth_scroll_task: Option<Task<()>>,
     split_preview_scrollbar_hovered: bool,
     split_preview_scrollbar_visible_until: Instant,
     split_preview_scrollbar_fade_task: Option<Task<()>>,
@@ -447,6 +450,16 @@ struct SplitPreviewState {
 enum SplitScrollDriver {
     Source,
     Preview,
+}
+
+/// 单个权威动画同时服务源码与 Split 预览，连续滚轮只更新目标而不排队。
+#[derive(Clone, Copy, Debug)]
+struct SmoothScrollAnimation {
+    driver: SplitScrollDriver,
+    start_y: Pixels,
+    target_y: Pixels,
+    last_applied_y: Pixels,
+    started_at: Instant,
 }
 
 /// Selected row or column in a rendered native table.

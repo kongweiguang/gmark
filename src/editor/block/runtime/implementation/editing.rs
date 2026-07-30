@@ -2,6 +2,13 @@
 
 use super::*;
 
+pub(super) const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
+pub(super) fn cursor_opacity_for_elapsed(elapsed: Duration) -> f32 {
+    let phase = elapsed.as_millis() / CURSOR_BLINK_INTERVAL.as_millis();
+    if phase.is_multiple_of(2) { 1.0 } else { 0.0 }
+}
+
 impl Block {
     pub(in super::super) fn mark_changed(&mut self, cx: &mut Context<Self>) {
         self.sync_edit_mode_from_kind();
@@ -380,12 +387,9 @@ impl Block {
         cx.notify();
     }
 
-    /// Starts the cursor blink loop: a repeating background timer every 33ms
-    /// that calls `cx.notify()` to repaint the cursor — but only while the
-    /// cursor opacity is actually animating. During the first 0.5 s after
-    /// each `cursor_blink_epoch` reset (which arrow keys / typing trigger),
-    /// opacity is pinned to 1.0, so a repaint would just re-do the full
-    /// projection rebuild for no visible change.
+    /// Starts the cursor blink loop. A caret only has two visually meaningful
+    /// states, so repaint at the 500ms phase boundary instead of sampling a
+    /// cosine at 30Hz and rebuilding the editor while the user is idle.
     ///
     /// The blink task is automatically cancelled when the block loses focus
     /// (the task handle is dropped in [`Block::render`]).
@@ -393,15 +397,9 @@ impl Block {
         self.cursor_blink_epoch = Instant::now();
         self.cursor_blink_task = Some(cx.spawn(
             async |this: WeakEntity<Block>, cx: &mut AsyncApp| loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(33))
-                    .await;
+                cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
                 if this
-                    .update(cx, |this: &mut Block, cx: &mut Context<Block>| {
-                        if this.cursor_blink_epoch.elapsed().as_secs_f32() >= 0.5 {
-                            cx.notify();
-                        }
-                    })
+                    .update(cx, |_this: &mut Block, cx: &mut Context<Block>| cx.notify())
                     .is_err()
                 {
                     break;
@@ -410,15 +408,18 @@ impl Block {
         ));
     }
 
-    /// Cosine-based smooth blink: fully opaque for 0.5s, then oscillates
-    /// with a period of ~1s (33ms x 30 ticks ~= 1s).
-    pub fn cursor_opacity(&self) -> f32 {
-        let elapsed = self.cursor_blink_epoch.elapsed().as_secs_f32();
-        if elapsed < 0.5 {
-            return 1.0;
+    /// 窗口失活时取消定时器并保持光标常亮；重新激活后的 Block render 会按需重启。
+    pub(crate) fn set_cursor_blink_window_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.cursor_blink_epoch = Instant::now();
+        if !active {
+            self.cursor_blink_task = None;
         }
-        let t = elapsed - 0.5;
-        (f32::cos(t * std::f32::consts::TAU) + 1.0) / 2.0
+        cx.notify();
+    }
+
+    /// Standard two-phase caret blink: visible for 500ms, hidden for 500ms.
+    pub fn cursor_opacity(&self) -> f32 {
+        cursor_opacity_for_elapsed(self.cursor_blink_epoch.elapsed())
     }
 
     pub fn cursor_offset(&self) -> usize {

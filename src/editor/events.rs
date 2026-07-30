@@ -15,8 +15,8 @@ use anyhow::{Context as _, anyhow};
 use gpui::*;
 
 use super::{
-    Editor, ScrollbarDragSession, SplitScrollDriver, TableCellBinding, ViewMode, render,
-    render::supports_in_window_menu, tree,
+    Editor, ScrollbarDragSession, SmoothScrollAnimation, SplitScrollDriver, TableCellBinding,
+    ViewMode, render, render::supports_in_window_menu, tree,
 };
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::{
@@ -42,6 +42,8 @@ mod preflight;
 mod quote_shortcuts;
 #[path = "events_parts/scroll.rs"]
 mod scroll;
+#[path = "events_parts/smooth_scroll.rs"]
+mod smooth_scroll;
 #[path = "events_parts/state_machine.rs"]
 mod state_machine;
 #[path = "input/events/toggle_task.rs"]

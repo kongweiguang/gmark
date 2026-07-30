@@ -2,19 +2,13 @@
 
 //! Bench: blink throttle
 //!
-//! Validates commit `cc7a1c4 perf(editor): suppress blink notify while
-//! cursor is steady`. This commit does NOT speed up a function — it changes
-//! WHETHER the blink task calls `cx.notify()`. Pre-commit, notify fires
-//! 30×/sec while focused, scheduling a full render of every visible block
-//! each tick. Post-commit, notify fires only after the cursor blink epoch
-//! has elapsed ≥ 0.5 s; arrow keys / typing reset that epoch, so during
-//! active editing no blink-driven notify fires at all.
+//! Tracks the caret-blink scheduling decision. The original smooth cosine
+//! sampled opacity and notified the editor 30×/sec while idle. The current
+//! two-phase caret only needs one transition every 500ms, reducing sustained
+//! repaint pressure from 30Hz to 2Hz without changing editing semantics.
 //!
-//! The microbench can only measure the *cost added* by the gate (a single
-//! `Instant::elapsed()` comparison). The *savings* is the entire
-//! `Block::render` × every visible block per suppressed tick — only
-//! observable in a real frame-time benchmark with gpui standing up (see
-//! `render_loop.rs` for a per-frame simulation that includes this gate).
+//! The microbench only measures phase calculation. The actual saving is the
+//! 28 avoided editor renders per second and must be verified in a real app.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -31,11 +25,10 @@ fn blink_throttle(c: &mut Criterion) {
             black_box(should_notify);
         });
     });
-    group.bench_function("current (elapsed gate)", |b| {
+    group.bench_function("current (500ms phase)", |b| {
         b.iter(|| {
-            // Post-commit: skip work while cursor opacity is pinned to 1.0.
-            let should_notify = epoch.elapsed().as_secs_f32() >= 0.5;
-            black_box(should_notify);
+            let phase = epoch.elapsed().as_millis() / 500;
+            black_box(phase.is_multiple_of(2));
         });
     });
     group.finish();

@@ -472,6 +472,8 @@ impl Editor {
             scrollbar_thumb_hovered: false,
             scrollbar_visible_until: Instant::now(),
             scrollbar_fade_task: None,
+            smooth_scroll_animation: None,
+            smooth_scroll_task: None,
             split_preview_scrollbar_hovered: false,
             split_preview_scrollbar_visible_until: Instant::now(),
             split_preview_scrollbar_fade_task: None,

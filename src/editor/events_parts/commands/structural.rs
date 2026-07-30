@@ -3,6 +3,40 @@
 use super::*;
 
 impl Editor {
+    pub(crate) fn extend_scrollbar_visibility(&mut self, cx: &mut Context<Self>) -> bool {
+        let duration = Duration::from_millis(900);
+        let now = Instant::now();
+        let became_visible = now > self.scrollbar_visible_until;
+        self.scrollbar_visible_until = now + duration;
+
+        if self.scrollbar_fade_task.is_none() {
+            self.scrollbar_fade_task = Some(cx.spawn(
+                async move |this: WeakEntity<Self>, cx: &mut AsyncApp| loop {
+                    let remaining = match this.update(cx, |this, _cx| {
+                        this.scrollbar_visible_until
+                            .checked_duration_since(Instant::now())
+                    }) {
+                        Ok(Some(remaining)) if !remaining.is_zero() => remaining,
+                        Ok(_) => {
+                            let _ = this.update(cx, |this, cx| {
+                                this.scrollbar_fade_task = None;
+                                cx.notify();
+                            });
+                            break;
+                        }
+                        Err(_) => break,
+                    };
+                    // 给最后一个滚轮事件留少量调度余量；deadline 延长时复用同一任务。
+                    cx.background_executor()
+                        .timer(remaining + Duration::from_millis(50))
+                        .await;
+                },
+            ));
+        }
+
+        became_visible
+    }
+
     pub(in crate::editor) fn clone_block_subtree(
         block: &Entity<super::Block>,
         cx: &mut Context<Self>,
@@ -357,22 +391,7 @@ impl Editor {
     }
 
     pub(crate) fn bump_scrollbar_visibility(&mut self, cx: &mut Context<Self>) {
-        let duration = Duration::from_millis(900);
-        self.scrollbar_visible_until = Instant::now() + duration;
-
-        let weak_editor = cx.entity().downgrade();
-        self.scrollbar_fade_task = Some(cx.spawn(
-            async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                cx.background_executor()
-                    .timer(duration + Duration::from_millis(50))
-                    .await;
-                let _ = weak_editor.update(cx, |this, cx| {
-                    this.scrollbar_fade_task = None;
-                    cx.notify();
-                });
-            },
-        ));
-
+        self.extend_scrollbar_visibility(cx);
         cx.notify();
     }
 
