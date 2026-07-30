@@ -28,6 +28,9 @@ use crate::components::{
 };
 use crate::components::{is_mermaid_info_string, parse_display_math_source};
 
+#[path = "document/markdown/mod.rs"]
+pub(crate) mod markdown;
+
 /// Parses a source snapshot into the shared pure Markdown value model.
 ///
 /// The editor still owns its normalized rope, undo/redo history, and original

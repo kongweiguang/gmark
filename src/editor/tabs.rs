@@ -224,10 +224,16 @@ impl Editor {}
 
 #[path = "tabs_parts/lifecycle.rs"]
 mod lifecycle;
+#[path = "workspace/tabs/new_tab_menu.rs"]
+mod new_tab_menu;
+#[path = "workspace/tabs/path_open.rs"]
+mod path_open;
 #[path = "tabs_parts/session.rs"]
 mod session;
 #[path = "tabs_parts/view.rs"]
 mod view;
+#[path = "workspace/tabs/window_close.rs"]
+mod window_close;
 
 #[cfg(test)]
 #[path = "../../tests/unit/editor/tabs.rs"]

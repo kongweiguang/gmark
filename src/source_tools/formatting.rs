@@ -434,5 +434,5 @@ fn domain_formatter_error(error: gmark_source_tools::FormatterError) -> FormatEr
 }
 
 #[cfg(test)]
-#[path = "formatting_tests.rs"]
+#[path = "../../tests/unit/source_tools/formatting.rs"]
 mod tests;

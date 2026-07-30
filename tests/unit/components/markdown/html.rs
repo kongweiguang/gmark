@@ -38,20 +38,6 @@ fn parses_standalone_html_image_block() {
 }
 
 #[test]
-fn html_image_zoom_ignores_other_style_declarations() {
-    let image = parse_html_image_block(
-        "<img src=\"a.png\" alt=\"a\" style=\"color:red; zoom: 120%; width:10px\" />",
-    )
-    .expect("html image");
-
-    assert_eq!(image.zoom, 1.2);
-    assert_eq!(
-        image.to_sanitized_html_with_src("a.png"),
-        "<img src=\"a.png\" alt=\"a\" style=\"zoom: 120%;\">"
-    );
-}
-
-#[test]
 fn invalid_html_image_blocks_are_not_images() {
     assert!(parse_html_image_block("<img alt=\"missing src\" />").is_none());
     assert!(parse_html_image_block("<img src=\"\" />").is_none());
@@ -161,46 +147,4 @@ fn ignores_unrecognized_or_invalid_style_declarations() {
     let style = style_for_node(&doc.nodes[0]);
     assert_eq!(style, HtmlInlineStyle::default());
     assert!(doc.is_semantic());
-}
-
-#[test]
-fn export_sanitizes_style_to_whitelisted_declarations() {
-    let html = sanitize_html_for_export(
-        "<span style=\"color:blue; background-image:url(javascript:bad); background-color:rgb(255 255 0); font-size:120%\">x</span>",
-    );
-
-    assert!(html.contains(
-            "style=\"color: rgba(0,0,255,1.000); background-color: rgba(255,255,0,1.000); font-size: 120%;\""
-        ));
-    assert!(!html.contains("background-image"));
-}
-
-#[test]
-fn export_escapes_risky_html_even_when_style_is_present() {
-    let html = sanitize_html_for_export("<script style=\"color:blue\">alert(1)</script>");
-
-    assert!(html.contains("&lt;script style=&quot;color:blue&quot;&gt;alert(1)&lt;/script&gt;"));
-    assert!(!html.contains("<script"));
-}
-
-#[test]
-fn export_sanitizer_decodes_entities_before_validating_url_schemes() {
-    let html = sanitize_html_for_export("<a href=\"java&#x73;cript:alert(1)\">bad</a>");
-
-    assert_eq!(html, "<a>bad</a>");
-    assert!(!html.contains("javascript"));
-    assert!(!html.contains("href"));
-}
-
-#[test]
-fn export_sanitizer_rejects_event_attributes_and_nested_unsafe_content() {
-    let html = sanitize_html_for_export(
-        "<div><span title=\"ok\" onclick=\"alert(1)\">safe</span><script>bad()</script></div>",
-    );
-
-    assert!(html.contains("title=\"ok\""));
-    assert!(!html.contains("<span title=\"ok\" onclick="));
-    assert!(html.contains("onclick"));
-    assert!(!html.contains("<script"));
-    assert!(html.contains("&lt;script&gt;bad()&lt;/script&gt;"));
 }

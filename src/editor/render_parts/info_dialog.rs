@@ -20,6 +20,8 @@ impl Editor {
         }
     }
 
+    // reason: 单元测试直接断言 About 文案的稳定内容，正式渲染则通过富元素路径构建同一视图。
+    // remove when: About 文案改由此纯数据助手驱动正式渲染，或测试改为断言正式渲染路径。
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn about_dialog_body_lines(strings: &I18nStrings) -> Vec<String> {
         vec![

@@ -26,6 +26,32 @@ fn html_export_projects_toc_math_mermaid_and_safe_html() {
 }
 
 #[test]
+fn html_export_projects_unicode_toc_entries_without_frontmatter_or_fence_headings() {
+    let html = render_html(
+        "[TOC]\n\n---\ntitle: ignored\n---\n\n# 你好 **gmark**\n## 你好 gmark\nTitle\n-----\n~~~md\n# ignored\n~~~",
+        &ExportTheme::default(),
+        "Doc",
+    );
+
+    assert!(html.contains("href=\"#你好-gmark\""));
+    assert!(html.contains("href=\"#你好-gmark-1\""));
+    assert!(html.contains("href=\"#title\""));
+    assert!(!html.contains("href=\"#ignored\""));
+}
+
+#[test]
+fn html_export_replaces_invalid_mermaid_with_a_safe_error_projection() {
+    let html = render_html(
+        "~~~mermaid\nnot a real mermaid diagram ::::\n~~~",
+        &ExportTheme::default(),
+        "Doc",
+    );
+
+    assert!(html.contains("vlt-mermaid-error"));
+    assert!(!html.contains("<script"));
+}
+
+#[test]
 fn html_export_inlines_local_images() {
     let root = std::env::temp_dir().join(format!("gmark-export-image-{}", Uuid::new_v4()));
     fs::create_dir_all(&root).unwrap();

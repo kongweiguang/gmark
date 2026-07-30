@@ -390,5 +390,5 @@ fn shift_usize(value: usize, delta: i128) -> usize {
 }
 
 #[cfg(test)]
-#[path = "folding_tests.rs"]
+#[path = "../../tests/unit/source_tools/folding.rs"]
 mod tests;

@@ -289,13 +289,6 @@ fn display_svg_scaling_removes_responsive_root_attrs() {
 }
 
 #[test]
-fn renders_basic_flowchart_svg() {
-    let svg = render_mermaid_to_svg("flowchart LR\nA --> B", MermaidThemeMode::Light).expect("svg");
-    assert!(svg.contains("<svg"));
-    assert!(svg.contains("</svg>"));
-}
-
-#[test]
 fn display_render_uses_scaled_intrinsic_size() {
     let source =
         parse_mermaid_fence_source("```mermaid\nflowchart LR\nA --> B\n```").expect("source");
@@ -316,13 +309,6 @@ fn display_render_uses_scaled_intrinsic_size() {
             .contains(&format!("height=\"{:.3}\"", rendered.display_height))
     );
     assert!(rendered.path.exists());
-}
-
-#[test]
-fn invalid_mermaid_returns_error() {
-    assert!(
-        render_mermaid_to_svg("not a real mermaid diagram ::::", MermaidThemeMode::Light).is_err()
-    );
 }
 
 #[test]

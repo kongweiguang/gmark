@@ -713,6 +713,8 @@ impl Editor {
 mod controller;
 #[path = "context_menu_parts/menu_view.rs"]
 mod menu_view;
+#[path = "commands/context_menu/table_axis_view.rs"]
+mod table_axis_view;
 #[path = "context_menu_parts/table_dialog.rs"]
 mod table_dialog;
 

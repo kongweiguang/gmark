@@ -32,14 +32,20 @@ impl Editor {}
 
 #[path = "events_parts/commands.rs"]
 mod commands;
+#[path = "input/events/image_insert.rs"]
+mod image_insert;
 #[path = "events_parts/input.rs"]
 mod input;
 #[path = "events_parts/preflight.rs"]
 mod preflight;
+#[path = "input/events/quote_shortcuts.rs"]
+mod quote_shortcuts;
 #[path = "events_parts/scroll.rs"]
 mod scroll;
 #[path = "events_parts/state_machine.rs"]
 mod state_machine;
+#[path = "input/events/toggle_task.rs"]
+mod toggle_task;
 
 #[cfg(test)]
 #[path = "../../tests/unit/editor/events.rs"]

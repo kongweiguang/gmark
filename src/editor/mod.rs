@@ -29,11 +29,12 @@ use crate::components::{
     TableData, TableRuntime, UndoCaptureKind, serialize_table_cell_markdown,
 };
 mod auto_save;
+pub(crate) mod block;
 mod close;
 mod command_palette;
 mod context_menu;
 mod diagram_overlay;
-mod document;
+pub(crate) mod document;
 mod document_session;
 mod encoding;
 mod events;
@@ -50,7 +51,7 @@ pub(crate) use crate::perf;
 mod persistence;
 mod projection;
 mod recovery;
-mod render;
+pub(crate) mod render;
 pub(crate) use render::{source_editor_horizontal_padding, source_editor_top_padding};
 mod runtime_context;
 mod selection;

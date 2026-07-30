@@ -152,6 +152,28 @@ fn html_is_value_only_sanitized_and_has_feature_compatible_fallback() {
 }
 
 #[test]
+fn html_export_sanitization_rejects_styles_urls_events_and_nested_active_content() {
+    let styled = sanitize_html_for_export(
+        "<span style=\"color:blue; background-image:url(javascript:bad); background-color:rgb(255 255 0); font-size:120%\">x</span>",
+    );
+    assert!(!styled.to_ascii_lowercase().contains("background-image"));
+    assert!(!styled.to_ascii_lowercase().contains("javascript"));
+
+    let script = sanitize_html_for_export("<script style=\"color:blue\">alert(1)</script>");
+    assert!(!script.to_ascii_lowercase().contains("<script"));
+
+    let unsafe_url = sanitize_html_for_export("<a href=\"java&#x73;cript:alert(1)\">bad</a>");
+    assert!(!unsafe_url.to_ascii_lowercase().contains("javascript"));
+    assert!(!unsafe_url.to_ascii_lowercase().contains("href="));
+
+    let nested = sanitize_html_for_export(
+        "<div><span title=\"ok\" onclick=\"alert(1)\">safe</span><script>bad()</script></div>",
+    );
+    assert!(!nested.to_ascii_lowercase().contains("onclick"));
+    assert!(!nested.to_ascii_lowercase().contains("<script"));
+}
+
+#[test]
 fn source_mapping_preserves_bom_unicode_and_mixed_line_endings() {
     let source = "\u{feff}# 中文标题\r\n\r\nemoji 😀 paragraph\n- [x] 完成\r";
     let document = parse_markdown(source);

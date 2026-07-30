@@ -3,10 +3,9 @@
 //! Shared UI components and Markdown editing primitives.
 
 mod actions;
-mod block;
-pub(crate) mod latex;
-pub(crate) mod markdown;
-pub(crate) mod mermaid;
+pub(crate) use crate::editor::block;
+pub(crate) use crate::editor::document::markdown;
+pub(crate) use crate::editor::render::{latex, mermaid};
 pub(crate) mod switch;
 
 pub use actions::*;
