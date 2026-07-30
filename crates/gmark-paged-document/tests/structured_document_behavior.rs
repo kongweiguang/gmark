@@ -4,9 +4,9 @@ use gmark_paged_document::{
     DelimitedEdit, DelimitedFilterOptions, DelimitedIndex, DelimitedIndexOptions, FileSource,
     JsonIndex, JsonIndexOptions, JsonRootKind, LineIndex, MarkdownTableIndex, PagedRecoveryJournal,
     PagedRecoveryReadStatus, PagedRecoverySelection, PieceDocument, SearchCancellation,
-    SourceAffinity, SourceAnchor, TextEncoding, apply_delimited_column_edit, replay_paged_recovery,
-    serialize_delimited_record, validate_json_lines_cancellable,
-    validate_json_lines_from_cancellable,
+    SourceAffinity, SourceAnchor, TextEncoding, apply_delimited_column_edit,
+    list_paged_recovery_journals, replay_paged_recovery, serialize_delimited_record,
+    validate_json_lines_cancellable, validate_json_lines_from_cancellable,
 };
 use std::fs;
 
@@ -563,6 +563,40 @@ fn paged_recovery_refuses_a_changed_base_file() {
     fs::write(&source_path, b"changed!").unwrap();
 
     assert!(replay_paged_recovery(journal.path()).is_err());
+}
+
+#[test]
+fn paged_recovery_listing_skips_a_suppressed_stale_journal_and_keeps_the_active_session()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let source_path = dir.path().join("suppressed-recovery-source.txt");
+    fs::write(&source_path, b"alpha")?;
+    let source = FileSource::open(&source_path)?;
+    let recovery_dir = dir.path().join("recovery");
+    let mut stale =
+        PagedRecoveryJournal::create(&recovery_dir, &source, TextEncoding::Utf8 { bom: false })?;
+    stale.record_replace(0..5, "stale", None, "source")?;
+    let stale_marker = stale.path().with_extension("large-journal.suppressed");
+    fs::write(&stale_marker, b"gmark-recovery-suppressed-v1\n")?;
+    let blocked = recovery_dir.join("blocked.large-journal");
+    fs::create_dir(&blocked)?;
+    let blocked_marker = blocked.with_extension("large-journal.suppressed");
+    fs::write(&blocked_marker, b"gmark-recovery-suppressed-v1\n")?;
+
+    let mut active =
+        PagedRecoveryJournal::create(&recovery_dir, &source, TextEncoding::Utf8 { bom: false })?;
+    active.record_replace(0..5, "active", None, "source")?;
+    let active_path = active.path().to_path_buf();
+
+    assert_eq!(
+        list_paged_recovery_journals(&recovery_dir)?,
+        vec![active_path]
+    );
+    assert!(!stale.path().exists());
+    assert!(!stale_marker.exists());
+    assert!(blocked.exists());
+    assert!(blocked_marker.exists());
+    Ok(())
 }
 
 #[test]

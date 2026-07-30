@@ -34,6 +34,7 @@ pub fn load_resident_recovery_journals(
         .filter(|path| {
             path.extension()
                 .is_some_and(|extension| extension == "journal")
+                && !recovery_journal_is_suppressed(path)
         })
         .collect::<Vec<_>>();
     paths.sort();
@@ -47,6 +48,31 @@ pub fn load_resident_recovery_journals(
         }
     }
     Ok(journals)
+}
+
+/// A sidecar is written only after a saved journal could neither be deleted nor renamed.
+/// Treat metadata failures as suppression too: replaying a possibly stale journal is unsafe.
+fn recovery_journal_is_suppressed(journal_path: &Path) -> bool {
+    let mut marker_path = journal_path.to_path_buf();
+    marker_path.set_extension("journal.suppressed");
+    match fs::metadata(&marker_path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => true,
+        Ok(_) => {
+            // Startup cleanup must never reveal stale recovery: only delete the marker after the
+            // original journal has been removed (or is already absent).
+            match fs::remove_file(journal_path) {
+                Ok(()) => {
+                    let _ = fs::remove_file(marker_path);
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    let _ = fs::remove_file(marker_path);
+                }
+                Err(_) => {}
+            }
+            true
+        }
+    }
 }
 
 /// Compatibility projection of the one-pass resident-journal scan.

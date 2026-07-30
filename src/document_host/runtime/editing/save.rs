@@ -210,12 +210,19 @@ impl DocumentHost {
                         // 开始，也不能接受旧基线上的搜索、复制或派生 projection 结果。
                         view.document_epoch = view.document_epoch.wrapping_add(1);
                         view.cancel_selection_transfers();
-                        if let Some(mut journal) = view.coordinator.recovery_journal.take()
-                            && let Err(error) = journal.checkpoint(&document)
-                        {
-                            view.coordinator.recovery_error =
-                                Some(localized_document_error(&error, cx));
-                        }
+                        let (replacement, recovery_creation_error) = match recovery {
+                            Some(Ok(journal)) => (Some(journal), None),
+                            Some(Err(error)) => (None, Some(error)),
+                            None => (None, None),
+                        };
+                        let cleanup_error = view
+                            .coordinator
+                            .replace_recovery_journal_after_persistence(replacement, &document)
+                            .err();
+                        view.coordinator.recovery_error = match recovery_creation_error {
+                            Some(error) => Some(localized_document_error(&error, cx)),
+                            None => cleanup_error.map(|error| localized_document_error(&error, cx)),
+                        };
                         view.install_document_session(document);
                         view.prepared_source = Some(prepared);
                         view.provisional_source = None;
@@ -236,18 +243,6 @@ impl DocumentHost {
                             Err(error) => {
                                 view.structured_index = None;
                                 view.set_structure_error(error, cx);
-                            }
-                        }
-                        if let Some(recovery) = recovery {
-                            match recovery {
-                                Ok(journal) => {
-                                    view.coordinator.recovery_journal = Some(journal);
-                                    view.coordinator.recovery_error = None;
-                                }
-                                Err(error) => {
-                                    view.coordinator.recovery_error =
-                                        Some(localized_document_error(&error, cx))
-                                }
                             }
                         }
                         view.active_edit = None;

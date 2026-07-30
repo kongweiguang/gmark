@@ -387,6 +387,32 @@ fn directory_loader_quarantines_bad_neighbor_and_keeps_live_sessions() {
 }
 
 #[test]
+fn directory_loader_skips_a_suppressed_stale_journal_and_keeps_the_active_session()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let mut stale = ResidentRecoveryJournal::create(temporary.path(), None, "stale")?;
+    stale.record("stale edit", selection(10), "rendered")?;
+    let stale_marker = stale.path().with_extension("journal.suppressed");
+    fs::write(&stale_marker, b"gmark-recovery-suppressed-v1\n")?;
+    let blocked = temporary.path().join("blocked.journal");
+    fs::create_dir(&blocked)?;
+    let blocked_marker = blocked.with_extension("journal.suppressed");
+    fs::write(&blocked_marker, b"gmark-recovery-suppressed-v1\n")?;
+
+    let mut active = ResidentRecoveryJournal::create(temporary.path(), None, "active")?;
+    active.record("active edit", selection(11), "source")?;
+
+    let recovered = load_resident_recovery_journals(temporary.path())?;
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].document.source, "active edit");
+    assert!(!stale.path().exists());
+    assert!(!stale_marker.exists());
+    assert!(blocked.exists());
+    assert!(blocked_marker.exists());
+    Ok(())
+}
+
+#[test]
 fn append_failure_keeps_in_memory_baseline_retryable() {
     let temporary = tempfile::tempdir().unwrap();
     let mut journal = ResidentRecoveryJournal::create(temporary.path(), None, "a").unwrap();

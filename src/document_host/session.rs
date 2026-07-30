@@ -2,7 +2,20 @@
 
 //! Session planning and recovery-journal adaptation for the document host.
 
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read as _, Write as _};
+
 use super::*;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CHECKPOINT_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_RENAME_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_REMOVE_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_SUPPRESSION_MARKER_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+const RECOVERY_SUPPRESSION_MARKER: &[u8] = b"gmark-recovery-suppressed-v1\n";
 
 pub(super) fn session_plan(
     profile: &gmark_document_core::DocumentProfile,
@@ -193,6 +206,9 @@ impl DocumentRecoveryJournal {
         encoding: TextEncoding,
         document: &DocumentSession,
     ) -> Result<Self, PagedDocumentError> {
+        // 进程重启后内存队列不复存在；retired 和 suppression sidecar 仍是可安全重试的
+        // 清理标记，尽力回收它们不能阻止本次新日志建立。
+        let _ = retry_retired_recovery_journal_artifacts(recovery_dir);
         match document.store.kind() {
             gmark_document_core::DocumentBackendKind::Resident => {
                 let source_document = document.resident_source_document().ok_or_else(|| {
@@ -247,13 +263,18 @@ impl DocumentRecoveryJournal {
         }
     }
 
-    /// A successful save/discard removes the old durable session. Resident
-    /// journals additionally refresh their in-memory clean baseline so a failed
-    /// removal remains retryable through the existing error path.
+    /// A successful save/discard removes the old durable session. The coordinator
+    /// retains a failed removal as separate retired cleanup work.
     pub(super) fn checkpoint(
         &mut self,
         document: &DocumentSession,
     ) -> Result<(), PagedDocumentError> {
+        #[cfg(test)]
+        if take_test_checkpoint_failure() {
+            return Err(PagedDocumentError::Recovery(
+                "test recovery checkpoint failure".to_owned(),
+            ));
+        }
         match self {
             Self::Resident(journal) => {
                 let source_document = document.resident_source_document().ok_or_else(|| {
@@ -279,6 +300,304 @@ impl DocumentRecoveryJournal {
             Self::Paged(journal) => journal.checkpoint(),
         }
     }
+
+    /// Converts an old active journal into cleanup-only work after its checkpoint failed.
+    pub(super) fn retire_for_cleanup(self) -> (RetiredRecoveryJournal, Option<PagedDocumentError>) {
+        let path = match &self {
+            Self::Resident(journal) => journal.path().to_path_buf(),
+            Self::Paged(journal) => journal.path().to_path_buf(),
+        };
+        let retired_path = retired_recovery_journal_path(&path);
+        match rename_recovery_journal(&path, &retired_path) {
+            Ok(()) => (
+                RetiredRecoveryJournal {
+                    journal_path: retired_path,
+                    suppression_marker: None,
+                },
+                None,
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+                RetiredRecoveryJournal {
+                    journal_path: path,
+                    suppression_marker: None,
+                },
+                None,
+            ),
+            Err(_) => {
+                let marker = suppression_marker_path(&path);
+                let cleanup = RetiredRecoveryJournal {
+                    journal_path: path,
+                    suppression_marker: Some(marker),
+                };
+                let marker_error = cleanup.ensure_suppression_marker().err();
+                (cleanup, marker_error)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_checkpoint_for_test() {
+        TEST_CHECKPOINT_FAILURES.with(|failures| {
+            failures.set(failures.get().saturating_add(1));
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_rename_for_test() {
+        TEST_RENAME_FAILURES.with(|failures| {
+            failures.set(failures.get().saturating_add(1));
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_remove_for_test() {
+        TEST_REMOVE_FAILURES.with(|failures| {
+            failures.set(failures.get().saturating_add(1));
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_suppression_marker_for_test() {
+        TEST_SUPPRESSION_MARKER_FAILURES.with(|failures| {
+            failures.set(failures.get().saturating_add(1));
+        });
+    }
+}
+
+/// Cleanup-only journal state. It is either renamed out of scanner scope or paired with a
+/// suppression sidecar while its original path remains available for future deletion attempts.
+pub(super) struct RetiredRecoveryJournal {
+    journal_path: PathBuf,
+    suppression_marker: Option<PathBuf>,
+}
+
+impl RetiredRecoveryJournal {
+    pub(super) fn retry_cleanup(&self) -> Result<(), PagedDocumentError> {
+        if self.suppression_marker.is_some() {
+            self.ensure_suppression_marker()?;
+        }
+        // suppression marker 存在时必须先删除旧 journal，再删除 marker；否则重启窗口会
+        // 重新扫描已经保存的内容。
+        remove_recovery_journal_file(&self.journal_path)?;
+        if let Some(marker) = &self.suppression_marker {
+            remove_recovery_journal_file(marker)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_suppression_marker(&self) -> Result<(), PagedDocumentError> {
+        let Some(marker) = &self.suppression_marker else {
+            return Ok(());
+        };
+        create_suppression_marker(marker)
+    }
+}
+
+fn retry_retired_recovery_journal_artifacts(recovery_dir: &Path) -> Result<(), PagedDocumentError> {
+    let entries = match fs::read_dir(recovery_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(PagedDocumentError::Io {
+                path: recovery_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|source| PagedDocumentError::Io {
+            path: recovery_dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        if name.ends_with(".journal.retired") || name.ends_with(".large-journal.retired") {
+            remove_recovery_journal_file(&path)?;
+            continue;
+        }
+        if let Some(journal_path) = journal_path_for_suppression_marker(&path) {
+            // 启动清理同样遵守 journal -> marker 的顺序。journal 删除失败时保留 marker，
+            // 让扫描器继续忽略该旧内容，而不是把 marker 单独删掉。
+            remove_recovery_journal_file(&journal_path)?;
+            remove_recovery_journal_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn retired_recovery_journal_path(path: &Path) -> PathBuf {
+    let mut retired = path.to_path_buf();
+    match path.extension() {
+        Some(extension) => {
+            retired.set_extension(format!("{}.retired", extension.to_string_lossy()))
+        }
+        None => retired.set_extension("retired"),
+    };
+    retired
+}
+
+fn suppression_marker_path(journal_path: &Path) -> PathBuf {
+    let mut marker = journal_path.to_path_buf();
+    match journal_path.extension() {
+        Some(extension) => {
+            marker.set_extension(format!("{}.suppressed", extension.to_string_lossy()))
+        }
+        None => marker.set_extension("suppressed"),
+    };
+    marker
+}
+
+fn journal_path_for_suppression_marker(marker_path: &Path) -> Option<PathBuf> {
+    let extension = marker_path.extension()?.to_string_lossy();
+    let journal_extension = extension.strip_suffix(".suppressed")?;
+    if !matches!(journal_extension, "journal" | "large-journal") {
+        return None;
+    }
+    let mut journal = marker_path.to_path_buf();
+    journal.set_extension(journal_extension);
+    Some(journal)
+}
+
+fn rename_recovery_journal(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if take_test_rename_failure() {
+        return Err(test_recovery_io_error("rename"));
+    }
+    fs::rename(source, destination)
+}
+
+fn create_suppression_marker(marker_path: &Path) -> Result<(), PagedDocumentError> {
+    #[cfg(test)]
+    if take_test_suppression_marker_failure() {
+        return Err(PagedDocumentError::Io {
+            path: marker_path.to_path_buf(),
+            source: test_recovery_io_error("create suppression marker"),
+        });
+    }
+    let mut marker = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(marker_path)
+    {
+        Ok(marker) => marker,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return validate_suppression_marker(marker_path);
+        }
+        Err(source) => {
+            return Err(PagedDocumentError::Io {
+                path: marker_path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let write_result = marker
+        .write_all(RECOVERY_SUPPRESSION_MARKER)
+        .and_then(|()| marker.sync_all());
+    if let Err(source) = write_result {
+        drop(marker);
+        let _ = fs::remove_file(marker_path);
+        return Err(PagedDocumentError::Io {
+            path: marker_path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn validate_suppression_marker(marker_path: &Path) -> Result<(), PagedDocumentError> {
+    let mut marker = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(marker_path)
+        .map_err(|source| PagedDocumentError::Io {
+            path: marker_path.to_path_buf(),
+            source,
+        })?;
+    let mut contents = [0; RECOVERY_SUPPRESSION_MARKER.len()];
+    marker
+        .read_exact(&mut contents)
+        .map_err(|source| PagedDocumentError::Io {
+            path: marker_path.to_path_buf(),
+            source,
+        })?;
+    let mut trailing = [0u8; 1];
+    if marker
+        .read(&mut trailing)
+        .map_err(|source| PagedDocumentError::Io {
+            path: marker_path.to_path_buf(),
+            source,
+        })?
+        != 0
+        || contents != RECOVERY_SUPPRESSION_MARKER
+    {
+        return Err(PagedDocumentError::Recovery(
+            "recovery suppression marker has unexpected contents".to_owned(),
+        ));
+    }
+    marker.sync_all().map_err(|source| PagedDocumentError::Io {
+        path: marker_path.to_path_buf(),
+        source,
+    })
+}
+
+fn remove_recovery_journal_file(path: &Path) -> Result<(), PagedDocumentError> {
+    #[cfg(test)]
+    if take_test_remove_failure() {
+        return Err(PagedDocumentError::Io {
+            path: path.to_path_buf(),
+            source: test_recovery_io_error("remove"),
+        });
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(PagedDocumentError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+#[cfg(test)]
+fn take_test_checkpoint_failure() -> bool {
+    TEST_CHECKPOINT_FAILURES.with(take_test_failure)
+}
+
+#[cfg(test)]
+fn take_test_rename_failure() -> bool {
+    TEST_RENAME_FAILURES.with(take_test_failure)
+}
+
+#[cfg(test)]
+fn take_test_remove_failure() -> bool {
+    TEST_REMOVE_FAILURES.with(take_test_failure)
+}
+
+#[cfg(test)]
+fn take_test_suppression_marker_failure() -> bool {
+    TEST_SUPPRESSION_MARKER_FAILURES.with(take_test_failure)
+}
+
+#[cfg(test)]
+fn take_test_failure(failures: &std::cell::Cell<usize>) -> bool {
+    let remaining = failures.get();
+    if remaining == 0 {
+        false
+    } else {
+        failures.set(remaining - 1);
+        true
+    }
+}
+
+#[cfg(test)]
+fn test_recovery_io_error(operation: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("test recovery {operation} failure"),
+    )
 }
 
 fn map_resident_recovery_error(error: ResidentRecoveryError) -> PagedDocumentError {

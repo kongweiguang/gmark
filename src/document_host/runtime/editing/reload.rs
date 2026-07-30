@@ -158,12 +158,19 @@ impl DocumentHost {
                         recovery,
                         reopened_encoding,
                     )) => {
-                        if let Some(mut journal) = view.coordinator.recovery_journal.take()
-                            && let Err(error) = journal.checkpoint(&document)
-                        {
-                            view.coordinator.recovery_error =
-                                Some(localized_document_error(&error, cx));
-                        }
+                        let (replacement, recovery_creation_error) = match recovery {
+                            Some(Ok(journal)) => (Some(journal), None),
+                            Some(Err(error)) => (None, Some(error)),
+                            None => (None, None),
+                        };
+                        let cleanup_error = view
+                            .coordinator
+                            .replace_recovery_journal_after_persistence(replacement, &document)
+                            .err();
+                        view.coordinator.recovery_error = match recovery_creation_error {
+                            Some(error) => Some(localized_document_error(&error, cx)),
+                            None => cleanup_error.map(|error| localized_document_error(&error, cx)),
+                        };
                         view.probe = probe;
                         view.document_epoch = view.document_epoch.wrapping_add(1);
                         view.prepared_source = Some(prepared);
@@ -188,14 +195,6 @@ impl DocumentHost {
                                 .replace("{encoding}", &reopened_encoding)
                                 .into(),
                         );
-                        match recovery {
-                            Some(Ok(journal)) => view.coordinator.recovery_journal = Some(journal),
-                            Some(Err(error)) => {
-                                view.coordinator.recovery_error =
-                                    Some(localized_document_error(&error, cx))
-                            }
-                            None => {}
-                        }
                     }
                     Err(error) => view.error = Some(localized_document_error(&error, cx)),
                 }

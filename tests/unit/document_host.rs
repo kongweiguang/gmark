@@ -120,6 +120,212 @@ fn save_readback_verifier_rejects_same_length_content_mismatch() {
 }
 
 #[test]
+fn recovery_cleanup_failure_keeps_resident_journal_retryable_while_replacement_records()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("resident-recovery.txt");
+    fs::write(&path, "one")?;
+    let source = FileSource::open(&path)?;
+    let probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())?;
+    let index = LineIndex::build(&source)?;
+    let mut document = build_document_session(&probe, &source, source.clone(), index, false)?;
+    let mut retired =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)?;
+    document.replace_text(0..3, "two")?;
+    retired.record_after_change(
+        &document,
+        &RecoveryRecord {
+            action: RecoveryAction::Transaction(Transaction::new(
+                gmark_document_core::DocumentRevision(0),
+                vec![SourceEdit::new(0..3, "two")],
+            )),
+            selection: Some(SourceSelection::collapsed(3, SourceAffinity::After)),
+            view_id: DocumentViewId::source(),
+        },
+    )?;
+    let retired_path = retired.path().to_path_buf();
+    let replacement =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)?;
+    let replacement_path = replacement.path().to_path_buf();
+    let mut coordinator = DocumentCoordinator::new(SearchCancellation::default());
+    coordinator.recovery_journal = Some(retired);
+
+    DocumentRecoveryJournal::fail_next_checkpoint_for_test();
+    DocumentRecoveryJournal::fail_next_rename_for_test();
+    assert!(
+        coordinator
+            .replace_recovery_journal_after_persistence(Some(replacement), &document)
+            .is_err()
+    );
+    assert_eq!(coordinator.retired_recovery_journals.len(), 1);
+    assert_eq!(
+        coordinator
+            .recovery_journal
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("replacement resident journal was not installed"))?
+            .path(),
+        replacement_path
+    );
+
+    let suppression_marker = retired_path.with_extension("journal.suppressed");
+    assert!(suppression_marker.exists());
+    assert!(retired_path.exists());
+
+    document.replace_text(3..3, "!")?;
+    coordinator
+        .recovery_journal
+        .as_mut()
+        .ok_or_else(|| std::io::Error::other("replacement resident journal was lost"))?
+        .record_after_change(
+            &document,
+            &RecoveryRecord {
+                action: RecoveryAction::Transaction(Transaction::new(
+                    gmark_document_core::DocumentRevision(1),
+                    vec![SourceEdit::new(3..3, "!")],
+                )),
+                selection: Some(SourceSelection::collapsed(4, SourceAffinity::After)),
+                view_id: DocumentViewId::source(),
+            },
+        )?;
+    drop(coordinator);
+
+    let recovered = gmark_document_runtime::load_resident_recovery_journals(temp.path())?;
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].document.source, "two!");
+    assert!(!suppression_marker.exists());
+    assert!(!retired_path.exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_cleanup_failure_keeps_paged_journal_retryable_while_replacement_records()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("paged-recovery.txt");
+    fs::write(&path, "paged")?;
+    let source = FileSource::open(&path)?;
+    let mut probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())?;
+    probe.strategy = OpenStrategy::Paged;
+    let index = LineIndex::build(&source)?;
+    let mut document = build_document_session(&probe, &source, source.clone(), index, false)?;
+    let mut retired =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)?;
+    document.replace_text(0..5, "saved")?;
+    retired.record_after_change(
+        &document,
+        &RecoveryRecord {
+            action: RecoveryAction::Transaction(Transaction::new(
+                gmark_document_core::DocumentRevision(0),
+                vec![SourceEdit::new(0..5, "saved")],
+            )),
+            selection: Some(SourceSelection::collapsed(5, SourceAffinity::After)),
+            view_id: DocumentViewId::source(),
+        },
+    )?;
+    let retired_path = retired.path().to_path_buf();
+    let replacement =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)?;
+    let replacement_path = replacement.path().to_path_buf();
+    let mut coordinator = DocumentCoordinator::new(SearchCancellation::default());
+    coordinator.recovery_journal = Some(retired);
+
+    DocumentRecoveryJournal::fail_next_checkpoint_for_test();
+    DocumentRecoveryJournal::fail_next_rename_for_test();
+    assert!(
+        coordinator
+            .replace_recovery_journal_after_persistence(Some(replacement), &document)
+            .is_err()
+    );
+    assert_eq!(coordinator.retired_recovery_journals.len(), 1);
+    assert_eq!(
+        coordinator
+            .recovery_journal
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("replacement paged journal was not installed"))?
+            .path(),
+        replacement_path
+    );
+
+    let suppression_marker = retired_path.with_extension("large-journal.suppressed");
+    assert!(suppression_marker.exists());
+    assert!(retired_path.exists());
+
+    document.replace_text(5..5, "!")?;
+    coordinator
+        .recovery_journal
+        .as_mut()
+        .ok_or_else(|| std::io::Error::other("replacement paged journal was lost"))?
+        .record_after_change(
+            &document,
+            &RecoveryRecord {
+                action: RecoveryAction::Transaction(Transaction::new(
+                    gmark_document_core::DocumentRevision(1),
+                    vec![SourceEdit::new(5..5, "!")],
+                )),
+                selection: Some(SourceSelection::collapsed(6, SourceAffinity::After)),
+                view_id: DocumentViewId::source(),
+            },
+        )?;
+    assert!(gmark_paged_document::paged_recovery_has_edits(
+        &replacement_path
+    )?);
+    drop(coordinator);
+
+    assert_eq!(
+        gmark_paged_document::list_paged_recovery_journals(temp.path())?,
+        vec![replacement_path]
+    );
+    assert!(!suppression_marker.exists());
+    assert!(!retired_path.exists());
+    Ok(())
+}
+
+#[test]
+fn suppression_marker_creation_and_cleanup_retry_keep_the_original_before_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("suppression-retry.txt");
+    fs::write(&path, "saved")?;
+    let source = FileSource::open(&path)?;
+    let mut probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())?;
+    probe.strategy = OpenStrategy::Paged;
+    let index = LineIndex::build(&source)?;
+    let document = build_document_session(&probe, &source, source.clone(), index, false)?;
+    let retired =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)?;
+    let retired_path = retired.path().to_path_buf();
+    let replacement =
+        DocumentRecoveryJournal::create(temp.path(), &source, probe.encoding.clone(), &document)?;
+    let mut coordinator = DocumentCoordinator::new(SearchCancellation::default());
+    coordinator.recovery_journal = Some(retired);
+
+    DocumentRecoveryJournal::fail_next_checkpoint_for_test();
+    DocumentRecoveryJournal::fail_next_rename_for_test();
+    DocumentRecoveryJournal::fail_next_suppression_marker_for_test();
+    assert!(matches!(
+        coordinator.replace_recovery_journal_after_persistence(Some(replacement), &document),
+        Err(PagedDocumentError::Io { .. })
+    ));
+    let suppression_marker = retired_path.with_extension("large-journal.suppressed");
+    assert!(retired_path.exists());
+    assert!(!suppression_marker.exists());
+
+    DocumentRecoveryJournal::fail_next_remove_for_test();
+    assert!(coordinator.retry_retired_recovery_journals().is_err());
+    assert!(retired_path.exists());
+    assert!(suppression_marker.exists());
+
+    coordinator.retry_retired_recovery_journals()?;
+    assert!(coordinator.retired_recovery_journals.is_empty());
+    assert!(!retired_path.exists());
+    assert!(!suppression_marker.exists());
+    Ok(())
+}
+
+#[test]
 fn bounded_window_never_starts_inside_utf8_codepoint() {
     let prefix = "a".repeat(MAX_RENDERED_LINE_BYTES as usize + 7);
     let unicode_start = prefix.len() as u64;
