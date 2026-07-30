@@ -153,10 +153,7 @@ pub(crate) fn check_source_structure(
     for file in &sources {
         let relative = source::relative(root, &file.path);
         for (index, token) in file.tokens.iter().enumerate() {
-            if token.is("include")
-                && file.tokens.get(index + 1).is_some_and(|next| next.is("!"))
-                && !is_allowed_generated_catalog_include(root, file, index)
-            {
+            if token.is("include") && file.tokens.get(index + 1).is_some_and(|next| next.is("!")) {
                 violations.push(format!(
                     "{relative}:{}: implementation include! is forbidden; use a real module",
                     token.line
@@ -377,15 +374,6 @@ fn declared_module_files(root: &Path, sources: &[SourceFile]) -> BTreeSet<PathBu
                 reachable.insert(normalized_path(&directory.join(name).join("mod.rs")));
             }
         }
-        for index in 0..file.tokens.len() {
-            if is_allowed_generated_catalog_include(root, file, index)
-                && let Some(path) = include_argument(&file.tokens, index)
-            {
-                reachable.insert(normalized_path(
-                    &file.path.parent().unwrap_or(root).join(path),
-                ));
-            }
-        }
     }
     reachable
 }
@@ -487,25 +475,6 @@ fn normalized_path(path: &Path) -> PathBuf {
         }
     }
     normalized
-}
-
-fn is_allowed_generated_catalog_include(root: &Path, file: &SourceFile, index: usize) -> bool {
-    source::relative(root, &file.path) == "src/i18n/parts/catalog.rs"
-        && file
-            .tokens
-            .get(index)
-            .is_some_and(|token| token.is("include"))
-        && include_argument(&file.tokens, index) == Some("i18n_strings_catalog.rs")
-}
-
-fn include_argument(tokens: &[Token], index: usize) -> Option<&str> {
-    (tokens.get(index).is_some_and(|token| token.is("include"))
-        && tokens.get(index + 1).is_some_and(|token| token.is("!"))
-        && tokens.get(index + 2).is_some_and(|token| token.is("("))
-        && tokens
-            .get(index + 3)
-            .is_some_and(|token| token.kind == TokenKind::String))
-    .then(|| tokens[index + 3].text.as_str())
 }
 
 fn is_crate_root(path: &Path) -> bool {

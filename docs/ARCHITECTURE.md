@@ -132,7 +132,7 @@ bytes that evidence these contracts remain intact.
 | --- | --- |
 | `source-size` | Every manually maintained Rust file, including `tests/`, `benches/`, `examples/`, `fuzz/`, and `xtask/`, warns above 500 lines and fails above 800 lines. Generated sources plus `vendor/` and `target/` are excluded. |
 | `test-layout` | Production `src/` paths cannot contain test fixtures, inline `mod tests { ... }`, inline `#[cfg(test)]` modules, or `#[test]` bodies. |
-| `architecture` | Cargo-metadata dependency boundaries, tokenized source-module boundaries, no implementation `include!` (except the explicit generated i18n catalog), no numbered source filenames, no unreachable Rust modules, and adjacent lint-allow justification/removal conditions. |
+| `architecture` | Cargo-metadata dependency boundaries, tokenized source-module boundaries, no implementation `include!`, no numbered source filenames, no unreachable Rust modules, and adjacent lint-allow justification/removal conditions. |
 | `authors` | Manually maintained Rust, documentation, scripts, workflows, and manifests must retain `@author kongweiguang`. |
 
 Lint `allow` attributes require the immediately preceding `//` comment to

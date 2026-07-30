@@ -190,7 +190,7 @@ fn source_structure_rejects_implementation_includes_numbered_files_and_orphans()
 }
 
 #[test]
-fn generated_i18n_catalog_include_is_the_only_implementation_include_exception() {
+fn implementation_include_is_rejected_even_for_generated_sources() {
     let fixture = Fixture::new();
     fixture.write("src/lib.rs", &with_author("mod i18n;\n"));
     fixture.write("src/i18n/mod.rs", &with_author("mod parts;\n"));
@@ -201,9 +201,10 @@ fn generated_i18n_catalog_include_is_the_only_implementation_include_exception()
     );
     fixture.write(
         "src/i18n/parts/i18n_strings_catalog.rs",
-        &with_author("pub const CATALOG: &str = \"generated\";\n"),
+        "// @generated; do not edit\npub const CATALOG: &str = \"generated\";\n",
     );
-    xtask::run_at(fixture.path(), "architecture").unwrap();
+    let error = xtask::run_at(fixture.path(), "architecture").unwrap_err();
+    assert!(error.contains("implementation include! is forbidden"));
 }
 
 #[test]
