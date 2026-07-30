@@ -1,5 +1,6 @@
 // @author kongweiguang
 
+// reason: v1 manifest 兼容测试仍覆盖旧协议；remove when: v1 fixture 与兼容承诺一并淘汰。
 #![allow(dead_code)]
 
 //! Legacy update-manifest HTTP adapter and installer launcher.

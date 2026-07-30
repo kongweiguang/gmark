@@ -245,15 +245,13 @@ fn is_cfg_test_attribute(tokens: &[Token], index: usize) -> bool {
 fn lint_allow_lines(tokens: &[Token]) -> Vec<usize> {
     let mut lines = Vec::new();
     for index in 0..tokens.len() {
-        if !tokens.get(index).is_some_and(|token| token.is("#"))
-            || !tokens.get(index + 1).is_some_and(|token| token.is("["))
-        {
+        let Some(open) = attribute_open_bracket(tokens, index) else {
             continue;
-        }
+        };
         let Some(end) = attribute_end(tokens, index) else {
             continue;
         };
-        if tokens[index + 2..end]
+        if tokens[open + 1..end]
             .iter()
             .any(|token| token.kind == TokenKind::Identifier && token.is("allow"))
         {
@@ -263,14 +261,22 @@ fn lint_allow_lines(tokens: &[Token]) -> Vec<usize> {
     lines
 }
 
-fn attribute_end(tokens: &[Token], index: usize) -> Option<usize> {
-    if !tokens.get(index).is_some_and(|token| token.is("#"))
-        || !tokens.get(index + 1).is_some_and(|token| token.is("["))
-    {
+fn attribute_open_bracket(tokens: &[Token], index: usize) -> Option<usize> {
+    if !tokens.get(index).is_some_and(|token| token.is("#")) {
         return None;
     }
+    if tokens.get(index + 1).is_some_and(|token| token.is("[")) {
+        return Some(index + 1);
+    }
+    (tokens.get(index + 1).is_some_and(|token| token.is("!"))
+        && tokens.get(index + 2).is_some_and(|token| token.is("[")))
+    .then_some(index + 2)
+}
+
+fn attribute_end(tokens: &[Token], index: usize) -> Option<usize> {
+    let open = attribute_open_bracket(tokens, index)?;
     let mut depth = 1;
-    let mut cursor = index + 2;
+    let mut cursor = open + 1;
     while let Some(token) = tokens.get(cursor) {
         if token.is("[") {
             depth += 1;

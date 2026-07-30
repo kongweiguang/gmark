@@ -103,7 +103,7 @@ fn lint_allow_requires_an_adjacent_reason_and_removal_condition() {
     let accepted = Fixture::new();
     accepted.write(
         "src/lib.rs",
-        &with_author("mod connected;\nmod chinese_comment;\n"),
+        &with_author("mod connected;\nmod chinese_comment;\nmod inner_allow;\n"),
     );
     accepted.write(
         "src/connected.rs",
@@ -117,18 +117,32 @@ fn lint_allow_requires_an_adjacent_reason_and_removal_condition() {
             "// 原因：兼容回调仍对下游开放；下游迁移完成后移除\n#[allow(dead_code)]\nfn chinese_comment() {}\n",
         ),
     );
+    accepted.write(
+        "src/inner_allow.rs",
+        &with_author(
+            "// reason: legacy module stays compiled for compatibility; remove when v1 support retires\n#![allow(dead_code)]\npub fn legacy() {}\n",
+        ),
+    );
     xtask::run_at(accepted.path(), "architecture").unwrap();
 
     let rejected = Fixture::new();
-    rejected.write("src/lib.rs", &with_author("mod connected;\n"));
+    rejected.write(
+        "src/lib.rs",
+        &with_author("mod connected;\nmod inner_allow;\n"),
+    );
     rejected.write(
         "src/connected.rs",
         &with_author(
             "// 原因：兼容回调仍对下游开放\n// 下游迁移完成后移除\n#[allow(dead_code)]\nfn connected() {}\n",
         ),
     );
+    rejected.write(
+        "src/inner_allow.rs",
+        &with_author("#![allow(dead_code)]\npub fn legacy() {}\n"),
+    );
     let error = xtask::run_at(rejected.path(), "architecture").unwrap_err();
     assert!(error.contains("immediately preceding reason"));
+    assert!(error.contains("src/inner_allow.rs"));
 }
 
 #[test]
