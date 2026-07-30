@@ -2,6 +2,7 @@
 
 //! Shared window chrome helpers for themed client-side title bars.
 
+use gmark_config::{WorkspaceSessionWindow, WorkspaceSessionWindowState};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Decorations, Hsla, MouseButton, Pixels,
@@ -10,7 +11,7 @@ use gpui::{
     size, svg,
 };
 
-use crate::app_identity::GMARK_APP_ID;
+use super::identity::GMARK_APP_ID;
 use crate::ui::theme::{Theme, ThemeDimensions};
 
 const TITLEBAR_MIN_HEIGHT: f32 = 38.0;
@@ -122,10 +123,7 @@ pub(crate) fn gmark_window_options_with_bounds(
     gmark_window_options_with_bounds_for_target_os(std::env::consts::OS, title, bounds)
 }
 
-pub(crate) fn restored_window_bounds(
-    saved: &crate::config::workspace_session::WorkspaceSessionWindow,
-    cx: &App,
-) -> WindowBounds {
+pub(crate) fn restored_window_bounds(saved: &WorkspaceSessionWindow, cx: &App) -> WindowBounds {
     let displays = cx.displays();
     let preferred = saved.display_uuid.and_then(|uuid| {
         displays
@@ -144,15 +142,9 @@ pub(crate) fn restored_window_bounds(
         .map(|display| clamp_window_to_display(saved_bounds, display.bounds()))
         .unwrap_or(saved_bounds);
     match saved.state {
-        crate::config::workspace_session::WorkspaceSessionWindowState::Windowed => {
-            WindowBounds::Windowed(bounds)
-        }
-        crate::config::workspace_session::WorkspaceSessionWindowState::Maximized => {
-            WindowBounds::Maximized(bounds)
-        }
-        crate::config::workspace_session::WorkspaceSessionWindowState::Fullscreen => {
-            WindowBounds::Fullscreen(bounds)
-        }
+        WorkspaceSessionWindowState::Windowed => WindowBounds::Windowed(bounds),
+        WorkspaceSessionWindowState::Maximized => WindowBounds::Maximized(bounds),
+        WorkspaceSessionWindowState::Fullscreen => WindowBounds::Fullscreen(bounds),
     }
 }
 

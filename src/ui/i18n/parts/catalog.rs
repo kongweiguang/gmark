@@ -4,11 +4,13 @@
 
 use std::{path::Path, sync::Arc};
 
+use gmark_config::GmarkConfigDirs;
+#[cfg(test)]
+use gmark_config::read_app_preferences;
 use gpui::{App, Global};
 use serde_json::{Map, Value};
 
 use super::super::I18nStrings;
-use crate::config::GmarkConfigDirs;
 
 pub struct I18nManager {
     catalog: gmark_i18n::I18nCatalog,
@@ -27,7 +29,7 @@ impl I18nManager {
     /// Installs the configured UI language into GPUI's global state.
     #[cfg(test)]
     pub fn init(cx: &mut App) {
-        let language_id = crate::config::read_app_preferences()
+        let language_id = read_app_preferences()
             .map(|preferences| preferences.default_language_id)
             .unwrap_or_else(|_| gmark_i18n::DEFAULT_LANGUAGE_ID.into());
         Self::init_with_language_id(cx, &language_id);

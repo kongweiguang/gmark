@@ -2,9 +2,8 @@
 
 //! Application-layer composition root.
 //!
-//! This tree owns GPUI bootstrap-adjacent behavior while protocol and document
-//! domains remain outside it. Root modules retain temporary compatibility
-//! facades until the root module registry is switched as one change.
+//! This tree owns bootstrap, menus, preferences, diagnostics, and update
+//! coordination while protocol and document domains remain outside it.
 
 #[path = "menu/mod.rs"]
 pub(crate) mod app_menu;

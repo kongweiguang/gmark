@@ -3,6 +3,8 @@
 use super::*;
 use std::sync::Arc;
 
+#[cfg(test)]
+use gmark_config::read_app_preferences;
 use gpui::{App, Global, WindowAppearance};
 
 const XCODE_DARK_ID: &str = "xcode-dark";
@@ -136,7 +138,7 @@ impl ThemeManager {
     /// Installs the configured theme into GPUI's global state.
     #[cfg(test)]
     pub fn init(cx: &mut App) {
-        let preferences = crate::config::read_app_preferences().unwrap_or_default();
+        let preferences = read_app_preferences().unwrap_or_default();
         Self::init_with_preference(cx, preferences.theme_appearance, preferences.theme_palette);
     }
 

@@ -20,34 +20,31 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::*;
 
-mod accessibility;
-mod app_identity;
-mod app_menu;
-mod cli;
+mod app;
 mod components;
-mod config;
-mod crash_report;
 mod document_host;
 mod document_io;
 mod document_runtime;
 mod editor;
 mod export;
-#[cfg(any(target_os = "macos", test))]
-mod file_url;
-mod i18n;
 mod net;
-mod perf;
-mod preferences;
+mod platform;
 mod recovery;
 mod resource_io;
-#[cfg(target_os = "windows")]
-mod single_instance;
 mod source_tools;
 mod spellcheck;
-mod theme;
 mod ui;
-mod updater;
-mod window_chrome;
+
+pub(crate) use app::bootstrap::cli;
+pub(crate) use app::diagnostics::{crash_report, perf};
+pub(crate) use app::{app_menu, config, preferences, updater};
+pub(crate) use platform::accessibility;
+#[cfg(target_os = "windows")]
+pub(crate) use platform::single_instance;
+#[cfg(target_os = "macos")]
+pub(crate) use platform::url as file_url;
+pub(crate) use platform::window as window_chrome;
+pub(crate) use ui::{i18n, theme};
 
 use app_menu::{
     init as init_app_menu, open_editor_window, open_paged_recovery_window,

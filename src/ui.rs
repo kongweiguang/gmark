@@ -1,10 +1,6 @@
 // @author kongweiguang
 
-//! UI foundation and its temporary crate-local composition point.
-//!
-//! `lib.rs` remains outside this refactor's ownership boundary. It already
-//! declares this module, so Wave 3 composes both the UI and platform trees here
-//! while the established root modules expose compatibility facades.
+//! UI foundation: actions, controls, localization, and theme tokens.
 
 #[path = "ui/actions/mod.rs"]
 pub(crate) mod actions;
@@ -14,9 +10,6 @@ pub(crate) mod controls;
 pub(crate) mod i18n;
 #[path = "ui/theme/mod.rs"]
 pub(crate) mod theme;
-
-#[path = "platform/mod.rs"]
-pub(crate) mod platform;
 
 #[cfg(test)]
 pub(crate) use controls::centered_column_ratio;

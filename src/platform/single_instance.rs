@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, bail};
 use fs4::fs_std::FileExt as _;
 use futures::channel::mpsc;
+use gmark_config::{GmarkConfigDirs, load_or_create_installation_id};
 use uds_windows::{UnixListener, UnixStream};
 
 const PROTOCOL_MAGIC: [u8; 8] = *b"GMARKI01";
@@ -59,8 +60,8 @@ impl Drop for InstanceGuard {
 }
 
 pub(crate) fn acquire(paths: &[PathBuf]) -> anyhow::Result<InstanceLaunch> {
-    let dirs = crate::config::GmarkConfigDirs::from_system()?;
-    let installation_id = crate::config::load_or_create_installation_id()?;
+    let dirs = GmarkConfigDirs::from_system()?;
+    let installation_id = load_or_create_installation_id()?;
     let socket_path = instance_socket_path(
         installation_id,
         std::env::var_os("GMARK_UI_CHECK_CONFIG_ROOT"),

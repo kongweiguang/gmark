@@ -57,3 +57,7 @@ fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_url.rs"]
+mod tests;
