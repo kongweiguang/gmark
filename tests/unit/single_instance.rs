@@ -69,7 +69,7 @@ fn long_temp_root_selects_short_local_app_data_socket() {
     let local_app_data = Path::new(r"C:\Users\gmark\AppData\Local");
 
     assert!(
-        temporary_root.to_string_lossy().as_bytes().len() >= 108,
+        temporary_root.to_string_lossy().len() >= 108,
         "the injected TEMP root must exceed the Windows AF_UNIX SUN_LEN budget"
     );
 
@@ -103,7 +103,7 @@ fn long_temp_root_selects_short_local_app_data_socket() {
     .unwrap();
 
     assert!(first.starts_with(local_app_data));
-    assert!(first.to_string_lossy().as_bytes().len() < 108);
+    assert!(first.to_string_lossy().len() < 108);
     assert_eq!(first, repeated, "fallback selection must be deterministic");
     assert_ne!(first, second, "UI-check roots must stay isolated");
     assert_ne!(
