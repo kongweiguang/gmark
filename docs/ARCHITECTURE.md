@@ -35,7 +35,14 @@ src/
 ├── ui/             actions, controls, localization Global, theme tokens
 ├── adapters/       document, resource, recovery, and export IO
 ├── document_host/  GPUI host for resident, paged, and structured documents
-├── editor/         editor state, commands, input, workspace, and rendering sources
+├── editor/
+│   ├── block/      block entities, editing commands, input, and projection runtime
+│   ├── document/   Markdown value adapters and document-specific views
+│   ├── commands/   editor command routing
+│   ├── input/      keyboard, pointer, and text input state
+│   ├── workspace/  files, outline, search, and workspace navigation
+│   ├── render/     editor rendering, LaTeX, and Mermaid
+│   └── services/   auto-save, file watching, and spelling coordination
 ├── components/     one lower-level registry shared by Editor and DocumentHost
 ├── net/            HTTP transport and update-download adapter
 ├── source_tools/   shell adapter around the pure source-tools domain
