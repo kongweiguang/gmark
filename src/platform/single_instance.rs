@@ -1,10 +1,14 @@
 // @author kongweiguang
 
 //! Windows single-instance ownership and bounded local file-open forwarding.
+//!
+//! Windows AF_UNIX endpoints must fit in the 108-byte `sun_path` buffer, including its NUL
+//! terminator. We validate that `SUN_LEN` invariant before binding and fall back from an
+//! overlong `%TEMP%` path to the per-user LocalAppData known folder.
 
 use std::fs::{File, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
+use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -14,9 +18,11 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
+use directories::BaseDirs;
 use fs4::fs_std::FileExt as _;
 use futures::channel::mpsc;
 use gmark_config::{GmarkConfigDirs, load_or_create_installation_id};
+use sha2::{Digest as _, Sha256};
 use uds_windows::{UnixListener, UnixStream};
 
 const PROTOCOL_MAGIC: [u8; 8] = *b"GMARKI01";
@@ -28,6 +34,8 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const RETRY_DELAY: Duration = Duration::from_millis(25);
+const WINDOWS_AF_UNIX_MAX_PATH_BYTES: usize = 107;
+const SOCKET_ID_HASH_BYTES: usize = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InstanceMessage {
@@ -62,29 +70,128 @@ impl Drop for InstanceGuard {
 pub(crate) fn acquire(paths: &[PathBuf]) -> anyhow::Result<InstanceLaunch> {
     let dirs = GmarkConfigDirs::from_system()?;
     let installation_id = load_or_create_installation_id()?;
-    let socket_path = instance_socket_path(
-        installation_id,
-        std::env::var_os("GMARK_UI_CHECK_CONFIG_ROOT"),
-    );
+    let ui_check_root = std::env::var_os("GMARK_UI_CHECK_CONFIG_ROOT").map(PathBuf::from);
+    let socket_path = instance_socket_path(installation_id, ui_check_root.as_deref())?;
     acquire_with_paths(&dirs.instance_lock_file(), &socket_path, paths)
 }
 
 fn instance_socket_path(
     installation_id: uuid::Uuid,
-    ui_check_root: Option<std::ffi::OsString>,
-) -> PathBuf {
-    // Windows AF_UNIX sockaddr has a short fixed path budget; keep the endpoint flat in %TEMP%.
-    // UI screenshot processes must never forward files to a user's real instance, even when a
-    // pre-existing installation identifier was copied into the temporary configuration root.
+    ui_check_root: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    let temporary_root = std::env::temp_dir();
+    // `BaseDirs` resolves Windows' per-user LocalAppData known folder rather than another
+    // environment-controlled temporary location. It is stable across launches and user-writable.
+    let local_app_data_root = BaseDirs::new().map(|dirs| dirs.data_local_dir().to_path_buf());
+    select_instance_socket_path(
+        &temporary_root,
+        local_app_data_root.as_deref(),
+        installation_id,
+        ui_check_root,
+    )
+}
+
+fn select_instance_socket_path(
+    temporary_root: &Path,
+    local_app_data_root: Option<&Path>,
+    installation_id: uuid::Uuid,
+    ui_check_root: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    let temporary_path =
+        temporary_root.join(instance_socket_file_name(installation_id, ui_check_root));
+    let temporary_error = match validate_socket_path(&temporary_path) {
+        Ok(()) => return Ok(temporary_path),
+        Err(error) => error,
+    };
+
+    let local_app_data_root = local_app_data_root.ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot select a Windows AF_UNIX IPC endpoint: %TEMP% candidate '{}' is unusable \
+             ({temporary_error:#}); the per-user LocalAppData fallback is unavailable. Shorten \
+             TEMP or restore LocalAppData.",
+            temporary_path.display()
+        )
+    })?;
+    let fallback_path =
+        local_app_data_root.join(fallback_socket_file_name(installation_id, ui_check_root));
+    validate_socket_path(&fallback_path).with_context(|| {
+        format!(
+            "cannot select a Windows AF_UNIX IPC endpoint: %TEMP% candidate '{}' is unusable \
+             ({temporary_error:#}); LocalAppData fallback '{}' is unusable",
+            temporary_path.display(),
+            fallback_path.display()
+        )
+    })?;
+    Ok(fallback_path)
+}
+
+fn instance_socket_file_name(installation_id: uuid::Uuid, ui_check_root: Option<&Path>) -> String {
     let suffix = ui_check_root
-        .filter(|root| !root.is_empty())
-        .map(|root| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            root.hash(&mut hasher);
-            format!("-{:016x}", hasher.finish())
-        })
+        .filter(|root| !root.as_os_str().is_empty())
+        .map(|root| format!("-{}", ui_check_root_hash(root)))
         .unwrap_or_default();
-    std::env::temp_dir().join(format!("gmi-{}{suffix}.sock", installation_id.simple()))
+    format!("gmi-{}{suffix}.sock", installation_id.simple())
+}
+
+fn fallback_socket_file_name(installation_id: uuid::Uuid, ui_check_root: Option<&Path>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"gmark-instance-socket-v1\0");
+    hasher.update(installation_id.as_bytes());
+    match ui_check_root.filter(|root| !root.as_os_str().is_empty()) {
+        Some(root) => {
+            hasher.update([1]);
+            update_windows_path_hash(&mut hasher, root);
+        }
+        None => hasher.update([0]),
+    }
+    let digest = hasher.finalize();
+    format!("gmi-{}.sock", hash_prefix(&digest))
+}
+
+fn ui_check_root_hash(root: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"gmark-ui-check-root-v1\0");
+    update_windows_path_hash(&mut hasher, root);
+    let digest = hasher.finalize();
+    hash_prefix(&digest)
+}
+
+fn update_windows_path_hash(hasher: &mut Sha256, path: &Path) {
+    for code_unit in path.as_os_str().encode_wide() {
+        hasher.update(code_unit.to_le_bytes());
+    }
+}
+
+fn hash_prefix(digest: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut hash = String::with_capacity(SOCKET_ID_HASH_BYTES * 2);
+    for byte in digest.iter().take(SOCKET_ID_HASH_BYTES) {
+        hash.push(char::from(HEX[usize::from(byte >> 4)]));
+        hash.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    hash
+}
+
+fn validate_socket_path(path: &Path) -> anyhow::Result<()> {
+    let path = path.to_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Windows AF_UNIX IPC endpoint '{}' is not valid UTF-8",
+            path.display()
+        )
+    })?;
+    let bytes = path.as_bytes();
+    if bytes.len() > WINDOWS_AF_UNIX_MAX_PATH_BYTES {
+        bail!(
+            "Windows AF_UNIX IPC endpoint '{path}' is {} UTF-8 bytes; SUN_LEN allows at most \
+             {WINDOWS_AF_UNIX_MAX_PATH_BYTES}",
+            bytes.len()
+        );
+    }
+    if bytes.contains(&0) {
+        bail!("Windows AF_UNIX IPC endpoint contains a NUL byte");
+    }
+    Ok(())
 }
 
 fn acquire_with_paths(
@@ -132,6 +239,15 @@ fn acquire_with_paths(
 }
 
 fn start_primary(lock_file: File, socket_path: &Path) -> anyhow::Result<InstanceLaunch> {
+    validate_socket_path(socket_path)?;
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to prepare instance IPC directory '{}'",
+                parent.display()
+            )
+        })?;
+    }
     match std::fs::remove_file(socket_path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

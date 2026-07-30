@@ -2,11 +2,11 @@
 
 use super::{
     InstanceLaunch, InstanceMessage, MAX_PATHS, NACK, PROTOCOL_MAGIC, acquire_with_paths,
-    instance_socket_path, read_message, write_message,
+    read_message, select_instance_socket_path, write_message,
 };
 use futures::StreamExt as _;
 use std::io::{Read as _, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 use uds_windows::UnixStream;
 
@@ -28,10 +28,30 @@ fn protocol_round_trips_unicode_paths_and_activate_message() {
 #[test]
 fn ui_check_socket_path_isolated_without_changing_production_path() {
     let installation_id = uuid::Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap();
-    let production = instance_socket_path(installation_id, None);
-    let first = instance_socket_path(installation_id, Some(r"C:\temp\gmark-ui-a".into()));
-    let second = instance_socket_path(installation_id, Some(r"C:\temp\gmark-ui-b".into()));
+    let temporary_root = Path::new(r"C:\Users\gmark\AppData\Local\Temp");
+    let local_app_data = Path::new(r"C:\Users\gmark\AppData\Local");
+    let production =
+        select_instance_socket_path(temporary_root, Some(local_app_data), installation_id, None)
+            .unwrap();
+    let first = select_instance_socket_path(
+        temporary_root,
+        Some(local_app_data),
+        installation_id,
+        Some(Path::new(r"C:\temp\gmark-ui-a")),
+    )
+    .unwrap();
+    let second = select_instance_socket_path(
+        temporary_root,
+        Some(local_app_data),
+        installation_id,
+        Some(Path::new(r"C:\temp\gmark-ui-b")),
+    )
+    .unwrap();
 
+    assert_eq!(
+        production,
+        temporary_root.join("gmi-6ba7b8109dad11d180b400c04fd430c8.sock")
+    );
     assert!(
         production
             .file_name()
@@ -40,6 +60,72 @@ fn ui_check_socket_path_isolated_without_changing_production_path() {
     assert_ne!(first, production);
     assert_ne!(first, second);
     assert!(first.file_name().is_some_and(|name| name.len() < 80));
+}
+
+#[test]
+fn long_temp_root_selects_short_local_app_data_socket() {
+    let installation_id = uuid::Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap();
+    let temporary_root = PathBuf::from(r"C:\temp").join("x".repeat(160));
+    let local_app_data = Path::new(r"C:\Users\gmark\AppData\Local");
+
+    assert!(
+        temporary_root.to_string_lossy().as_bytes().len() >= 108,
+        "the injected TEMP root must exceed the Windows AF_UNIX SUN_LEN budget"
+    );
+
+    let first = select_instance_socket_path(
+        &temporary_root,
+        Some(local_app_data),
+        installation_id,
+        Some(Path::new(r"C:\checks\first")),
+    )
+    .unwrap();
+    let repeated = select_instance_socket_path(
+        &temporary_root,
+        Some(local_app_data),
+        installation_id,
+        Some(Path::new(r"C:\checks\first")),
+    )
+    .unwrap();
+    let second = select_instance_socket_path(
+        &temporary_root,
+        Some(local_app_data),
+        installation_id,
+        Some(Path::new(r"C:\checks\second")),
+    )
+    .unwrap();
+    let other_installation = select_instance_socket_path(
+        &temporary_root,
+        Some(local_app_data),
+        uuid::Uuid::parse_str("6ba7b811-9dad-11d1-80b4-00c04fd430c8").unwrap(),
+        Some(Path::new(r"C:\checks\first")),
+    )
+    .unwrap();
+
+    assert!(first.starts_with(local_app_data));
+    assert!(first.to_string_lossy().as_bytes().len() < 108);
+    assert_eq!(first, repeated, "fallback selection must be deterministic");
+    assert_ne!(first, second, "UI-check roots must stay isolated");
+    assert_ne!(
+        first, other_installation,
+        "installation IDs must stay isolated"
+    );
+}
+
+#[test]
+fn long_temp_root_without_safe_fallback_returns_actionable_error() {
+    let long_root = PathBuf::from(r"C:\temp").join("x".repeat(160));
+    let error = select_instance_socket_path(
+        &long_root,
+        Some(&long_root),
+        uuid::Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap(),
+        None,
+    )
+    .unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(message.contains("SUN_LEN"), "{message}");
+    assert!(message.contains("LocalAppData"), "{message}");
 }
 
 #[test]
