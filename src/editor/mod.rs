@@ -28,7 +28,6 @@ use crate::components::{
     TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellPosition, TableColumnAlignment,
     TableData, TableRuntime, UndoCaptureKind, serialize_table_cell_markdown,
 };
-mod auto_save;
 mod close;
 mod command_palette;
 mod context_menu;
@@ -39,7 +38,6 @@ mod encoding;
 mod events;
 mod export;
 mod file_drop;
-mod file_watch;
 mod find_replace;
 mod focus_modes;
 mod format_menu;
@@ -53,10 +51,10 @@ mod recovery;
 pub(crate) mod render;
 mod runtime_context;
 mod selection;
+mod services;
 mod source_format;
 mod source_mapping;
 mod source_tools;
-mod spellcheck;
 mod status_bar;
 mod svg_preview;
 mod system_file;
@@ -261,7 +259,7 @@ pub struct Editor {
     file_open_failure: Option<FileOpenFailure>,
     saved_file_fingerprint: Option<crate::recovery::FileFingerprint>,
     /// 父目录 watcher 跨原子替换存活；事件仍按当前文档 path 过滤。
-    file_watch_guard: Option<file_watch::FileWatchGuard>,
+    file_watch_guard: Option<services::file_watch::FileWatchGuard>,
     file_watch_task: Option<Task<()>>,
     external_file_conflict: bool,
     recovered_session: bool,

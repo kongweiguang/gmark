@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use gpui::*;
 
-use super::Editor;
+use super::super::Editor;
 use crate::config::{AutoSavePreference, EditorSettings};
 
 impl Editor {
     const AUTO_SAVE_IDLE_DELAY: Duration = Duration::from_secs(1);
 
-    pub(super) fn schedule_auto_save(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::editor) fn schedule_auto_save(&mut self, cx: &mut Context<Self>) {
         self.auto_save_task = None;
         if EditorSettings::auto_save(cx) != AutoSavePreference::AfterDelay
             || self.file_path.is_none()

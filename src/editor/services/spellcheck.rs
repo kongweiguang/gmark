@@ -7,21 +7,18 @@ use std::time::Duration;
 
 use gpui::*;
 
-use super::Editor;
+use super::super::{Editor, ViewMode};
 
 impl Editor {
     const SPELLCHECK_IDLE_DELAY: Duration = Duration::from_millis(250);
 
-    pub(super) fn schedule_active_block_spellcheck(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::editor) fn schedule_active_block_spellcheck(&mut self, cx: &mut Context<Self>) {
         self.spellcheck_task = None;
         let Some(block) = self.current_edit_target_from_state(cx) else {
             return;
         };
         if !crate::config::EditorSettings::spell_check(cx)
-            || matches!(
-                self.view_mode,
-                super::ViewMode::Source | super::ViewMode::Split
-            )
+            || matches!(self.view_mode, ViewMode::Source | ViewMode::Split)
         {
             block.update(cx, |block, cx| {
                 if !block.spelling_diagnostics.is_empty() {

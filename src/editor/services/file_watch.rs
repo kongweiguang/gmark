@@ -11,17 +11,17 @@ use gpui::*;
 use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 
-use super::Editor;
+use super::super::Editor;
 
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 
-pub(super) enum FileWatchSignal {
+pub(in crate::editor) enum FileWatchSignal {
     Changed,
     Error(String),
 }
 
 /// Drop 时只发停止信号，不在 GPUI 线程等待 debouncer thread 的 tick。
-pub(super) struct FileWatchGuard {
+pub(in crate::editor) struct FileWatchGuard {
     debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
 }
 
@@ -33,7 +33,7 @@ impl Drop for FileWatchGuard {
     }
 }
 
-pub(super) fn start_file_watch(
+pub(in crate::editor) fn start_file_watch(
     path: PathBuf,
 ) -> anyhow::Result<(FileWatchGuard, UnboundedReceiver<FileWatchSignal>)> {
     let directory = path
@@ -97,7 +97,7 @@ fn same_watch_path(expected: &Path, event_path: &Path) -> bool {
 }
 
 impl Editor {
-    pub(super) fn restart_file_watcher(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::editor) fn restart_file_watcher(&mut self, cx: &mut Context<Self>) {
         self.file_watch_task = None;
         self.file_watch_guard = None;
         if self.image_preview_path.is_some() {
@@ -198,5 +198,5 @@ fn external_conflict_for_snapshot(
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/editor/file_watch.rs"]
+#[path = "../../../tests/unit/editor/file_watch.rs"]
 mod tests;
