@@ -155,6 +155,19 @@ fn atomic_metadata_commit_replaces_an_existing_file() {
 }
 
 #[test]
+fn oversized_cached_envelope_is_rejected_before_manifest_parsing() {
+    let root = tempfile::tempdir().unwrap();
+    let envelope = root.path().join("manifest.envelope.json");
+    std::fs::write(
+        &envelope,
+        vec![b'x'; gmark_update_core::MAX_ENVELOPE_BYTES + 1],
+    )
+    .unwrap();
+
+    assert!(read_cached_envelope(&envelope).is_err());
+}
+
+#[test]
 fn verified_ready_file_requires_exact_size_and_hash() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("artifact");

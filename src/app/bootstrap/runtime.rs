@@ -2,12 +2,19 @@
 
 //! Platform lifecycle, startup restoration, and helper acknowledgement wiring.
 
-use std::path::PathBuf;
+use std::{
+    fs::{self, File},
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
+};
+
 #[cfg(target_os = "macos")]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use tempfile::NamedTempFile;
+use uuid::Uuid;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use futures::StreamExt;
@@ -35,6 +42,11 @@ use crate::{
 };
 
 use super::assets::GmarkAssets;
+
+const UPDATE_ACK_CAPABILITY_ENV: &str = "GMARK_UPDATE_ACK_CAPABILITY";
+const ACKNOWLEDGEMENT_FILE_NAME: &str = "startup-ack";
+const ACK_CAPABILITY_FILE_PREFIX: &str = "startup-ack-capability-";
+const MAX_ACK_CAPABILITY_BYTES: usize = 64;
 
 /// 每个编辑器窗口监听自身外观；只有 system 模式会真正更新全局主题。
 fn install_system_theme_observer(cx: &mut App) {
@@ -133,6 +145,8 @@ pub(crate) fn run_app() {
     }
     let mut args: Vec<String> = std::env::args().collect();
     let update_acknowledgement = take_update_acknowledgement(&mut args);
+    let update_acknowledgement_capability = std::env::var_os(UPDATE_ACK_CAPABILITY_ENV)
+        .map(|capability| capability.into_string().unwrap_or_default());
     let (detach, input_paths) = match crate::cli::parse(&args[1..]) {
         crate::cli::CliCommand::Run {
             detach,
@@ -245,15 +259,11 @@ pub(crate) fn run_app() {
         init_app_menu(cx);
         install_system_theme_observer(cx);
         if let Some(path) = update_acknowledgement.as_ref() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Err(error) = std::fs::write(
+            if let Err(error) = write_update_acknowledgement(
                 path,
-                gmark_update_core::StartupAcknowledgementV1::for_target_version(env!(
-                    "CARGO_PKG_VERSION"
-                ))
-                .marker_bytes(),
+                &update_cache_root(),
+                update_acknowledgement_capability.as_deref(),
+                env!("CARGO_PKG_VERSION"),
             ) {
                 eprintln!("failed to acknowledge applied update: {error}");
             }
@@ -393,6 +403,197 @@ pub(crate) fn run_app() {
         app_menu::install_menus(cx);
         cx.refresh_windows();
     });
+}
+
+fn update_cache_root() -> PathBuf {
+    config::GmarkConfigDirs::from_system()
+        .map(|dirs| dirs.updates_dir())
+        .unwrap_or_else(|_| std::env::temp_dir().join("gmark-updates"))
+}
+
+/// Writes only the acknowledgement tied to the helper's active update transaction.
+/// New helpers supply a random capability, which must validate without fallback.
+/// Its absence is accepted only for the immediately preceding helper protocol,
+/// after the same fixed transaction and apply-plan checks have succeeded.
+fn write_update_acknowledgement(
+    requested_path: &Path,
+    updates_root: &Path,
+    capability: Option<&str>,
+    current_version: &str,
+) -> Result<(), String> {
+    let capability = capability
+        .map(|capability| {
+            Uuid::parse_str(capability)
+                .map_err(|_| {
+                    "update acknowledgement has an invalid transaction capability".to_owned()
+                })
+                .map(|capability| capability.hyphenated().to_string())
+        })
+        .transpose()?;
+    let transaction_dir = acknowledgement_transaction_dir(requested_path, updates_root)?;
+    validate_active_acknowledgement_plan(&transaction_dir, current_version)?;
+    if let Some(capability) = capability.as_deref() {
+        validate_acknowledgement_capability(&transaction_dir, capability)?;
+    }
+    write_acknowledgement_exclusive(&transaction_dir, current_version)
+}
+
+fn acknowledgement_transaction_dir(
+    requested_path: &Path,
+    updates_root: &Path,
+) -> Result<PathBuf, String> {
+    if requested_path.file_name().and_then(|name| name.to_str()) != Some(ACKNOWLEDGEMENT_FILE_NAME)
+    {
+        return Err("update acknowledgement path has an invalid file name".to_owned());
+    }
+    let requested_parent = requested_path
+        .parent()
+        .ok_or_else(|| "update acknowledgement path has no transaction directory".to_owned())?;
+    let canonical_root = fs::canonicalize(updates_root)
+        .map_err(|error| format!("failed to resolve update cache root: {error}"))?;
+    let root_metadata = fs::symlink_metadata(&canonical_root)
+        .map_err(|error| format!("failed to inspect update cache root: {error}"))?;
+    if !root_metadata.file_type().is_dir() || root_metadata.file_type().is_symlink() {
+        return Err("update cache root is not a real directory".to_owned());
+    }
+    let transaction_dir = fs::canonicalize(requested_parent).map_err(|error| {
+        format!("failed to resolve update acknowledgement transaction: {error}")
+    })?;
+    let transaction_metadata = fs::symlink_metadata(&transaction_dir).map_err(|error| {
+        format!("failed to inspect update acknowledgement transaction: {error}")
+    })?;
+    if !transaction_metadata.file_type().is_dir() || transaction_metadata.file_type().is_symlink() {
+        return Err("update acknowledgement transaction is not a real directory".to_owned());
+    }
+    if transaction_dir.parent() != Some(canonical_root.as_path()) {
+        return Err("update acknowledgement is outside the active update cache root".to_owned());
+    }
+    let version = transaction_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix('v'))
+        .ok_or_else(|| "update acknowledgement transaction has an invalid name".to_owned())?;
+    semver::Version::parse(version)
+        .map_err(|_| "update acknowledgement transaction has an invalid version".to_owned())?;
+    Ok(transaction_dir)
+}
+
+fn validate_active_acknowledgement_plan(
+    transaction_dir: &Path,
+    current_version: &str,
+) -> Result<(), String> {
+    let plan_path = transaction_dir.join("apply-plan.json");
+    let plan_metadata = fs::symlink_metadata(&plan_path)
+        .map_err(|error| format!("failed to inspect update acknowledgement plan: {error}"))?;
+    if !plan_metadata.file_type().is_file() || plan_metadata.file_type().is_symlink() {
+        return Err("update acknowledgement plan is not a regular file".to_owned());
+    }
+    let plan = gmark_update_core::read_apply_plan(&plan_path)
+        .map_err(|error| format!("failed to read update acknowledgement plan: {error}"))?;
+    if plan.target_version != current_version
+        || !plan_path_in_transaction(&plan.artifact_path, transaction_dir, "artifact.ready")
+        || !plan_path_in_transaction(
+            &plan.signed_envelope_path,
+            transaction_dir,
+            "manifest.envelope.json",
+        )
+        || !plan_path_in_transaction(
+            &plan.acknowledgement_path,
+            transaction_dir,
+            ACKNOWLEDGEMENT_FILE_NAME,
+        )
+        || !plan_path_in_transaction(&plan.cancellation_path, transaction_dir, "cancel-install")
+    {
+        return Err("update acknowledgement is not bound to the active transaction".to_owned());
+    }
+    Ok(())
+}
+
+fn plan_path_in_transaction(path: &Path, transaction_dir: &Path, expected_name: &str) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(expected_name)
+        && path
+            .parent()
+            .and_then(|parent| fs::canonicalize(parent).ok())
+            .as_deref()
+            == Some(transaction_dir)
+}
+
+fn validate_acknowledgement_capability(
+    transaction_dir: &Path,
+    capability: &str,
+) -> Result<(), String> {
+    let path = transaction_dir.join(format!("{ACK_CAPABILITY_FILE_PREFIX}{capability}"));
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("failed to inspect update acknowledgement capability: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("update acknowledgement capability is not a regular file".to_owned());
+    }
+    let mut file = File::open(&path)
+        .map_err(|error| format!("failed to read update acknowledgement capability: {error}"))?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_ACK_CAPABILITY_BYTES.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read update acknowledgement capability: {error}"))?;
+    if bytes != format!("{capability}\n").as_bytes() {
+        return Err("update acknowledgement capability did not match its transaction".to_owned());
+    }
+    Ok(())
+}
+
+fn write_acknowledgement_exclusive(
+    transaction_dir: &Path,
+    current_version: &str,
+) -> Result<(), String> {
+    let acknowledgement_path = transaction_dir.join(ACKNOWLEDGEMENT_FILE_NAME);
+    match fs::symlink_metadata(&acknowledgement_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("update acknowledgement target is a symbolic link".to_owned());
+        }
+        Ok(_) => return Err("update acknowledgement already exists".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect update acknowledgement target: {error}"
+            ));
+        }
+    }
+    let mut temporary = NamedTempFile::new_in(transaction_dir)
+        .map_err(|error| format!("failed to create update acknowledgement: {error}"))?;
+    temporary
+        .write_all(
+            gmark_update_core::StartupAcknowledgementV1::for_target_version(current_version)
+                .marker_bytes()
+                .as_slice(),
+        )
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| format!("failed to persist update acknowledgement: {error}"))?;
+    set_private_acknowledgement_permissions(temporary.as_file())?;
+    // persist_noclobber is the atomic no-overwrite commit; an attacker-created
+    // final symlink is an existing destination and is never followed or truncated.
+    temporary
+        .persist_noclobber(&acknowledgement_path)
+        .map_err(|error| {
+            format!(
+                "failed to commit update acknowledgement '{}': {}",
+                acknowledgement_path.display(),
+                error.error
+            )
+        })?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_acknowledgement_permissions(file: &File) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("failed to secure update acknowledgement: {error}"))
+}
+
+#[cfg(not(unix))]
+fn set_private_acknowledgement_permissions(_file: &File) -> Result<(), String> {
+    Ok(())
 }
 
 /// Helper 参数不属于用户 CLI；必须在普通参数解析前消费，避免文件路径或未知参数分支误判。

@@ -249,9 +249,13 @@ impl UpdateService {
             return false;
         };
         match self.write_apply_plan(&release, &artifact_path) {
-            Ok((plan_path, helper_path, plan)) => {
-                let mut command = Command::new(&helper_path);
-                command.arg("--apply-plan").arg(&plan_path);
+            Ok(prepared) => {
+                let mut command = Command::new(&prepared.helper.path);
+                command.arg("--apply-plan").arg(&prepared.plan_path);
+                command.env(
+                    UPDATE_ACK_CAPABILITY_ENV,
+                    &prepared.acknowledgement_capability,
+                );
                 #[cfg(target_os = "windows")]
                 {
                     use std::os::windows::process::CommandExt as _;
@@ -260,18 +264,32 @@ impl UpdateService {
                     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
                     command.creation_flags(CREATE_NO_WINDOW);
                 }
+                let helper_guard = match verify_staged_helper_for_launch(&prepared.helper) {
+                    Ok(guard) => guard,
+                    Err(message) => {
+                        self.state = UpdateState::Failed {
+                            release: Some(release),
+                            message,
+                            retryable: false,
+                        };
+                        self.refresh(cx);
+                        return false;
+                    }
+                };
                 match command.spawn() {
                     Ok(_) => {
+                        drop(helper_guard);
                         self.pending_install = Some(PendingInstall {
                             release: release.clone(),
                             artifact_path,
-                            plan,
+                            plan: prepared.plan,
                         });
                         self.state = UpdateState::Installing { release };
                         self.refresh(cx);
                         true
                     }
                     Err(error) => {
+                        drop(helper_guard);
                         self.state = UpdateState::Failed {
                             release: Some(release),
                             message: format!("failed to start update helper: {error}"),
@@ -295,48 +313,50 @@ impl UpdateService {
     }
 
     pub(super) fn cancel_pending_install(&mut self, cx: &mut Context<Self>) {
-        if self.restore_ready_after_cancel() {
-            self.refresh(cx);
+        match self.restore_ready_after_cancel() {
+            Ok(true) | Err(_) => self.refresh(cx),
+            Ok(false) => {}
         }
     }
 
-    pub(super) fn restore_ready_after_cancel(&mut self) -> bool {
-        let Some(pending) = self.pending_install.take() else {
-            return false;
+    pub(super) fn restore_ready_after_cancel(&mut self) -> Result<bool, String> {
+        let Some(pending) = self.pending_install.as_ref() else {
+            return Ok(false);
         };
-        let _ = std::fs::write(
-            &pending.plan.cancellation_path,
-            CancellationV1::MARKER_BYTES,
-        );
+        if let Err(error) = write_cancellation_marker(&pending.plan.cancellation_path) {
+            let message = format!(
+                "failed to cancel update installation; the helper may still be waiting: {error}"
+            );
+            self.state = UpdateState::Failed {
+                release: Some(pending.release.clone()),
+                message: message.clone(),
+                retryable: false,
+            };
+            return Err(message);
+        }
+        let pending = self
+            .pending_install
+            .take()
+            .expect("pending install was checked above");
         self.state = UpdateState::Ready {
             release: pending.release,
             artifact_path: pending.artifact_path,
         };
-        true
+        Ok(true)
     }
 
     pub(super) fn write_apply_plan(
         &self,
         release: &UpdateRelease,
         artifact_path: &std::path::Path,
-    ) -> Result<(PathBuf, PathBuf, ApplyPlanV1), String> {
+    ) -> Result<PreparedInstall, String> {
         let transaction_dir = artifact_path
             .parent()
             .ok_or_else(|| "verified update has no transaction directory".to_owned())?;
+        if transaction_dir.parent() != Some(self.updates_root.as_path()) {
+            return Err("verified update is outside the configured transaction root".to_owned());
+        }
         let installed_helper = installed_helper_path()?;
-        let helper_name = if cfg!(windows) {
-            "gmark-update-helper-copy.exe"
-        } else {
-            "gmark-update-helper-copy"
-        };
-        let helper_path = transaction_dir.join(helper_name);
-        std::fs::copy(&installed_helper, &helper_path).map_err(|error| {
-            format!(
-                "failed to stage update helper '{}': {error}",
-                installed_helper.display()
-            )
-        })?;
-        set_executable(&helper_path)?;
 
         let target_path = current_update_target()?;
         let relaunch_path = current_relaunch_path(&target_path);
@@ -375,11 +395,19 @@ impl UpdateService {
             HelperSignalV1::Cancellation,
             HelperSignalV1::Acknowledgement,
         ] {
-            let _ = clear_helper_signal(&plan, signal);
+            clear_helper_signal(&plan, signal)
+                .map_err(|error| format!("failed to clear stale update helper signal: {error}"))?;
         }
+        let acknowledgement_capability = create_acknowledgement_capability(transaction_dir)?;
         write_apply_plan(&plan_path, &plan)
             .map_err(|error| format!("failed to write update apply plan: {error}"))?;
-        Ok((plan_path, helper_path, plan))
+        let helper = stage_update_helper(transaction_dir, &installed_helper)?;
+        Ok(PreparedInstall {
+            plan_path,
+            helper,
+            plan,
+            acknowledgement_capability,
+        })
     }
 
     pub(super) fn apply_worker_event(&mut self, event: WorkerEvent, cx: &mut Context<Self>) {

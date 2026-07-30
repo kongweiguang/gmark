@@ -149,8 +149,8 @@ fn pending_install_cancellation_restores_the_ready_payload() {
         release: release.clone(),
     };
 
-    assert!(service.restore_ready_after_cancel());
-    assert!(!service.restore_ready_after_cancel());
+    assert_eq!(service.restore_ready_after_cancel(), Ok(true));
+    assert_eq!(service.restore_ready_after_cancel(), Ok(false));
 
     assert!(cancellation_path.is_file());
     assert_eq!(std::fs::read(&cancellation_path).unwrap(), b"cancelled\n");
@@ -161,6 +161,53 @@ fn pending_install_cancellation_restores_the_ready_payload() {
             ..
         } if path == &artifact_path
     ));
+}
+
+#[test]
+fn failed_pending_install_cancellation_does_not_restore_ready() {
+    let root = tempfile::tempdir().unwrap();
+    let release = release_fixture();
+    let artifact_path = root.path().join("artifact.ready");
+    let blocked_parent = root.path().join("not-a-directory");
+    std::fs::write(&blocked_parent, b"not a directory").unwrap();
+    let mut service = UpdateService::new(root.path().to_path_buf(), true);
+    service.pending_install = Some(PendingInstall {
+        release: release.clone(),
+        artifact_path: artifact_path.clone(),
+        plan: ApplyPlanV1 {
+            schema_version: ApplyPlanV1::SCHEMA_VERSION,
+            parent_pid: 0,
+            current_version: release.current_version.clone(),
+            target_version: release.version.clone(),
+            artifact_path: artifact_path.clone(),
+            artifact_url: release.artifact_url.clone(),
+            artifact_size: release.artifact_size,
+            artifact_sha256: release.artifact_sha256.clone(),
+            artifact_format: release.artifact_format.as_protocol_name().to_owned(),
+            signed_envelope_path: root.path().join("manifest.envelope.json"),
+            target_path: root.path().join("gmark.AppImage"),
+            backup_path: root.path().join("gmark.AppImage.gmark-update-backup"),
+            relaunch_path: root.path().join("gmark.AppImage"),
+            acknowledgement_path: root.path().join("startup-ack"),
+            cancellation_path: blocked_parent.join("cancel-install"),
+            result_path: root.path().join("last-result.json"),
+            helper_log_path: root.path().join("last-helper.log"),
+        },
+    });
+    service.state = UpdateState::Installing {
+        release: release.clone(),
+    };
+
+    assert!(service.restore_ready_after_cancel().is_err());
+    assert!(matches!(
+        service.state,
+        UpdateState::Failed {
+            release: Some(_),
+            retryable: false,
+            ..
+        }
+    ));
+    assert!(service.pending_install.is_some());
 }
 
 #[test]
@@ -197,6 +244,85 @@ fn unknown_legacy_apply_result_status_is_presented_as_failed() {
             retryable: false,
         }) if message == "legacy result"
     ));
+}
+
+#[test]
+fn oversized_cached_apply_result_is_ignored() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("last-result.json"),
+        vec![b'x'; 64 * 1024 + 1],
+    )
+    .unwrap();
+
+    assert!(restored_startup_state(root.path()).is_none());
+}
+
+#[test]
+fn staged_helper_is_reverified_before_helper_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let transaction = root.path().join("v1.1.0");
+    std::fs::create_dir(&transaction).unwrap();
+    let installed_helper = root.path().join("installed-helper");
+    std::fs::write(&installed_helper, b"trusted helper").unwrap();
+
+    let staged = stage_update_helper(&transaction, &installed_helper).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::set_permissions(&staged.path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    std::fs::write(&staged.path, b"replaced helper").unwrap();
+
+    assert!(verify_staged_helper_for_launch(&staged).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn staged_helper_launch_guard_keeps_windows_execution_compatible() {
+    let root = tempfile::tempdir().unwrap();
+    let transaction = root.path().join("v1.1.0");
+    std::fs::create_dir(&transaction).unwrap();
+    let system_root = std::env::var_os("SystemRoot").unwrap();
+    let command_shell = PathBuf::from(system_root).join("System32/cmd.exe");
+    let staged = stage_update_helper(&transaction, &command_shell).unwrap();
+    let guard = verify_staged_helper_for_launch(&staged).unwrap();
+
+    let status = std::process::Command::new(&staged.path)
+        .args(["/C", "exit", "0"])
+        .status()
+        .unwrap();
+    drop(guard);
+
+    assert!(status.success());
+}
+
+#[cfg(windows)]
+#[test]
+fn staged_helper_launch_guard_blocks_mutation_until_drop() {
+    let root = tempfile::tempdir().unwrap();
+    let transaction = root.path().join("v1.1.0");
+    std::fs::create_dir(&transaction).unwrap();
+    let system_root = std::env::var_os("SystemRoot").unwrap();
+    let command_shell = PathBuf::from(system_root).join("System32/cmd.exe");
+    let staged = stage_update_helper(&transaction, &command_shell).unwrap();
+    let guard = verify_staged_helper_for_launch(&staged).unwrap();
+    let renamed = transaction.join("cleanup-helper.exe");
+
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&staged.path)
+            .is_err()
+    );
+    assert!(std::fs::remove_file(&staged.path).is_err());
+    assert!(std::fs::rename(&staged.path, &renamed).is_err());
+
+    drop(guard);
+
+    std::fs::rename(&staged.path, &renamed).unwrap();
+    std::fs::remove_file(renamed).unwrap();
 }
 
 fn release_fixture() -> UpdateRelease {

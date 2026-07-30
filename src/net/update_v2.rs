@@ -6,7 +6,7 @@
 //! translates those decisions into reqwest requests and UI-friendly events.
 
 use std::fmt;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -394,7 +394,7 @@ pub(crate) fn restore_ready_release(
         .filter_map(|entry| {
             let root = entry.path();
             let ready = root.join("artifact.ready");
-            let envelope = fs::read(root.join("manifest.envelope.json")).ok()?;
+            let envelope = read_cached_envelope(&root.join("manifest.envelope.json")).ok()?;
             let CheckOutcome::Available(release) = compare_signed_manifest_v2(
                 current_version,
                 installation_id,
@@ -418,6 +418,22 @@ pub(crate) fn restore_ready_release(
         .into_iter()
         .next()
         .map(|(_, release, path)| (release, path))
+}
+
+/// Reads a cache envelope through a fixed bound so a corrupted cache entry
+/// cannot select the allocation size before signature verification starts.
+fn read_cached_envelope(path: &Path) -> Result<Vec<u8>, String> {
+    let mut file =
+        File::open(path).map_err(|error| format!("failed to open cached envelope: {error}"))?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_ENVELOPE_BYTES.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read cached envelope: {error}"))?;
+    if bytes.is_empty() || bytes.len() > MAX_ENVELOPE_BYTES {
+        return Err("cached envelope exceeds its size limit".to_owned());
+    }
+    Ok(bytes)
 }
 
 fn adapt_v2_release(

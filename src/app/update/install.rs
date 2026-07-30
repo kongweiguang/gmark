@@ -2,7 +2,26 @@
 
 //! Helper-launch plan construction and cache recovery.
 
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
+};
+
+use sha2::{Digest as _, Sha256};
+use tempfile::NamedTempFile;
+use uuid::Uuid;
+
 use super::*;
+
+const MAX_CACHED_RESULT_BYTES: usize = 64 * 1024;
+const MAX_DISPLAYED_RESULT_BYTES: usize = 128;
+const MAX_STAGED_HELPER_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Inherited rather than passed on the command line so an acknowledgement path
+/// alone is not a capability to write into the update cache.
+pub(super) const UPDATE_ACK_CAPABILITY_ENV: &str = "GMARK_UPDATE_ACK_CAPABILITY";
+const ACK_CAPABILITY_FILE_PREFIX: &str = "startup-ack-capability-";
 
 pub(super) enum WorkerEvent {
     Download(DownloadEvent),
@@ -11,12 +30,20 @@ pub(super) enum WorkerEvent {
 
 pub(super) fn restored_startup_state(updates_root: &std::path::Path) -> Option<UpdateState> {
     let result_path = updates_root.join("last-result.json");
-    let bytes = std::fs::read(&result_path).ok()?;
+    let bytes =
+        read_bounded_cache_file(&result_path, MAX_CACHED_RESULT_BYTES, "update result").ok()?;
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&bytes);
     let fingerprint = format!("{:08x}\n", hasher.finalize());
     let displayed_path = updates_root.join("last-result-displayed");
-    if std::fs::read_to_string(&displayed_path).ok().as_deref() == Some(fingerprint.as_str()) {
+    let displayed = read_bounded_cache_file(
+        &displayed_path,
+        MAX_DISPLAYED_RESULT_BYTES,
+        "displayed update result",
+    )
+    .ok()
+    .and_then(|bytes| String::from_utf8(bytes).ok());
+    if displayed.as_deref() == Some(fingerprint.as_str()) {
         return None;
     }
     let result = parse_apply_result(&bytes).ok()?;
@@ -33,6 +60,21 @@ pub(super) fn restored_startup_state(updates_root: &std::path::Path) -> Option<U
             retryable: false,
         }
     })
+}
+
+/// Reads cache metadata through a fixed upper bound so a hostile or corrupted
+/// cache file cannot choose the allocation size before parsing begins.
+fn read_bounded_cache_file(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>, String> {
+    let mut file = File::open(path).map_err(|error| format!("failed to open {label}: {error}"))?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {label}: {error}"))?;
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err(format!("{label} exceeds its size limit"));
+    }
+    Ok(bytes)
 }
 
 pub(super) fn cleanup_update_cache(updates_root: &std::path::Path) {
@@ -65,6 +107,320 @@ pub(super) struct PendingInstall {
     pub(super) release: UpdateRelease,
     pub(super) artifact_path: PathBuf,
     pub(super) plan: ApplyPlanV1,
+}
+
+pub(super) struct PreparedInstall {
+    pub(super) plan_path: PathBuf,
+    pub(super) helper: StagedHelper,
+    pub(super) plan: ApplyPlanV1,
+    pub(super) acknowledgement_capability: String,
+}
+
+pub(super) struct StagedHelper {
+    pub(super) path: PathBuf,
+    length: u64,
+    digest: [u8; 32],
+}
+
+/// On Windows this keeps the verified image open without write/delete sharing
+/// while CreateProcess resolves it; the running image remains OS-locked after launch.
+pub(super) struct StagedHelperLaunchGuard {
+    #[cfg(windows)]
+    _directory: File,
+    #[cfg(windows)]
+    _file: File,
+}
+
+pub(super) fn acknowledgement_capability_path(transaction_dir: &Path, capability: &str) -> PathBuf {
+    transaction_dir.join(format!("{ACK_CAPABILITY_FILE_PREFIX}{capability}"))
+}
+
+pub(super) fn create_acknowledgement_capability(transaction_dir: &Path) -> Result<String, String> {
+    harden_transaction_directory(transaction_dir)?;
+    let capability = Uuid::new_v4().hyphenated().to_string();
+    let path = acknowledgement_capability_path(transaction_dir, &capability);
+    let mut temporary = NamedTempFile::new_in(transaction_dir)
+        .map_err(|error| format!("failed to create update acknowledgement capability: {error}"))?;
+    temporary
+        .write_all(format!("{capability}\n").as_bytes())
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| format!("failed to persist update acknowledgement capability: {error}"))?;
+    set_private_file_permissions(temporary.as_file())?;
+    temporary.persist_noclobber(&path).map_err(|error| {
+        format!(
+            "failed to commit update acknowledgement capability '{}': {}",
+            path.display(),
+            error.error
+        )
+    })?;
+    Ok(capability)
+}
+
+/// Commits cancellation only after its complete marker is durable. A pre-existing
+/// marker is accepted only when it is the exact marker created by this protocol.
+pub(super) fn write_cancellation_marker(path: &Path) -> Result<(), String> {
+    if existing_cancellation_marker(path)? {
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "update cancellation path has no parent directory".to_owned())?;
+    let parent_metadata = fs::symlink_metadata(parent)
+        .map_err(|error| format!("failed to inspect cancellation directory: {error}"))?;
+    if !parent_metadata.file_type().is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err("update cancellation directory is not a real directory".to_owned());
+    }
+    let mut temporary = NamedTempFile::new_in(parent)
+        .map_err(|error| format!("failed to create cancellation marker: {error}"))?;
+    temporary
+        .write_all(CancellationV1::MARKER_BYTES)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| format!("failed to persist cancellation marker: {error}"))?;
+    set_private_file_permissions(temporary.as_file())?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            existing_cancellation_marker(path).and_then(|present| {
+                present
+                    .then_some(())
+                    .ok_or_else(|| "cancellation marker has unexpected contents".to_owned())
+            })
+        }
+        Err(error) => Err(format!(
+            "failed to commit cancellation marker: {}",
+            error.error
+        )),
+    }
+}
+
+fn existing_cancellation_marker(path: &Path) -> Result<bool, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("failed to inspect cancellation marker: {error}")),
+    };
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("cancellation marker is not a regular file".to_owned());
+    }
+    let marker = read_bounded_cache_file(
+        path,
+        CancellationV1::MARKER_BYTES.len(),
+        "cancellation marker",
+    )?;
+    Ok(marker == CancellationV1::MARKER_BYTES)
+}
+
+pub(super) fn stage_update_helper(
+    transaction_dir: &Path,
+    installed_helper: &Path,
+) -> Result<StagedHelper, String> {
+    harden_transaction_directory(transaction_dir)?;
+    let helper_name = if cfg!(windows) {
+        format!("gmark-update-helper-copy-{}.exe", Uuid::new_v4())
+    } else {
+        format!("gmark-update-helper-copy-{}", Uuid::new_v4())
+    };
+    let path = transaction_dir.join(helper_name);
+    let (length, digest) = copy_helper_exclusive(installed_helper, &path)?;
+    harden_staged_helper(&path)?;
+    let helper = StagedHelper {
+        path,
+        length,
+        digest,
+    };
+    // Verify the copy after permissions are finalized, then verify it again at launch.
+    let _ = verify_staged_helper_for_launch(&helper)?;
+    Ok(helper)
+}
+
+pub(super) fn verify_staged_helper_for_launch(
+    helper: &StagedHelper,
+) -> Result<StagedHelperLaunchGuard, String> {
+    let metadata = fs::symlink_metadata(&helper.path)
+        .map_err(|error| format!("failed to inspect staged helper: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("staged helper is not a regular file".to_owned());
+    }
+    if metadata.len() != helper.length {
+        return Err("staged helper changed after verification".to_owned());
+    }
+
+    #[cfg(windows)]
+    let directory = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let transaction_dir = helper
+            .path
+            .parent()
+            .ok_or_else(|| "staged helper has no transaction directory".to_owned())?;
+        let directory_metadata = fs::symlink_metadata(transaction_dir)
+            .map_err(|error| format!("failed to inspect staged helper directory: {error}"))?;
+        if !directory_metadata.file_type().is_dir() || directory_metadata.file_type().is_symlink() {
+            return Err("staged helper directory is not a real directory".to_owned());
+        }
+        // Security: FILE_FLAG_BACKUP_SEMANTICS permits a directory handle; denying
+        // write/delete sharing prevents replacing the verified path before launch.
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(0x0200_0000)
+            .share_mode(0x0000_0001)
+            .open(transaction_dir)
+            .map_err(|error| format!("failed to lock staged helper directory: {error}"))?
+    };
+    #[cfg(windows)]
+    let mut file = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        // Security: deny write/delete sharing until CreateProcess has opened the
+        // verified image. FILE_SHARE_READ still permits normal Windows execution.
+        OpenOptions::new()
+            .read(true)
+            .share_mode(0x0000_0001)
+            .open(&helper.path)
+            .map_err(|error| format!("failed to lock staged helper for launch: {error}"))?
+    };
+    #[cfg(not(windows))]
+    let mut file = File::open(&helper.path)
+        .map_err(|error| format!("failed to open staged helper for launch: {error}"))?;
+
+    if hash_file_exact(&mut file, helper.length, "staged helper")? != helper.digest {
+        return Err("staged helper changed after verification".to_owned());
+    }
+    Ok(StagedHelperLaunchGuard {
+        #[cfg(windows)]
+        _directory: directory,
+        #[cfg(windows)]
+        _file: file,
+    })
+}
+
+fn harden_transaction_directory(transaction_dir: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(transaction_dir)
+        .map_err(|error| format!("failed to inspect update transaction directory: {error}"))?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err("update transaction directory is not a real directory".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(transaction_dir, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("failed to secure update transaction directory: {error}"))?;
+    }
+    Ok(())
+}
+
+fn copy_helper_exclusive(source: &Path, destination: &Path) -> Result<(u64, [u8; 32]), String> {
+    let mut source_file = File::open(source).map_err(|error| {
+        format!(
+            "failed to open installed update helper '{}': {error}",
+            source.display()
+        )
+    })?;
+    let source_metadata = source_file
+        .metadata()
+        .map_err(|error| format!("failed to inspect installed update helper: {error}"))?;
+    let expected_length = source_metadata.len();
+    if !source_metadata.is_file()
+        || expected_length == 0
+        || expected_length > MAX_STAGED_HELPER_BYTES
+    {
+        return Err("installed update helper is not a bounded regular file".to_owned());
+    }
+    let mut destination_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| format!("failed to create staged update helper: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    let copy_result = (|| -> Result<(), String> {
+        loop {
+            let read = source_file
+                .read(&mut buffer)
+                .map_err(|error| format!("failed to read installed update helper: {error}"))?;
+            if read == 0 {
+                break;
+            }
+            total = total
+                .checked_add(read as u64)
+                .ok_or_else(|| "installed update helper is too large".to_owned())?;
+            if total > expected_length || total > MAX_STAGED_HELPER_BYTES {
+                return Err("installed update helper changed while staging".to_owned());
+            }
+            destination_file
+                .write_all(&buffer[..read])
+                .map_err(|error| format!("failed to stage update helper: {error}"))?;
+            hasher.update(&buffer[..read]);
+        }
+        if total != expected_length {
+            return Err("installed update helper changed while staging".to_owned());
+        }
+        destination_file
+            .sync_all()
+            .map_err(|error| format!("failed to persist staged update helper: {error}"))
+    })();
+    if let Err(error) = copy_result {
+        drop(destination_file);
+        let _ = fs::remove_file(destination);
+        return Err(error);
+    }
+    Ok((total, hasher.finalize().into()))
+}
+
+fn harden_staged_helper(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect staged helper: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("staged helper is not a regular file".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o500))
+            .map_err(|error| format!("failed to secure staged helper: {error}"))?;
+    }
+    Ok(())
+}
+
+fn hash_file_exact(file: &mut File, expected_length: u64, label: &str) -> Result<[u8; 32], String> {
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read {label}: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        total = total
+            .checked_add(read as u64)
+            .ok_or_else(|| format!("{label} is too large"))?;
+        if total > expected_length || total > MAX_STAGED_HELPER_BYTES {
+            return Err(format!("{label} changed after verification"));
+        }
+        hasher.update(&buffer[..read]);
+    }
+    if total != expected_length {
+        return Err(format!("{label} changed after verification"));
+    }
+    Ok(hasher.finalize().into())
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(file: &File) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("failed to secure update acknowledgement capability: {error}"))
+}
+
+#[cfg(not(unix))]
+fn set_private_file_permissions(_file: &File) -> Result<(), String> {
+    Ok(())
 }
 
 pub(super) fn installed_helper_path() -> Result<PathBuf, String> {
@@ -152,20 +508,4 @@ pub(super) fn sibling_backup_path(target: &std::path::Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("gmark");
     target.with_file_name(format!("{name}.gmark-update-backup"))
-}
-
-#[cfg(unix)]
-pub(super) fn set_executable(path: &std::path::Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut permissions = std::fs::metadata(path)
-        .map_err(|error| format!("failed to inspect staged helper: {error}"))?
-        .permissions();
-    permissions.set_mode(0o700);
-    std::fs::set_permissions(path, permissions)
-        .map_err(|error| format!("failed to secure staged helper: {error}"))
-}
-
-#[cfg(not(unix))]
-pub(super) fn set_executable(_path: &std::path::Path) -> Result<(), String> {
-    Ok(())
 }
