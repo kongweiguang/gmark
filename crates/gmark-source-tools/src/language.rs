@@ -26,6 +26,11 @@ pub enum SourceLanguage {
     Ruby,
     Yaml,
     Toml,
+    Sql,
+    Lua,
+    Swift,
+    PowerShell,
+    Containerfile,
     Mermaid,
     /// 无法确定语言时的安全回退，不产生语义 token。
     #[default]
@@ -38,6 +43,11 @@ impl SourceLanguage {
         let file_name = path.file_name().and_then(|name| name.to_str());
         if file_name.is_some_and(|name| name.eq_ignore_ascii_case("Cargo.lock")) {
             return Self::Toml;
+        }
+        if file_name.is_some_and(|name| {
+            name.eq_ignore_ascii_case("Dockerfile") || name.eq_ignore_ascii_case("Containerfile")
+        }) {
+            return Self::Containerfile;
         }
 
         let extension = path.extension().and_then(|value| value.to_str());
@@ -69,6 +79,11 @@ impl SourceLanguage {
             "rb" => Self::Ruby,
             "yaml" | "yml" => Self::Yaml,
             "toml" => Self::Toml,
+            "sql" | "ddl" | "dml" | "psql" => Self::Sql,
+            "lua" => Self::Lua,
+            "swift" => Self::Swift,
+            "ps1" | "psm1" | "psd1" => Self::PowerShell,
+            "dockerfile" | "containerfile" => Self::Containerfile,
             "mmd" | "mermaid" => Self::Mermaid,
             _ => Self::PlainText,
         }
@@ -118,6 +133,11 @@ impl SourceLanguage {
             Self::Ruby => "ruby",
             Self::Yaml => "yaml",
             Self::Toml => "toml",
+            Self::Sql => "sql",
+            Self::Lua => "lua",
+            Self::Swift => "swift",
+            Self::PowerShell => "powershell",
+            Self::Containerfile => "dockerfile",
             Self::Mermaid => "mermaid",
             Self::PlainText => "text",
         }
@@ -161,7 +181,7 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     },
     LanguageDescriptor {
         language: SourceLanguage::JavaScript,
-        aliases: &["javascript", "js"],
+        aliases: &["javascript", "js", "mjs", "cjs", "node"],
     },
     LanguageDescriptor {
         language: SourceLanguage::JavaScriptJsx,
@@ -169,7 +189,7 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     },
     LanguageDescriptor {
         language: SourceLanguage::TypeScript,
-        aliases: &["typescript", "ts"],
+        aliases: &["typescript", "ts", "mts", "cts"],
     },
     LanguageDescriptor {
         language: SourceLanguage::TypeScriptTsx,
@@ -177,7 +197,7 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     },
     LanguageDescriptor {
         language: SourceLanguage::Json,
-        aliases: &["json"],
+        aliases: &["json", "jsonc", "geojson", "jsonl", "ndjson"],
     },
     LanguageDescriptor {
         language: SourceLanguage::Markdown,
@@ -209,7 +229,7 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     },
     LanguageDescriptor {
         language: SourceLanguage::Html,
-        aliases: &["html"],
+        aliases: &["html", "htm", "xml", "svg"],
     },
     LanguageDescriptor {
         language: SourceLanguage::Java,
@@ -221,7 +241,7 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
     },
     LanguageDescriptor {
         language: SourceLanguage::Python,
-        aliases: &["python", "py"],
+        aliases: &["python", "py", "pyw"],
     },
     LanguageDescriptor {
         language: SourceLanguage::Ruby,
@@ -236,12 +256,32 @@ const LANGUAGE_DESCRIPTORS: &[LanguageDescriptor] = &[
         aliases: &["toml"],
     },
     LanguageDescriptor {
+        language: SourceLanguage::Sql,
+        aliases: &["sql", "mysql", "postgresql", "postgres", "plsql", "sqlite"],
+    },
+    LanguageDescriptor {
+        language: SourceLanguage::Lua,
+        aliases: &["lua"],
+    },
+    LanguageDescriptor {
+        language: SourceLanguage::Swift,
+        aliases: &["swift"],
+    },
+    LanguageDescriptor {
+        language: SourceLanguage::PowerShell,
+        aliases: &["powershell", "pwsh", "ps1"],
+    },
+    LanguageDescriptor {
+        language: SourceLanguage::Containerfile,
+        aliases: &["dockerfile", "containerfile", "docker"],
+    },
+    LanguageDescriptor {
         language: SourceLanguage::PlainText,
         aliases: &["text", "txt", "plain"],
     },
     LanguageDescriptor {
         language: SourceLanguage::Mermaid,
-        aliases: &["mermaid"],
+        aliases: &["mermaid", "mmd"],
     },
 ];
 
@@ -269,6 +309,11 @@ pub const FENCE_LANGUAGE_MENU_ITEMS: &[&str] = &[
     "ruby",
     "yaml",
     "toml",
+    "sql",
+    "lua",
+    "swift",
+    "powershell",
+    "dockerfile",
 ];
 
 #[cfg(feature = "code-highlight-core")]
@@ -314,6 +359,16 @@ pub(crate) fn tree_sitter_language(language: SourceLanguage) -> Option<tree_sitt
         SourceLanguage::Yaml => Some(tree_sitter_yaml::LANGUAGE.into()),
         #[cfg(feature = "code-highlight-config")]
         SourceLanguage::Toml => Some(tree_sitter_toml::LANGUAGE.into()),
+        #[cfg(feature = "code-highlight-extra")]
+        SourceLanguage::Sql => Some(tree_sitter_sequel::LANGUAGE.into()),
+        #[cfg(feature = "code-highlight-extra")]
+        SourceLanguage::Lua => Some(tree_sitter_lua::LANGUAGE.into()),
+        #[cfg(feature = "code-highlight-extra")]
+        SourceLanguage::Swift => Some(tree_sitter_swift::LANGUAGE.into()),
+        #[cfg(feature = "code-highlight-extra")]
+        SourceLanguage::PowerShell => Some(tree_sitter_powershell::LANGUAGE.into()),
+        #[cfg(feature = "code-highlight-extra")]
+        SourceLanguage::Containerfile => Some(tree_sitter_containerfile::LANGUAGE.into()),
         _ => None,
     }
 }

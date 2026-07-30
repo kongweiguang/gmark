@@ -37,6 +37,7 @@ use gmark_paged_document::{
     search_file_source, selection_transfer_for_len, serialize_delimited_record,
     validate_json_lines_cancellable, validate_json_lines_from_cancellable,
 };
+use gmark_source_tools::SourceSyntaxContext;
 use gpui::prelude::*;
 use gpui::{
     AnyView, App, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
@@ -188,6 +189,7 @@ pub(crate) struct DocumentHost {
     /// 从 Host 构造到首个真实 Source 窗口绘制的耗时；仅在本地诊断显式开启时分配。
     first_render_started: Option<Instant>,
     source_row_blocks: BTreeMap<usize, Entity<Block>>,
+    source_syntax_contexts: BTreeMap<usize, SourceSyntaxContext>,
     source_row_epochs: BTreeMap<usize, u64>,
     source_cache_epoch: u64,
     soak_ready_published: bool,

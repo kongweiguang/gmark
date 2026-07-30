@@ -2,11 +2,13 @@
 
 //! GPUI-facing semantic-highlight adapter.
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::Path;
 
 use gmark_source_tools::{
-    SourceLanguage, detect_language, highlight_source, resolve_fence_language,
+    HighlightResult, SourceLanguage, build_source_syntax_contexts as build_domain_contexts,
+    detect_language, highlight_source, resolve_fence_language,
 };
 use gpui::Hsla;
 
@@ -14,7 +16,7 @@ use crate::theme::ThemeColors;
 
 pub(crate) use gmark_source_tools::{
     FENCE_LANGUAGE_MENU_ITEMS as CODE_LANGUAGE_MENU_ITEMS, SourceLanguage as CodeLanguageKey,
-    TokenClass as CodeHighlightClass,
+    SourceSyntaxContext, TokenClass as CodeHighlightClass,
 };
 
 /// Highlighted byte range inside a code block, projected to GPUI's native offsets.
@@ -46,7 +48,19 @@ pub(crate) fn highlight_code_block(
     source: &str,
 ) -> Option<CodeHighlightResult> {
     let language = resolve_code_language_key(language)?;
-    let highlighted = highlight_source(language, source);
+    Some(project_highlight_result(highlight_source(language, source)))
+}
+
+pub(crate) fn build_source_syntax_contexts<'a>(
+    language: Option<&str>,
+    rows: impl IntoIterator<Item = (usize, &'a str)>,
+) -> BTreeMap<usize, SourceSyntaxContext> {
+    resolve_code_language_key(language)
+        .map(|language| build_domain_contexts(language, rows))
+        .unwrap_or_default()
+}
+
+pub(crate) fn project_highlight_result(highlighted: HighlightResult) -> CodeHighlightResult {
     let spans = highlighted
         .spans
         .into_iter()
@@ -59,10 +73,10 @@ pub(crate) fn highlight_code_block(
             })
         })
         .collect();
-    Some(CodeHighlightResult {
+    CodeHighlightResult {
         language: highlighted.language,
         spans,
-    })
+    }
 }
 
 pub(crate) fn code_highlight_color(colors: &ThemeColors, class: CodeHighlightClass) -> Hsla {

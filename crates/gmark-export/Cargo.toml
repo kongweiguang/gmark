@@ -14,7 +14,7 @@ publish = false
 workspace = true
 
 [features]
-default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "html-native"]
+default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "code-highlight-extra", "html-native"]
 code-highlight-core = ["gmark-source-tools/code-highlight-core"]
 code-highlight-official = [
     "code-highlight-core",
@@ -23,6 +23,10 @@ code-highlight-official = [
 code-highlight-config = [
     "code-highlight-core",
     "gmark-source-tools/code-highlight-config",
+]
+code-highlight-extra = [
+    "code-highlight-core",
+    "gmark-source-tools/code-highlight-extra",
 ]
 html-native = ["gmark-markdown/html-native"]
 

@@ -29,7 +29,9 @@ use super::{
     BlockEvent, BlockHostAction, BlockKind, BlockRecord, CalloutVariant, CodeFenceOpening,
     EditingCommandId, FootnoteRegistry, SlashMenuState, UndoCaptureKind,
 };
-use super::{CodeHighlightResult, highlight_code_block};
+use super::{
+    CodeHighlightResult, SourceSyntaxContext, highlight_code_block, project_highlight_result,
+};
 use super::{
     ImageReferenceDefinitions, ImageResolvedSource, ImageSyntax, LinkReferenceDefinitions,
     parse_standalone_image, resolve_image_source, rewrite_standalone_image_width,
@@ -169,6 +171,7 @@ pub struct Block {
     pub(crate) render_cache: InlineRenderCache,
     code_highlight: Option<CodeHighlightResult>,
     source_syntax_language: Option<SharedString>,
+    source_syntax_context: Option<SourceSyntaxContext>,
     pub(crate) last_successful_math_render: Option<crate::components::LatexSvgRender>,
     pub(crate) last_successful_mermaid_render: Option<crate::components::MermaidSvgRender>,
     pub(crate) math_render_error: Option<String>,
@@ -355,6 +358,7 @@ impl Block {
             render_cache,
             code_highlight: None,
             source_syntax_language: None,
+            source_syntax_context: None,
             last_successful_math_render: None,
             last_successful_mermaid_render: None,
             math_render_error: None,

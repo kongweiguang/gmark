@@ -1,7 +1,8 @@
 // @author kongweiguang
 
 use gmark_source_tools::{
-    HighlightEngine, SourceLanguage, TokenClass, highlight_fenced_code, highlight_source,
+    HighlightEngine, SourceLanguage, TokenClass, build_source_syntax_contexts,
+    highlight_fenced_code, highlight_source,
 };
 
 #[test]
@@ -39,6 +40,55 @@ fn config_grammar_bundle_produces_yaml_spans() {
     let highlighted = highlight_source(SourceLanguage::Yaml, "name: gmark\nenabled: true\n");
     assert_eq!(highlighted.engine, HighlightEngine::TreeSitter);
     assert!(!highlighted.spans.is_empty());
+}
+
+#[cfg(feature = "code-highlight-extra")]
+#[test]
+fn extra_grammar_bundle_produces_semantic_spans() {
+    let samples = [
+        (
+            SourceLanguage::Sql,
+            "SELECT value FROM items WHERE value > 0;",
+        ),
+        (SourceLanguage::Lua, "local value = 42\nprint(value)"),
+        (SourceLanguage::Swift, "let greeting: String = \"hello\""),
+        (SourceLanguage::PowerShell, "$items = Get-ChildItem"),
+        (
+            SourceLanguage::Containerfile,
+            "FROM rust:latest\nRUN cargo build",
+        ),
+    ];
+    for (language, source) in samples {
+        let highlighted = highlight_source(language, source);
+        assert_eq!(highlighted.engine, HighlightEngine::TreeSitter);
+        assert!(
+            !highlighted.spans.is_empty(),
+            "expected spans for {language:?}"
+        );
+    }
+}
+
+#[cfg(feature = "code-highlight-extra")]
+#[test]
+fn source_rows_keep_multiline_sql_context() {
+    let lines = [
+        "SELECT vehicle_id, sequence, action, road_id, target_road_id,",
+        "       start_time, end_time, duration, speed",
+        "FROM snowplow_table",
+        "WHERE vehicle_id = :vehicle_id",
+        "  AND action = 'clean'",
+        "ORDER BY start_time",
+        "LIMIT 1;",
+    ];
+    let contexts = build_source_syntax_contexts(
+        SourceLanguage::Sql,
+        lines.iter().enumerate().map(|(line, text)| (line, *text)),
+    );
+    assert_eq!(contexts.len(), lines.len());
+    assert!(contexts.iter().all(|(line, context)| {
+        let highlighted = context.highlight(lines[*line]);
+        highlighted.engine == HighlightEngine::TreeSitter && !highlighted.spans.is_empty()
+    }));
 }
 
 #[cfg(all(

@@ -142,6 +142,7 @@ impl DocumentHost {
         let generation = self.coordinator.source_generation;
         let task_stamp = DocumentTaskStamp::capture(self, generation);
         let window_start = self.source_window_start;
+        let syntax_language = crate::components::code_language_for_path(&self.path);
         let requested_center = requested.start.saturating_add(requested.len() / 2);
         let viewport_request = ViewportRequest::bounded(
             requested.start as u64,
@@ -157,7 +158,7 @@ impl DocumentHost {
         self.coordinator.source_task = cx.spawn(async move |this, cx| {
             let rows = cx
                 .background_spawn(async move {
-                    match reader {
+                    let rows = match reader {
                         SourceViewportReader::Indexed(document) => document
                             .read_viewport_cancellable(&viewport_request, &cancellation)
                             .map(|snapshot| {
@@ -191,7 +192,14 @@ impl DocumentHost {
                             &encoding,
                             &cancellation,
                         ),
-                    }
+                    }?;
+                    let syntax_contexts = syntax_language.map_or_else(BTreeMap::new, |language| {
+                        crate::components::build_source_syntax_contexts(
+                            Some(language),
+                            rows.iter().map(|(line, row)| (*line, row.text.as_ref())),
+                        )
+                    });
+                    Ok::<_, PagedDocumentError>((rows, syntax_contexts))
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
@@ -206,8 +214,9 @@ impl DocumentHost {
                 view.source_pending = None;
                 view.coordinator.source_cancellation = None;
                 match rows {
-                    Ok(rows) => {
+                    Ok((rows, syntax_contexts)) => {
                         view.source_cancel_in_flight = false;
+                        view.source_syntax_contexts.extend(syntax_contexts);
                         for (line, row) in rows {
                             let row_changed = view
                                 .source_rows
@@ -245,6 +254,7 @@ impl DocumentHost {
                             };
                             view.source_rows.remove(&evicted);
                             view.source_row_epochs.remove(&evicted);
+                            view.source_syntax_contexts.remove(&evicted);
                             if view
                                 .active_edit
                                 .as_ref()
@@ -341,6 +351,7 @@ impl DocumentHost {
         }
         self.source_cancel_in_flight = false;
         self.source_cache_epoch = self.source_cache_epoch.wrapping_add(1);
+        self.source_syntax_contexts.clear();
         self.source_pending = None;
         self.source_queued_visible = None;
         self.coordinator.source_task = Task::ready(());

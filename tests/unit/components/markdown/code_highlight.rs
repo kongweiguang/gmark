@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use super::{
-    CodeHighlightClass, CodeLanguageKey, code_language_for_path, highlight_code_block,
-    resolve_code_language_key,
+    CodeHighlightClass, CodeLanguageKey, build_source_syntax_contexts, code_language_for_path,
+    highlight_code_block, resolve_code_language_key,
 };
 
 #[test]
@@ -65,6 +65,26 @@ fn balanced_bundle_aliases_resolve_to_expected_keys() {
         resolve_code_language_key(Some("mermaid")),
         Some(CodeLanguageKey::Mermaid)
     );
+    assert_eq!(
+        resolve_code_language_key(Some("postgresql")),
+        Some(CodeLanguageKey::Sql)
+    );
+    assert_eq!(
+        resolve_code_language_key(Some("pwsh")),
+        Some(CodeLanguageKey::PowerShell)
+    );
+    assert_eq!(
+        resolve_code_language_key(Some("containerfile")),
+        Some(CodeLanguageKey::Containerfile)
+    );
+    assert_eq!(
+        resolve_code_language_key(Some("jsonc")),
+        Some(CodeLanguageKey::Json)
+    );
+    assert_eq!(
+        resolve_code_language_key(Some("xml")),
+        Some(CodeLanguageKey::Html)
+    );
     assert_eq!(resolve_code_language_key(Some("unknown")), None);
 }
 
@@ -77,6 +97,12 @@ fn standalone_source_paths_map_to_registered_languages() {
         ("config.yml", "yaml"),
         ("vector.svg", "html"),
         ("Cargo.lock", "toml"),
+        ("query.sql", "sql"),
+        ("script.lua", "lua"),
+        ("App.swift", "swift"),
+        ("profile.ps1", "powershell"),
+        ("Dockerfile", "dockerfile"),
+        ("Containerfile", "dockerfile"),
     ];
     for (path, expected) in samples {
         assert_eq!(code_language_for_path(Path::new(path)), Some(expected));
@@ -176,4 +202,65 @@ fn config_language_bundle_produces_spans() {
     )
     .expect("toml should produce a result");
     assert!(!toml.spans.is_empty());
+}
+
+#[cfg(all(feature = "code-highlight-core", feature = "code-highlight-extra"))]
+#[test]
+fn extra_language_bundle_produces_spans() {
+    let samples = [
+        (
+            "sql",
+            "SELECT vehicle_id, speed FROM snowplow_table WHERE speed > 0 ORDER BY speed;\n",
+        ),
+        ("lua", "local value = 42\nprint(value)\n"),
+        (
+            "swift",
+            "let greeting: String = \"hello\"\nprint(greeting)\n",
+        ),
+        (
+            "powershell",
+            "$items = Get-ChildItem\nforeach ($item in $items) { Write-Output $item }\n",
+        ),
+        (
+            "dockerfile",
+            "FROM rust:latest\nRUN cargo build --release\n",
+        ),
+    ];
+
+    for (language, sample) in samples {
+        let result = highlight_code_block(Some(language), sample)
+            .expect("known extra language should produce a result");
+        assert!(
+            !result.spans.is_empty(),
+            "expected non-empty spans for {language}"
+        );
+    }
+}
+
+#[cfg(all(feature = "code-highlight-core", feature = "code-highlight-extra"))]
+#[test]
+fn source_rows_keep_multiline_sql_highlight_context() {
+    let lines = [
+        "SELECT vehicle_id, sequence, action, road_id, target_road_id,",
+        "       start_time, end_time, duration, speed",
+        "FROM snowplow_table",
+        "WHERE vehicle_id = :vehicle_id",
+        "  AND action = 'clean'",
+        "ORDER BY start_time",
+        "LIMIT 1;",
+    ];
+    let contexts = build_source_syntax_contexts(
+        Some("sql"),
+        lines.iter().enumerate().map(|(line, text)| (line, *text)),
+    );
+
+    assert_eq!(contexts.len(), lines.len());
+    for (line, text) in lines.iter().enumerate() {
+        let result = contexts[&line].highlight(text);
+        assert_eq!(result.language, CodeLanguageKey::Sql);
+        assert!(
+            !result.spans.is_empty(),
+            "row {line} should retain SQL context"
+        );
+    }
 }

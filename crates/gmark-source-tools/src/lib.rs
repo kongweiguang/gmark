@@ -13,6 +13,7 @@ mod highlight_configs;
 mod incremental;
 mod language;
 mod range;
+mod syntax_window;
 
 pub use folding::{FoldKind, FoldRange, fold_ranges, fold_ranges_in_window};
 pub use formatting::{FormatResult, FormatterError, format_json, format_json_lines, format_source};
@@ -25,6 +26,7 @@ pub use language::{
     FENCE_LANGUAGE_MENU_ITEMS, SourceLanguage, detect_language, resolve_fence_language,
 };
 pub use range::{ByteRange, ByteRangeError};
+pub use syntax_window::{SourceSyntaxContext, build_source_syntax_contexts};
 
 /// 与旧源码工具层一致的语言标识名称，方便 Wave 2 适配器平滑迁移。
 pub type SourceLanguageId = SourceLanguage;

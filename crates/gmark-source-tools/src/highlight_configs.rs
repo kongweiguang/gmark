@@ -1,8 +1,16 @@
 // @author kongweiguang
 
-#[cfg(any(feature = "code-highlight-official", feature = "code-highlight-config"))]
+#[cfg(any(
+    feature = "code-highlight-official",
+    feature = "code-highlight-config",
+    feature = "code-highlight-extra"
+))]
 use crate::highlight::configure_highlights;
-#[cfg(any(feature = "code-highlight-official", feature = "code-highlight-config"))]
+#[cfg(any(
+    feature = "code-highlight-official",
+    feature = "code-highlight-config",
+    feature = "code-highlight-extra"
+))]
 use tree_sitter_highlight::HighlightConfiguration;
 
 #[cfg(feature = "code-highlight-official")]
@@ -226,6 +234,61 @@ pub(crate) fn build_toml_config() -> Option<HighlightConfiguration> {
         "toml",
         tree_sitter_toml::HIGHLIGHTS_QUERY,
         "",
+        "",
+    )
+}
+
+#[cfg(feature = "code-highlight-extra")]
+pub(crate) fn build_sql_config() -> Option<HighlightConfiguration> {
+    configure_highlights(
+        tree_sitter_sequel::LANGUAGE.into(),
+        "sql",
+        tree_sitter_sequel::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    )
+}
+
+#[cfg(feature = "code-highlight-extra")]
+pub(crate) fn build_lua_config() -> Option<HighlightConfiguration> {
+    configure_highlights(
+        tree_sitter_lua::LANGUAGE.into(),
+        "lua",
+        tree_sitter_lua::HIGHLIGHTS_QUERY,
+        tree_sitter_lua::INJECTIONS_QUERY,
+        tree_sitter_lua::LOCALS_QUERY,
+    )
+}
+
+#[cfg(feature = "code-highlight-extra")]
+pub(crate) fn build_swift_config() -> Option<HighlightConfiguration> {
+    configure_highlights(
+        tree_sitter_swift::LANGUAGE.into(),
+        "swift",
+        tree_sitter_swift::HIGHLIGHTS_QUERY,
+        tree_sitter_swift::INJECTIONS_QUERY,
+        tree_sitter_swift::LOCALS_QUERY,
+    )
+}
+
+#[cfg(feature = "code-highlight-extra")]
+pub(crate) fn build_powershell_config() -> Option<HighlightConfiguration> {
+    configure_highlights(
+        tree_sitter_powershell::LANGUAGE.into(),
+        "powershell",
+        tree_sitter_powershell::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    )
+}
+
+#[cfg(feature = "code-highlight-extra")]
+pub(crate) fn build_containerfile_config() -> Option<HighlightConfiguration> {
+    configure_highlights(
+        tree_sitter_containerfile::LANGUAGE.into(),
+        "dockerfile",
+        tree_sitter_containerfile::HIGHLIGHTS_QUERY,
+        tree_sitter_containerfile::INJECTIONS_QUERY,
         "",
     )
 }

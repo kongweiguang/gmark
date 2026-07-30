@@ -212,6 +212,7 @@ impl DocumentHost {
             metrics: PagedDocumentMetrics::default(),
             first_render_started: crate::perf::start(),
             source_row_blocks: BTreeMap::new(),
+            source_syntax_contexts: BTreeMap::new(),
             source_row_epochs: BTreeMap::new(),
             source_cache_epoch: 0,
             soak_ready_published: false,

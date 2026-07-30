@@ -17,16 +17,18 @@ impl DocumentHost {
         // PieceTree 真值。此时保留选择与复制，但必须拒绝键盘、粘贴和 IME 写入；
         // 精确文档安装后复用同一 Block 并恢复编辑，避免用户看到最终会丢失的假修改。
         let read_only = self.document.is_none();
+        let syntax_language = crate::components::code_language_for_path(&self.path);
+        let syntax_context = self.source_syntax_contexts.get(&line).cloned();
         if let Some(block) = self.source_row_blocks.get(&line) {
             block.update(cx, |block, _cx| {
                 block.set_source_layout_identity(layout_identity);
                 block.set_read_only(read_only);
+                block.set_source_syntax_context(syntax_language, syntax_context);
             });
             return Some(block.clone());
         }
         let row = self.displayed_screen_lines.row(line)?;
         let row_text = row.text.to_string();
-        let syntax_language = crate::components::code_language_for_path(&self.path);
         let host = cx.entity().downgrade();
         let block = cx.new(move |cx| {
             let mut block = Block::with_record(
@@ -35,7 +37,7 @@ impl DocumentHost {
             );
             block.set_compact_source_host();
             block.set_read_only(read_only);
-            block.set_source_syntax_language(syntax_language);
+            block.set_source_syntax_context(syntax_language, syntax_context);
             block.set_source_layout_identity(layout_identity);
             block.set_host_action_handler(move |action, window, cx| {
                 let _ = host.update(cx, |view, cx| {

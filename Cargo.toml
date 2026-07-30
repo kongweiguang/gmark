@@ -74,7 +74,7 @@ collapsible_if = "allow"
 collapsible_else_if = "allow"
 
 [features]
-default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "html-native"]
+default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "code-highlight-extra", "html-native"]
 code-highlight-core = [
     "dep:tree-sitter",
     "dep:tree-sitter-highlight",
@@ -114,6 +114,11 @@ code-highlight-config = [
     "gmark-source-tools/code-highlight-config",
     "dep:tree-sitter-yaml",
     "dep:tree-sitter-toml",
+]
+code-highlight-extra = [
+    "code-highlight-core",
+    "gmark-export/code-highlight-extra",
+    "gmark-source-tools/code-highlight-extra",
 ]
 
 [dependencies]

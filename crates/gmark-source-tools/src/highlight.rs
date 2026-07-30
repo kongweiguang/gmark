@@ -89,23 +89,35 @@ pub fn highlight_source(language: SourceLanguage, source: &str) -> HighlightResu
 #[cfg(feature = "code-highlight-core")]
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
+    "boolean",
+    "character",
     "comment",
+    "conditional",
     "constant",
     "constant.builtin",
     "constructor",
     "embedded",
+    "field",
+    "float",
     "function",
     "function.builtin",
     "keyword",
+    "label",
+    "method",
     "module",
+    "name",
     "number",
     "operator",
+    "parameter",
+    "preproc",
     "property",
     "property.builtin",
     "punctuation",
     "punctuation.bracket",
     "punctuation.delimiter",
     "punctuation.special",
+    "repeat",
+    "storageclass",
     "string",
     "string.special",
     "tag",
@@ -113,6 +125,7 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "type.builtin",
     "variable",
     "variable.builtin",
+    "variable.member",
     "variable.parameter",
 ];
 
@@ -128,7 +141,11 @@ static CODE_HIGHLIGHT_REGISTRY: LazyLock<HighlightRegistry> = LazyLock::new(High
 impl HighlightRegistry {
     fn new() -> Self {
         let configs = {
-            #[cfg(any(feature = "code-highlight-official", feature = "code-highlight-config"))]
+            #[cfg(any(
+                feature = "code-highlight-official",
+                feature = "code-highlight-config",
+                feature = "code-highlight-extra"
+            ))]
             {
                 let mut configs = HashMap::new();
                 #[cfg(feature = "code-highlight-official")]
@@ -251,12 +268,43 @@ impl HighlightRegistry {
                     SourceLanguage::Toml,
                     crate::highlight_configs::build_toml_config(),
                 );
+                #[cfg(feature = "code-highlight-extra")]
+                maybe_insert_config(
+                    &mut configs,
+                    SourceLanguage::Sql,
+                    crate::highlight_configs::build_sql_config(),
+                );
+                #[cfg(feature = "code-highlight-extra")]
+                maybe_insert_config(
+                    &mut configs,
+                    SourceLanguage::Lua,
+                    crate::highlight_configs::build_lua_config(),
+                );
+                #[cfg(feature = "code-highlight-extra")]
+                maybe_insert_config(
+                    &mut configs,
+                    SourceLanguage::Swift,
+                    crate::highlight_configs::build_swift_config(),
+                );
+                #[cfg(feature = "code-highlight-extra")]
+                maybe_insert_config(
+                    &mut configs,
+                    SourceLanguage::PowerShell,
+                    crate::highlight_configs::build_powershell_config(),
+                );
+                #[cfg(feature = "code-highlight-extra")]
+                maybe_insert_config(
+                    &mut configs,
+                    SourceLanguage::Containerfile,
+                    crate::highlight_configs::build_containerfile_config(),
+                );
                 configs
             }
 
             #[cfg(not(any(
                 feature = "code-highlight-official",
-                feature = "code-highlight-config"
+                feature = "code-highlight-config",
+                feature = "code-highlight-extra"
             )))]
             {
                 HashMap::new()
@@ -270,7 +318,11 @@ impl HighlightRegistry {
     }
 }
 
-#[cfg(any(feature = "code-highlight-official", feature = "code-highlight-config"))]
+#[cfg(any(
+    feature = "code-highlight-official",
+    feature = "code-highlight-config",
+    feature = "code-highlight-extra"
+))]
 fn maybe_insert_config(
     configs: &mut HashMap<SourceLanguage, HighlightConfiguration>,
     language: SourceLanguage,
@@ -281,7 +333,11 @@ fn maybe_insert_config(
     }
 }
 
-#[cfg(any(feature = "code-highlight-official", feature = "code-highlight-config"))]
+#[cfg(any(
+    feature = "code-highlight-official",
+    feature = "code-highlight-config",
+    feature = "code-highlight-extra"
+))]
 pub(crate) fn configure_highlights(
     language: tree_sitter::Language,
     name: &'static str,

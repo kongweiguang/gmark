@@ -14,7 +14,7 @@ publish = false
 workspace = true
 
 [features]
-default = ["code-highlight-core", "code-highlight-official", "code-highlight-config"]
+default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "code-highlight-extra"]
 code-highlight-core = ["dep:tree-sitter", "dep:tree-sitter-highlight"]
 code-highlight-official = [
     "code-highlight-core",
@@ -39,6 +39,14 @@ code-highlight-config = [
     "code-highlight-core",
     "dep:tree-sitter-yaml",
     "dep:tree-sitter-toml",
+]
+code-highlight-extra = [
+    "code-highlight-core",
+    "dep:tree-sitter-sequel",
+    "dep:tree-sitter-lua",
+    "dep:tree-sitter-swift",
+    "dep:tree-sitter-powershell",
+    "dep:tree-sitter-containerfile",
 ]
 
 [dependencies]
@@ -65,6 +73,11 @@ tree-sitter-python = { version = "0.25", optional = true }
 tree-sitter-ruby = { version = "0.23", optional = true }
 tree-sitter-yaml = { version = "0.7", optional = true }
 tree-sitter-toml = { package = "adot-tree-sitter-toml", version = "0.1", optional = true }
+tree-sitter-sequel = { version = "0.3.11", optional = true }
+tree-sitter-lua = { version = "0.5", optional = true }
+tree-sitter-swift = { version = "0.7", optional = true }
+tree-sitter-powershell = { version = "0.26", optional = true }
+tree-sitter-containerfile = { version = "0.9", optional = true }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

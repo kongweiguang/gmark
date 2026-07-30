@@ -21,7 +21,18 @@ fn language_aliases_and_extensions_keep_legacy_compatibility() {
         SourceLanguage::from_alias("golang"),
         Some(SourceLanguage::Go)
     );
-    assert_eq!(SourceLanguage::from_alias("jsonl"), None);
+    assert_eq!(
+        SourceLanguage::from_alias("jsonl"),
+        Some(SourceLanguage::Json)
+    );
+    assert_eq!(
+        SourceLanguage::from_alias("postgresql"),
+        Some(SourceLanguage::Sql)
+    );
+    assert_eq!(
+        SourceLanguage::from_alias("pwsh"),
+        Some(SourceLanguage::PowerShell)
+    );
     assert_eq!(
         resolve_fence_language(Some("typescript title=example")),
         Some(SourceLanguage::TypeScript)
@@ -41,6 +52,11 @@ fn language_aliases_and_extensions_keep_legacy_compatibility() {
     assert_eq!(
         detect_language(Path::new("events.ndjson")),
         SourceLanguage::JsonLines
+    );
+    assert_eq!(detect_language(Path::new("query.sql")), SourceLanguage::Sql);
+    assert_eq!(
+        detect_language(Path::new("Dockerfile")),
+        SourceLanguage::Containerfile
     );
     assert_eq!(detect_language(Path::new("header.h")), SourceLanguage::C);
     assert_eq!(

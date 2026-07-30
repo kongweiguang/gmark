@@ -132,19 +132,47 @@ impl Block {
 
     pub(crate) fn set_source_syntax_language(&mut self, language: Option<&'static str>) {
         let next = language.map(SharedString::from);
-        if self.source_syntax_language == next {
+        if self.source_syntax_language == next && self.source_syntax_context.is_none() {
             return;
         }
         self.source_syntax_language = next;
+        self.source_syntax_context = None;
+        self.sync_code_highlight();
+    }
+
+    pub(crate) fn set_source_syntax_context(
+        &mut self,
+        language: Option<&'static str>,
+        context: Option<SourceSyntaxContext>,
+    ) {
+        let next = language.map(SharedString::from);
+        let same_context = match (&self.source_syntax_context, &context) {
+            (Some(current), Some(next)) => current.same_identity(next),
+            (None, None) => true,
+            _ => false,
+        };
+        if self.source_syntax_language == next && same_context {
+            return;
+        }
+        self.source_syntax_language = next;
+        self.source_syntax_context = context;
         self.sync_code_highlight();
     }
 
     pub(super) fn sync_code_highlight(&mut self) {
-        let language = match &self.record.kind {
-            BlockKind::CodeBlock { language } => language.as_deref().map(|value| &**value),
-            _ => self.source_syntax_language.as_deref().map(|value| &**value),
+        let visible_text = self.render_cache.visible_text();
+        self.code_highlight = match &self.record.kind {
+            BlockKind::CodeBlock { language } => {
+                highlight_code_block(language.as_deref().map(|value| &**value), visible_text)
+            }
+            _ => {
+                let language = self.source_syntax_language.as_deref().map(|value| &**value);
+                self.source_syntax_context
+                    .as_ref()
+                    .map(|context| project_highlight_result(context.highlight(visible_text)))
+                    .or_else(|| highlight_code_block(language, visible_text))
+            }
         };
-        self.code_highlight = highlight_code_block(language, self.render_cache.visible_text());
     }
 
     pub(crate) fn code_language_text(&self) -> &str {
