@@ -252,6 +252,14 @@ fn should_relaunch_after_failure(plan: &ApplyPlanV1) -> bool {
 
 fn wait_for_parent_or_cancel(plan: &ApplyPlanV1) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(5 * 60);
+    wait_for_parent_or_cancel_until(plan, deadline, Duration::from_millis(200))
+}
+
+fn wait_for_parent_or_cancel_until(
+    plan: &ApplyPlanV1,
+    deadline: Instant,
+    poll_interval: Duration,
+) -> Result<(), String> {
     let mut system = System::new();
     let pid = Pid::from_u32(plan.parent_pid);
     loop {
@@ -260,17 +268,19 @@ fn wait_for_parent_or_cancel(plan: &ApplyPlanV1) -> Result<(), String> {
         {
             return Err("installation was cancelled before the app exited".to_owned());
         }
-        system.refresh_processes_specifics(
+        let refreshed = system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[pid]),
             ProcessRefreshKind::new(),
         );
-        if system.process(pid).is_none() {
+        // sysinfo 按 PID 刷新时不会清理已退出进程的缓存；必须使用本轮刷新结果，
+        // 否则 helper 会把已经退出的 gmark 永久误判为仍在运行。
+        if refreshed == 0 {
             return Ok(());
         }
         if Instant::now() >= deadline {
             return Err("timed out waiting for gmark to exit".to_owned());
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(poll_interval);
     }
 }
 

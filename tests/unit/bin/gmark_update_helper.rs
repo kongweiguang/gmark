@@ -107,6 +107,37 @@ fn cancellation_marker_prevents_any_install_side_effect() {
 }
 
 #[test]
+fn parent_exit_is_observed_after_the_process_was_cached() {
+    let root = tempfile::tempdir().unwrap();
+    let mut plan = fixture_plan(root.path());
+    #[cfg(target_os = "windows")]
+    let mut parent = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Milliseconds 750",
+        ])
+        .spawn()
+        .unwrap();
+    #[cfg(not(target_os = "windows"))]
+    let mut parent = Command::new("sh")
+        .args(["-c", "sleep 0.75"])
+        .spawn()
+        .unwrap();
+    plan.parent_pid = parent.id();
+
+    let result = wait_for_parent_or_cancel_until(
+        &plan,
+        Instant::now() + Duration::from_secs(3),
+        Duration::from_millis(20),
+    );
+    let _ = parent.wait();
+
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
 fn apply_result_atomically_replaces_a_previous_result() {
     let root = tempfile::tempdir().unwrap();
     let plan = fixture_plan(root.path());
