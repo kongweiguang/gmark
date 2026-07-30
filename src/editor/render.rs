@@ -21,11 +21,6 @@ use crate::perf;
 use crate::theme::{Theme, ThemeDimensions, ThemeManager};
 use crate::window_chrome::{custom_titlebar_height, render_custom_titlebar};
 
-#[path = "render/latex/mod.rs"]
-pub(crate) mod latex;
-#[path = "render/mermaid/mod.rs"]
-pub(crate) mod mermaid;
-
 pub(crate) const ABOUT_GITHUB_URL: &str = "https://github.com/kongweiguang/gmark";
 
 /// Rows within this many pixels of the viewport stay mounted, so a fast flick

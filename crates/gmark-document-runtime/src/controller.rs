@@ -10,10 +10,28 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use gmark_document_core::{DocumentId, DocumentRevision, Transaction, TransactionId};
+use gmark_document_core::{DocumentRevision, Transaction};
 use thiserror::Error;
 
 use crate::{DocumentSession, FileIdentity, SessionEditError};
+
+/// 运行时进程内的文档身份；持久文件身份仍由 [`FileIdentity`] 负责。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DocumentId(u64);
+
+impl DocumentId {
+    pub const fn from_raw(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_raw(self) -> u64 {
+        self.0
+    }
+}
+
+/// 调用方生成的事务身份，用于把状态变化事件与原始命令对应起来。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TransactionId(pub u64);
 
 /// Controller 的唯一窄写入口。UI/Provider 不直接拿后端实体或写磁盘。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,14 +181,13 @@ impl DocumentController {
                 transaction_id,
                 transaction,
             } => {
-                let revision = self
-                    .session
-                    .apply_transaction_without_selection(&transaction)?;
+                let selection = self.session.source_selection();
+                let revision = self.session.apply_transaction(&transaction, selection)?;
                 self.events.push_back(DocumentEvent::Changed {
                     document_id: self.document_id,
                     transaction_id,
                     revision,
-                    dirty: self.session.is_dirty(),
+                    dirty: self.session.dirty,
                 });
             }
             DocumentCommand::Undo { transaction_id } => {
@@ -178,8 +195,8 @@ impl DocumentController {
                     self.events.push_back(DocumentEvent::Changed {
                         document_id: self.document_id,
                         transaction_id,
-                        revision: self.session.revision_token(),
-                        dirty: self.session.is_dirty(),
+                        revision: DocumentRevision(self.session.revision()),
+                        dirty: self.session.dirty,
                     });
                 }
             }
@@ -188,13 +205,14 @@ impl DocumentController {
                     self.events.push_back(DocumentEvent::Changed {
                         document_id: self.document_id,
                         transaction_id,
-                        revision: self.session.revision_token(),
-                        dirty: self.session.is_dirty(),
+                        revision: DocumentRevision(self.session.revision()),
+                        dirty: self.session.dirty,
                     });
                 }
             }
             DocumentCommand::RequestSave => {
-                if let Some(revision) = self.save_queue.request(self.session.revision_token()) {
+                let revision = DocumentRevision(self.session.revision());
+                if let Some(revision) = self.save_queue.request(revision) {
                     self.events.push_back(DocumentEvent::SaveRequested {
                         document_id: self.document_id,
                         revision,
@@ -202,11 +220,13 @@ impl DocumentController {
                 }
             }
             DocumentCommand::SaveSucceeded { revision, identity } => {
-                self.session.mark_persisted_if_current(revision, identity);
+                if DocumentRevision(self.session.revision()) == revision {
+                    self.session.mark_persisted(identity);
+                }
                 self.events.push_back(DocumentEvent::SaveCommitted {
                     document_id: self.document_id,
                     revision,
-                    dirty: self.session.is_dirty(),
+                    dirty: self.session.dirty,
                 });
                 if let Some(next) = self.save_queue.complete(revision)? {
                     self.events.push_back(DocumentEvent::SaveRequested {

@@ -305,3 +305,7 @@ pub(crate) use shortcuts::{
     init_with_keybindings, install_keybindings, normalize_shortcut_config, normalize_shortcut_keys,
     resolved_shortcut_keys, shortcut_conflict_for, shortcut_definitions,
 };
+
+#[cfg(test)]
+#[path = "../../../tests/unit/components/actions.rs"]
+mod tests;

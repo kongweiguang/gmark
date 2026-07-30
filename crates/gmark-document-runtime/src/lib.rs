@@ -18,9 +18,15 @@ use gmark_paged_document::{
 };
 use thiserror::Error;
 
+mod controller;
 mod recovery;
 mod resident;
 
+pub use controller::{
+    ControllerError, DocumentCommand, DocumentController, DocumentEvent, DocumentHandle,
+    DocumentId, DocumentRegistry, DocumentRegistryKey, RegistryOpen, SaveFailureCode,
+    TransactionId,
+};
 pub use recovery::{
     RecoveredResidentDocument, RecoveredResidentJournal, ResidentFileFingerprint,
     ResidentRecoveryError, ResidentRecoveryJournal, ResidentRecoveryReadStatus,

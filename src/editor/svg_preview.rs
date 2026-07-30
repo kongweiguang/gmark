@@ -38,6 +38,7 @@ impl Asset for SvgPreviewAssetLoader {
     type Source = SvgPreviewSource;
     type Output = std::result::Result<Arc<RenderImage>, Arc<anyhow::Error>>;
 
+    // reason: GPUI 的 Asset trait 固定要求返回 impl Future；remove when: trait 接受 async fn 或该 lint 不再触发。
     #[allow(clippy::manual_async_fn)]
     fn load(
         source: Self::Source,

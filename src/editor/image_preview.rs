@@ -82,6 +82,7 @@ impl Asset for ImagePreviewAssetLoader {
     type Source = PathBuf;
     type Output = std::result::Result<Arc<ImagePreviewAsset>, Arc<anyhow::Error>>;
 
+    // reason: GPUI 的 Asset trait 固定要求返回 impl Future；remove when: trait 接受 async fn 或该 lint 不再触发。
     #[allow(clippy::manual_async_fn)]
     fn load(
         source: Self::Source,
@@ -99,6 +100,7 @@ impl Asset for ImagePreviewTileLoader {
     type Source = ImagePreviewTileSource;
     type Output = std::result::Result<Arc<RenderImage>, Arc<anyhow::Error>>;
 
+    // reason: GPUI 的 Asset trait 固定要求返回 impl Future；remove when: trait 接受 async fn 或该 lint 不再触发。
     #[allow(clippy::manual_async_fn)]
     fn load(
         source: Self::Source,

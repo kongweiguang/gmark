@@ -67,7 +67,7 @@ fn saves_coalesce_and_old_save_does_not_clear_newer_edits() {
         })
         .unwrap_or_else(|error| panic!("old save completion: {error}"));
 
-    assert!(controller.session().is_dirty());
+    assert!(controller.session().dirty);
     assert!(controller.drain_events().any(|event| {
         matches!(
             event,

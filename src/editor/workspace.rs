@@ -110,8 +110,7 @@ pub(super) enum WorkspaceTab {
     #[default]
     Files,
     /// 旧工作区大纲已迁移到右侧文档导航；保留内部状态仅用于兼容既有会话测试。
-    // reason: 持久化会话可能仍包含旧的大纲标签，反序列化和既有会话测试需要保留该值。
-    // remove when: 旧会话迁移不再接受 `Outline` 标签且兼容性测试随之删除。
+    // reason: 旧会话仍可能包含 Outline；remove when: 会话迁移不再接受该标签且兼容测试删除。
     #[allow(dead_code)]
     Outline,
     Search,
