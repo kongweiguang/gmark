@@ -3,6 +3,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gmark_document::{SourceDocument, SourceFormatSnapshot, TextEdit, Transaction};
 use gmark_document_core::{
@@ -26,8 +27,8 @@ pub struct ResidentRecoveryJournal {
     journal_path: PathBuf,
     file_path: Option<PathBuf>,
     base_fingerprint: Option<super::ResidentFileFingerprint>,
-    base_source: String,
-    last_source: String,
+    base_source: Arc<str>,
+    last_source: Arc<str>,
     base_format: SourceFormatSnapshot,
     last_format: SourceFormatSnapshot,
     initialized: bool,
@@ -67,12 +68,13 @@ impl ResidentRecoveryJournal {
         let base_fingerprint = file_path
             .as_deref()
             .and_then(|path| fingerprint_resident_file(path).ok());
+        let source: Arc<str> = source.into();
         Ok(Self {
             journal_path: recovery_dir.join(format!("{document_id}.journal")),
             document_id,
             file_path,
             base_fingerprint,
-            base_source: source.clone(),
+            base_source: Arc::clone(&source),
             last_source: source,
             base_format: source_format.clone(),
             last_format: source_format,
@@ -83,13 +85,14 @@ impl ResidentRecoveryJournal {
 
     /// Continues appending to a successfully replayed journal.
     pub fn resume(document: &RecoveredResidentDocument) -> Self {
+        let source: Arc<str> = Arc::from(document.source.as_str());
         Self {
             document_id: document.document_id.clone(),
             journal_path: document.journal_path.clone(),
             file_path: document.file_path.clone(),
             base_fingerprint: document.base_fingerprint.clone(),
-            base_source: document.source.clone(),
-            last_source: document.source.clone(),
+            base_source: Arc::clone(&source),
+            last_source: source,
             base_format: document.source_format.clone(),
             last_format: document.source_format.clone(),
             initialized: true,
@@ -161,10 +164,9 @@ impl ResidentRecoveryJournal {
                 head_affinity,
                 view_mode.as_ref(),
             )?;
-            self.base_source.clear();
-            self.base_source.push_str(source);
-            self.last_source.clear();
-            self.last_source.push_str(source);
+            let source: Arc<str> = Arc::from(source);
+            self.base_source = Arc::clone(&source);
+            self.last_source = source;
             self.base_format = source_format.clone();
             self.last_format = source_format;
             self.edit_count = 0;
@@ -183,8 +185,7 @@ impl ResidentRecoveryJournal {
             format_patch: Some(build_format_patch(&self.last_format, &source_format)),
         };
         append_record(&self.journal_path, RecordKind::Edit, &edit)?;
-        self.last_source.clear();
-        self.last_source.push_str(source);
+        self.last_source = Arc::from(source);
         self.last_format = source_format;
         self.edit_count = self.edit_count.saturating_add(1);
         Ok(true)
@@ -216,7 +217,8 @@ impl ResidentRecoveryJournal {
             .file_path
             .as_deref()
             .and_then(|path| fingerprint_resident_file(path).ok());
-        self.base_source = source.clone();
+        let source: Arc<str> = source.into();
+        self.base_source = Arc::clone(&source);
         self.last_source = source;
         self.base_format = source_format.clone();
         self.last_format = source_format;
@@ -240,7 +242,7 @@ impl ResidentRecoveryJournal {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned()),
             fingerprint: self.base_fingerprint.clone(),
-            source: self.base_source.clone(),
+            source: self.base_source.to_string(),
             source_format: Some(stored_format(&self.base_format)),
             selection: None,
             view_mode: None,
@@ -384,3 +386,7 @@ fn remove_journal_file(path: &Path) -> Result<(), ResidentRecoveryError> {
         Err(source) => Err(ResidentRecoveryError::io("remove", path, source)),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/recovery_journal.rs"]
+mod tests;

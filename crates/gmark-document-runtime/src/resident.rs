@@ -20,6 +20,22 @@ use regex::RegexBuilder;
 
 const HISTORY_LIMIT: usize = 1_024;
 
+/// 当前保存基线通常共享 Rope；只有后台保存了旧 revision 时才保留独立文本。
+#[derive(Clone)]
+enum PersistedContent {
+    Snapshot(gmark_document::DocumentSnapshot),
+    Materialized(Arc<str>),
+}
+
+impl PersistedContent {
+    fn matches(&self, document: &SourceDocument) -> bool {
+        match self {
+            Self::Snapshot(snapshot) => document.content_matches_snapshot(snapshot),
+            Self::Materialized(text) => document.content_matches_text(text),
+        }
+    }
+}
+
 /// 普通文件的 Rope 后端。选择与正文 history 同步撤销，磁盘身份只用于冲突检测。
 #[derive(Clone)]
 pub struct ResidentDocument {
@@ -28,7 +44,7 @@ pub struct ResidentDocument {
     selection: SourceSelection,
     undo_selections: Vec<SourceSelection>,
     redo_selections: Vec<SourceSelection>,
-    persisted_text: Arc<str>,
+    persisted_content: PersistedContent,
     source_identity: FileIdentity,
     lines: Arc<[Range<u64>]>,
     structural_units: u64,
@@ -48,6 +64,7 @@ impl ResidentDocument {
         encoding: TextEncoding,
         source_identity: FileIdentity,
     ) -> Self {
+        let persisted_snapshot = document.snapshot();
         let normalized = document.text();
         let (lines, structural_units) = build_source_metrics(&normalized);
         Self {
@@ -56,7 +73,7 @@ impl ResidentDocument {
             selection: SourceSelection::default(),
             undo_selections: Vec::new(),
             redo_selections: Vec::new(),
-            persisted_text: normalized.into(),
+            persisted_content: PersistedContent::Snapshot(persisted_snapshot),
             source_identity,
             lines,
             structural_units,
@@ -94,15 +111,15 @@ impl ResidentDocument {
     }
 
     pub fn is_pristine(&self) -> bool {
-        self.document.text() == self.persisted_text.as_ref()
+        self.persisted_content.matches(&self.document)
     }
 
     pub fn mark_persisted(&mut self) {
-        self.persisted_text = self.document.text().into();
+        self.persisted_content = PersistedContent::Snapshot(self.document.snapshot());
     }
 
     pub fn mark_persisted_text(&mut self, text: impl Into<Arc<str>>) {
-        self.persisted_text = text.into();
+        self.persisted_content = PersistedContent::Materialized(text.into());
     }
 
     pub fn line_count(&self) -> u64 {
@@ -374,7 +391,7 @@ impl ResidentDocument {
             }
         })?;
         self.source_identity = FileSource::open(path.as_ref())?.identity()?;
-        self.persisted_text = self.document.text().into();
+        self.persisted_content = PersistedContent::Snapshot(self.document.snapshot());
         Ok(())
     }
 

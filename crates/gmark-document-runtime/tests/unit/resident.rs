@@ -42,3 +42,38 @@ fn resident_edits_preserve_crlf_serialization() {
         b"name,score\r\nAda,11\r\nBob,20\r\n"
     );
 }
+
+#[test]
+fn pristine_baseline_shares_rope_and_preserves_stale_save_semantics() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("resident-baseline.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    let source_identity = FileSource::open(&path).unwrap().identity().unwrap();
+    let mut document =
+        ResidentDocument::new("alpha", TextEncoding::Utf8 { bom: false }, source_identity);
+
+    assert!(document.is_pristine());
+    assert!(matches!(
+        document.persisted_content,
+        PersistedContent::Snapshot(_)
+    ));
+    document.replace_text(5..5, " beta").unwrap();
+    assert!(!document.is_pristine());
+
+    document.mark_persisted();
+    assert!(document.is_pristine());
+    assert!(matches!(
+        document.persisted_content,
+        PersistedContent::Snapshot(_)
+    ));
+
+    document.replace_text(10..10, " gamma").unwrap();
+    document.mark_persisted_text("alpha beta");
+    assert!(!document.is_pristine());
+    assert!(matches!(
+        document.persisted_content,
+        PersistedContent::Materialized(_)
+    ));
+    assert!(document.undo());
+    assert!(document.is_pristine());
+}

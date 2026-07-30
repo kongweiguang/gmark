@@ -132,6 +132,12 @@ impl DocumentSnapshot {
         self.source.to_string()
     }
 
+    /// 在不物化第二份完整正文的前提下比较规范化源码内容。
+    pub fn matches_text(&self, text: &str) -> bool {
+        self.source.len() == text.len()
+            && self.source.chunks().flat_map(str::bytes).eq(text.bytes())
+    }
+
     /// Materializes this immutable snapshot and restores its persisted byte format.
     ///
     /// Intended for background save workers so Rope traversal and line-ending
@@ -243,6 +249,22 @@ impl SourceDocument {
             revision: self.revision,
             source: self.source.clone(),
         }
+    }
+
+    /// 比较当前 Rope 与不可变快照的正文；revision 不参与 pristine 语义。
+    pub fn content_matches_snapshot(&self, snapshot: &DocumentSnapshot) -> bool {
+        self.source.len() == snapshot.source.len()
+            && self
+                .source
+                .chunks()
+                .flat_map(str::bytes)
+                .eq(snapshot.source.chunks().flat_map(str::bytes))
+    }
+
+    /// 比较当前 Rope 与调用方已有文本，避免为了 dirty 检查复制整篇正文。
+    pub fn content_matches_text(&self, text: &str) -> bool {
+        self.source.len() == text.len()
+            && self.source.chunks().flat_map(str::bytes).eq(text.bytes())
     }
 
     /// 返回完整源文本。

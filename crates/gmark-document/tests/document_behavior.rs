@@ -116,6 +116,26 @@ fn snapshot_remains_stable_after_later_edits() {
 }
 
 #[test]
+fn snapshot_and_document_compare_content_without_materializing_text() {
+    let mut document = SourceDocument::new("alpha\n世界🙂\n");
+    let initial = document.snapshot();
+
+    assert!(initial.matches_text("alpha\n世界🙂\n"));
+    assert!(!initial.matches_text("alpha\n世界\n"));
+    assert!(document.content_matches_snapshot(&initial));
+    assert!(document.content_matches_text("alpha\n世界🙂\n"));
+
+    document
+        .apply_transaction(Transaction::new(
+            document.revision(),
+            vec![TextEdit::new(0..5, "beta")],
+        ))
+        .expect("合法替换应成功");
+    assert!(!document.content_matches_snapshot(&initial));
+    assert!(!document.content_matches_text("alpha\n世界🙂\n"));
+}
+
+#[test]
 fn history_limit_evicts_oldest_transaction() {
     let mut document = SourceDocument::with_history_limit("a", 1);
     document
