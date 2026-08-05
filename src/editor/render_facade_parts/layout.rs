@@ -141,7 +141,7 @@ pub(super) fn menu_shortcut_slot(text: String, theme: &Theme) -> Div {
         .truncate()
         .text_align(TextAlign::Right)
         .text_size(px((theme.dimensions.menu_text_size - 1.0).max(10.0)))
-        .text_color(theme.colors.dialog_muted)
+        .text_color(theme.colors.workbench.text_tertiary)
         .child(text)
 }
 
@@ -176,8 +176,8 @@ impl DialogTitleIcon {
 
     pub(super) fn color(self, theme: &Theme) -> Hsla {
         match self {
-            Self::Warning => theme.colors.callout_warning_border,
-            _ => theme.colors.text_link,
+            Self::Warning => theme.colors.workbench.warning,
+            _ => theme.colors.workbench.accent,
         }
     }
 }
@@ -196,7 +196,7 @@ pub(in crate::editor) fn modal_overlay(id: &'static str, theme: &Theme) -> State
         .flex()
         .items_center()
         .justify_center()
-        .bg(theme.colors.dialog_backdrop)
+        .bg(theme.colors.workbench.overlay_scrim)
 }
 
 pub(in crate::editor) fn dialog_panel(
@@ -216,9 +216,9 @@ pub(in crate::editor) fn dialog_panel(
         .flex()
         .flex_col()
         .gap(px(d.dialog_gap))
-        .bg(c.dialog_surface)
+        .bg(c.workbench.elevated_surface)
         .border(px(d.dialog_border_width))
-        .border_color(c.dialog_border)
+        .border_color(c.workbench.border_subtle)
         .rounded(px(d.dialog_radius))
         .shadow_lg()
 }
@@ -276,7 +276,7 @@ pub(in crate::editor) fn dialog_title_with_icon(
                 .debug_selector(move || format!("{id}-label"))
                 .text_size(px(t.dialog_title_size))
                 .font_weight(t.dialog_title_weight.to_font_weight())
-                .text_color(c.dialog_title)
+                .text_color(c.workbench.text_primary)
                 .child(label),
         )
 }
@@ -291,7 +291,7 @@ pub(in crate::editor) fn dialog_body(label: String, theme: &Theme) -> Div {
         .text_size(px(t.dialog_body_size))
         .font_weight(t.dialog_body_weight.to_font_weight())
         .line_height(rems(t.text_line_height))
-        .text_color(c.dialog_body)
+        .text_color(c.workbench.text_secondary)
         .child(label)
 }
 
@@ -313,7 +313,7 @@ pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
         // 分隔线到按钮与按钮到面板底边共用 dialog padding，形成对称留白。
         .pt(px(top_padding))
         .border_t(px(d.dialog_border_width))
-        .border_color(c.dialog_border)
+        .border_color(c.workbench.border_subtle)
 }
 
 pub(in crate::editor) fn dialog_button(
@@ -327,21 +327,21 @@ pub(in crate::editor) fn dialog_button(
     let t = &theme.typography;
     let (background, hover, text, bordered) = match kind {
         DialogButtonKind::Secondary => (
-            c.dialog_secondary_button_bg,
-            c.dialog_secondary_button_hover,
-            c.dialog_secondary_button_text,
+            c.workbench.control_surface,
+            c.workbench.control_hover,
+            c.workbench.text_primary,
             true,
         ),
         DialogButtonKind::Primary => (
-            c.dialog_primary_button_bg,
-            c.dialog_primary_button_hover,
-            c.dialog_primary_button_text,
+            c.workbench.accent,
+            c.workbench.accent_hover,
+            c.workbench.text_inverse,
             false,
         ),
         DialogButtonKind::Danger => (
-            c.dialog_danger_button_bg,
-            c.dialog_danger_button_hover,
-            c.dialog_danger_button_text,
+            c.workbench.danger,
+            c.workbench.danger.opacity(0.88),
+            c.workbench.text_inverse,
             false,
         ),
     };
@@ -356,7 +356,7 @@ pub(in crate::editor) fn dialog_button(
         .justify_center()
         .rounded(px((d.dialog_radius - 4.0).max(0.0)))
         .border(px(if bordered { d.dialog_border_width } else { 0.0 }))
-        .border_color(c.dialog_border)
+        .border_color(c.workbench.border_subtle)
         .bg(background)
         .hover(move |this| this.bg(hover))
         .active(|this| this.opacity(0.92))
