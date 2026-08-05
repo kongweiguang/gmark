@@ -18,7 +18,8 @@ use crate::components::{AddLanguageConfig, Block, NoRecentFiles};
 use crate::config::EditorSettings;
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::perf;
-use crate::theme::{Theme, ThemeDimensions, ThemeManager};
+use crate::theme::{Theme, ThemeDimensions, ThemeManager, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 use crate::window_chrome::{custom_titlebar_height, render_custom_titlebar};
 
 pub(crate) const ABOUT_GITHUB_URL: &str = "https://github.com/kongweiguang/gmark";

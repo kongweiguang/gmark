@@ -240,6 +240,18 @@ impl Render for Editor {
 
         let content_area = self.render_document_content(window, cx);
         let theme = cx.global::<ThemeManager>().current_arc();
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let editor_material = theme
+            .colors
+            .workbench
+            .material(SurfaceKind::Editor, visual_preferences);
+        let compact_navigation_material = theme
+            .colors
+            .workbench
+            .material(SurfaceKind::Navigation, visual_preferences);
         let strings = cx.global::<I18nManager>().strings_arc();
         let d = &theme.dimensions;
         let status_bar_height =
@@ -278,7 +290,7 @@ impl Render for Editor {
             .flex()
             .flex_col()
             .relative()
-            .bg(theme.colors.editor_background)
+            .bg(editor_material.background)
             .on_modifiers_changed(move |event, window, _| {
                 if event.modifiers.secondary() != follow_modifier_active {
                     window.refresh();
@@ -547,8 +559,8 @@ impl Render for Editor {
                         .tab_index(0)
                         .track_focus(&divider_focus_handle)
                         .cursor_col_resize()
-                        .hover(|this| this.bg(theme.colors.text_link.opacity(0.08)))
-                        .focus(|this| this.bg(theme.colors.text_link.opacity(0.08)))
+                        .hover(|this| this.bg(theme.colors.workbench.accent_soft))
+                        .focus(|this| this.bg(theme.colors.workbench.accent_soft))
                         .child(
                             div()
                                 .absolute()
@@ -557,9 +569,9 @@ impl Render for Editor {
                                 .left(px((SPLIT_DIVIDER_HIT_WIDTH - 1.0) * 0.5))
                                 .w(px(1.0))
                                 .bg(if divider_active {
-                                    theme.colors.text_link.opacity(0.72)
+                                    theme.colors.workbench.focus_ring
                                 } else {
-                                    theme.colors.dialog_border
+                                    theme.colors.workbench.border_subtle
                                 })
                                 .debug_selector(|| "split-divider-line".to_owned()),
                         )
@@ -658,6 +670,9 @@ impl Render for Editor {
                 .top(px(titlebar_height + menu_bar_height))
                 .bottom(px(status_bar_height))
                 .w(px(workspace_width))
+                .bg(compact_navigation_material.background)
+                .border_r(px(theme.dimensions.dialog_border_width))
+                .border_color(compact_navigation_material.border)
                 .shadow_lg()
                 .child(workspace_panel);
             let overlay = overlay.left(px(0.0));
@@ -674,6 +689,9 @@ impl Render for Editor {
                 .bottom(px(status_bar_height))
                 .right(px(0.0))
                 .w(px(document_sidebar_width))
+                .bg(compact_navigation_material.background)
+                .border_l(px(theme.dimensions.dialog_border_width))
+                .border_color(compact_navigation_material.border)
                 .shadow_lg()
                 .child(document_sidebar);
             base.child(overlay)
