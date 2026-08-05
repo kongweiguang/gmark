@@ -32,6 +32,7 @@ impl Editor {
             return div().into_any_element();
         };
         let c = &theme.colors;
+        let wb = &c.workbench;
         let t = &theme.typography;
         let file_name = failure
             .path
@@ -59,18 +60,18 @@ impl Editor {
             .gap(px(7.0))
             .rounded(px(6.0))
             .border(px(1.0))
-            .border_color(c.dialog_border)
-            .bg(c.dialog_secondary_button_bg)
-            .hover(|this| this.bg(c.chrome_hover))
-            .focus(|this| this.border_color(c.text_link))
+            .border_color(wb.border_subtle)
+            .bg(wb.control_surface)
+            .hover(|this| this.bg(wb.control_hover))
+            .focus(|this| this.border_color(wb.focus_ring))
             .cursor_pointer()
             .text_size(px(t.text_size * 0.9))
-            .text_color(c.text_default)
+            .text_color(wb.text_primary)
             .child(
                 svg()
                     .path("icon/ui/file.svg")
                     .size(px(15.0))
-                    .text_color(c.text_default),
+                    .text_color(wb.text_primary),
             )
             .child(strings.file_open_with_system.clone())
             .on_click(move |_event, window, cx| {
@@ -100,17 +101,17 @@ impl Editor {
             .gap(px(7.0))
             .rounded(px(6.0))
             .border(px(1.0))
-            .border_color(hsla(0.0, 0.0, 0.0, 0.0))
-            .hover(|this| this.bg(c.chrome_hover))
-            .focus(|this| this.border_color(c.text_link))
+            .border_color(wb.control_surface.opacity(0.0))
+            .hover(|this| this.bg(wb.control_hover))
+            .focus(|this| this.border_color(wb.focus_ring))
             .cursor_pointer()
             .text_size(px(t.text_size * 0.9))
-            .text_color(c.dialog_muted)
+            .text_color(wb.text_secondary)
             .child(
                 svg()
                     .path("icon/workspace/folder.svg")
                     .size(px(15.0))
-                    .text_color(c.dialog_muted),
+                    .text_color(wb.text_secondary),
             )
             .child(strings.file_reveal_in_manager.clone())
             .on_click(move |_event, window, cx| {
@@ -144,7 +145,7 @@ impl Editor {
                 svg()
                     .path("icon/ui/file.svg")
                     .size(px(36.0))
-                    .text_color(c.dialog_muted),
+                    .text_color(wb.text_secondary),
             )
             .child(
                 div()
@@ -152,7 +153,7 @@ impl Editor {
                     .max_w(relative(1.0))
                     .text_size(px(t.text_size * 1.08))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(c.text_default)
+                    .text_color(wb.text_primary)
                     .child(strings.file_open_failed_title.clone()),
             )
             .child(
@@ -164,7 +165,7 @@ impl Editor {
                     .overflow_hidden()
                     .truncate()
                     .text_size(px(t.text_size * 0.92))
-                    .text_color(c.dialog_muted)
+                    .text_color(wb.text_secondary)
                     .child(file_name),
             )
             .child(
@@ -182,7 +183,7 @@ impl Editor {
                 div()
                     .max_w(px(560.0))
                     .text_size(px(t.text_size * 0.8))
-                    .text_color(c.dialog_danger_button_bg)
+                    .text_color(wb.danger)
                     .child(error.clone())
             }))
             .into_any_element()

@@ -27,6 +27,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let viewport = window.viewport_size();
@@ -73,11 +74,11 @@ impl Block {
                     .justify_center()
                     .rounded(px(8.0))
                     .bg(if active {
-                        c.dialog_secondary_button_hover
+                        wb.control_hover
                     } else {
                         hsla(0.0, 0.0, 0.0, 0.0)
                     })
-                    .text_color(if active { c.text_link } else { c.dialog_muted })
+                    .text_color(if active { wb.accent } else { wb.text_tertiary })
                     .opacity(if disabled { 0.45 } else { 1.0 })
                     .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -86,16 +87,16 @@ impl Block {
                     .when(!disabled, |button| {
                         button
                             .cursor_pointer()
-                            .hover(|button| button.bg(c.dialog_secondary_button_hover))
+                            .hover(|button| button.bg(wb.control_hover))
                             .active(|button| button.opacity(0.82))
                             .on_click(cx.listener(move |block, _event, window, cx| {
                                 block.set_mermaid_view_mode(target, window, cx);
                             }))
                     })
                     .child(svg().path(icon).size(px(15.0)).text_color(if active {
-                        c.text_link
+                        wb.accent
                     } else {
-                        c.dialog_muted
+                        wb.text_tertiary
                     }))
             };
         let mode_switch = div()
@@ -107,9 +108,9 @@ impl Block {
             .items_center()
             .gap(px(1.0))
             .rounded(px(10.0))
-            .bg(c.dialog_secondary_button_bg)
+            .bg(wb.control_surface)
             .border(px(1.0))
-            .border_color(c.dialog_border)
+            .border_color(wb.border_subtle)
             .child(mode_button(
                 "mermaid-view-source",
                 source_icon,
@@ -145,7 +146,7 @@ impl Block {
             .justify_center()
             .rounded(px(8.0))
             .opacity(if export_enabled { 1.0 } else { 0.45 })
-            .text_color(c.dialog_muted)
+            .text_color(wb.text_tertiary)
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(export_tooltip.clone(), cx))
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation();
@@ -153,7 +154,7 @@ impl Block {
             .when(export_enabled, |button| {
                 button
                     .cursor_pointer()
-                    .hover(|button| button.bg(c.dialog_secondary_button_hover))
+                    .hover(|button| button.bg(wb.control_hover))
                     .active(|button| button.opacity(0.82))
                     .on_click(cx.listener(|block, _event, window, cx| {
                         block.request_mermaid_svg_export(window.window_handle(), cx);
@@ -163,7 +164,7 @@ impl Block {
                 svg()
                     .path(MERMAID_EXPORT_ICON)
                     .size(px(15.0))
-                    .text_color(c.dialog_muted),
+                    .text_color(wb.text_tertiary),
             );
 
         let overlay_render = self.last_successful_mermaid_render.clone();
@@ -180,7 +181,7 @@ impl Block {
             .justify_center()
             .rounded(px(8.0))
             .opacity(if expand_enabled { 1.0 } else { 0.45 })
-            .text_color(c.dialog_muted)
+            .text_color(wb.text_tertiary)
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(expand_tooltip.clone(), cx))
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation();
@@ -189,7 +190,7 @@ impl Block {
                 match (overlay_render.clone(), overlay_key) {
                     (Some(rendered), Some(preview_key)) => button
                         .cursor_pointer()
-                        .hover(|button| button.bg(c.dialog_secondary_button_hover))
+                        .hover(|button| button.bg(wb.control_hover))
                         .active(|button| button.opacity(0.82))
                         .on_click(cx.listener(move |_block, _event, _window, cx| {
                             cx.emit(BlockEvent::RequestOpenMermaidOverlay {
@@ -204,7 +205,7 @@ impl Block {
                 svg()
                     .path(EXPAND_ICON)
                     .size(px(15.0))
-                    .text_color(c.dialog_muted),
+                    .text_color(wb.text_tertiary),
             );
 
         let copy_tooltip: SharedString = if self.mermaid_copy_feedback {
@@ -229,11 +230,11 @@ impl Block {
             .rounded(px(8.0))
             .cursor_pointer()
             .text_color(if self.mermaid_copy_feedback {
-                c.text_link
+                wb.accent
             } else {
-                c.dialog_muted
+                wb.text_tertiary
             })
-            .hover(|button| button.bg(c.dialog_secondary_button_hover))
+            .hover(|button| button.bg(wb.control_hover))
             .active(|button| button.opacity(0.82))
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(copy_tooltip.clone(), cx))
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -244,9 +245,9 @@ impl Block {
             }))
             .child(svg().path(copy_icon).size(px(15.0)).text_color(
                 if self.mermaid_copy_feedback {
-                    c.text_link
+                    wb.accent
                 } else {
-                    c.dialog_muted
+                    wb.text_tertiary
                 },
             ));
 
@@ -272,9 +273,9 @@ impl Block {
             .flex()
             .items_center()
             .justify_center()
-            .bg(c.dialog_surface)
+            .bg(wb.navigation_surface)
             .border_b_1()
-            .border_color(c.dialog_border)
+            .border_color(wb.border_subtle)
             .children((viewport_width >= MERMAID_TITLE_BREAKPOINT).then(|| {
                 div()
                     .absolute()
@@ -285,7 +286,7 @@ impl Block {
                     .items_center()
                     .text_size(px((t.code_size + 1.0).max(12.0)))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(c.dialog_body)
+                    .text_color(wb.text_primary)
                     .child("mermaid")
             }))
             .child(mode_switch)
@@ -337,7 +338,7 @@ impl Block {
                 .overflow_hidden()
                 .overflow_y_scroll()
                 .track_scroll(&preview_scroll_handle)
-                .bg(c.source_mode_block_bg)
+                .bg(wb.solid_surface)
                 .child(self.render_mermaid_content(
                     theme,
                     window,
@@ -353,7 +354,7 @@ impl Block {
                 .h(px(heights.source_height))
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .bg(c.source_mode_block_bg)
+                .bg(wb.solid_surface)
                 .child(render_source(heights.source_height, cx))
                 .into_any_element(),
             MermaidViewMode::Split if narrow => {
@@ -374,14 +375,14 @@ impl Block {
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .bg(c.source_mode_block_bg)
+                    .bg(wb.solid_surface)
                     .child(source)
                     .child(
                         div()
                             .w_full()
                             .h(px(1.0))
                             .flex_shrink_0()
-                            .bg(c.dialog_border),
+                            .bg(wb.border_subtle),
                     )
                     .child(
                         div()
@@ -414,7 +415,7 @@ impl Block {
                     .min_w(px(0.0))
                     .overflow_hidden()
                     .flex()
-                    .bg(c.source_mode_block_bg)
+                    .bg(wb.solid_surface)
                     .child(
                         div()
                             .id("mermaid-split-preview-wide")
@@ -429,7 +430,7 @@ impl Block {
                             .h_full()
                             .w(px(1.0))
                             .flex_shrink_0()
-                            .bg(c.dialog_border),
+                            .bg(wb.border_subtle),
                     )
                     .child(
                         div()
@@ -467,11 +468,11 @@ impl Block {
                     .rounded(px(MERMAID_FRAME_RADIUS))
                     .border(px(1.0))
                     .border_color(if self.focus_handle.is_focused(window) {
-                        c.text_link.opacity(0.72)
+                        wb.focus_ring.opacity(0.72)
                     } else {
-                        c.dialog_border
+                        wb.border_subtle
                     })
-                    .bg(c.source_mode_block_bg)
+                    .bg(wb.editor_surface)
                     .child(header)
                     .child(body),
             )

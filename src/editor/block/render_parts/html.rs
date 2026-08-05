@@ -33,6 +33,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let source = runtime.resolved_source.clone();
@@ -82,8 +83,8 @@ impl Block {
         if selected {
             image_frame = image_frame
                 .border(px(1.0))
-                .border_color(c.table_cell_active_outline)
-                .rounded(px(3.0))
+                .border_color(wb.focus_ring)
+                .rounded(px(6.0))
                 .child(
                     div()
                         .id("image-resize-handle")
@@ -95,8 +96,8 @@ impl Block {
                         .h(px(14.0))
                         .rounded(px(3.0))
                         .border(px(2.0))
-                        .border_color(c.editor_background)
-                        .bg(c.table_cell_active_outline)
+                        .border_color(wb.editor_surface)
+                        .bg(wb.focus_ring)
                         .cursor(CursorStyle::PointingHand)
                         .tooltip(move |_window, cx| {
                             crate::ui::ui_tooltip(resize_tooltip.clone(), cx)
@@ -145,6 +146,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let raw = self
@@ -221,7 +223,7 @@ impl Block {
                 .flex_col()
                 .gap(px(4.0))
                 .rounded_sm()
-                .bg(c.source_mode_block_bg)
+                .bg(wb.solid_surface)
                 .px(px(d.block_padding_x))
                 .py(px(d.block_padding_y))
                 .text_size(px(t.text_size))
@@ -240,7 +242,7 @@ impl Block {
                 .w_full()
                 .min_h(px(64.0))
                 .rounded_sm()
-                .bg(c.source_mode_block_bg)
+                .bg(wb.editor_surface)
                 .into_any_element(),
         }
     }
@@ -254,6 +256,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let raw = self
@@ -356,7 +359,7 @@ impl Block {
                 .flex_col()
                 .gap(px(4.0))
                 .rounded_sm()
-                .bg(c.source_mode_block_bg)
+                .bg(wb.solid_surface)
                 .px(px(d.block_padding_x))
                 .py(px(d.block_padding_y))
                 .text_size(px(t.text_size))
@@ -375,7 +378,7 @@ impl Block {
                 .w_full()
                 .h(px(content_height.max(1.0)))
                 .rounded_sm()
-                .bg(c.source_mode_block_bg)
+                .bg(wb.editor_surface)
                 .into_any_element(),
         }
     }

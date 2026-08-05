@@ -14,6 +14,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let ordinal = self.footnote_definition_ordinal();
@@ -73,8 +74,8 @@ impl Block {
                         .items_center()
                         .justify_center()
                         .rounded(px(4.0))
-                        .text_color(c.footnote_backref)
-                        .hover(|this| this.text_color(c.text_link).bg(c.chrome_hover))
+                        .text_color(wb.text_tertiary)
+                        .hover(|this| this.text_color(wb.accent).bg(wb.control_hover))
                         .cursor_pointer()
                         .tooltip(move |_window, cx| {
                             crate::ui::ui_tooltip(backref_tooltip.clone(), cx)

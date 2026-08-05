@@ -67,6 +67,7 @@ impl Render for Block {
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings_arc();
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let grouped_surface = self.callout_anchor.is_some() || self.footnote_anchor.is_some();
@@ -98,7 +99,7 @@ impl Render for Block {
                 TableAxisHighlight::Selected => c.table_axis_selected_bg,
             };
             let border_color = if focused {
-                c.table_cell_active_outline
+                wb.focus_ring
             } else {
                 match highlight {
                     TableAxisHighlight::None => c.table_border,
@@ -267,7 +268,7 @@ impl Render for Block {
                             .debug_selector(|| "complex-source-live-preview-result".to_owned())
                             .w_full()
                             .border_t_1()
-                            .border_color(c.dialog_border)
+                            .border_color(wb.border_subtle)
                             .pt(px(8.0))
                             .child(preview),
                     )
@@ -309,8 +310,8 @@ impl Render for Block {
                     .pl(px(12.0 * f32::from(entry.level.saturating_sub(1))))
                     .py(px(2.0))
                     .cursor_pointer()
-                    .text_color(c.text_link)
-                    .hover(|this| this.bg(c.source_mode_block_bg))
+                    .text_color(wb.accent)
+                    .hover(|this| this.bg(wb.control_hover))
                     .child(entry.title.clone())
                     .on_click(cx.listener(move |_block, _event, _window, cx| {
                         cx.emit(BlockEvent::RequestJumpToTocHeading { target });
@@ -323,7 +324,7 @@ impl Render for Block {
                 .min_w(px(0.0))
                 .py(px(8.0))
                 .border_l(px(2.0))
-                .border_color(c.text_link)
+                .border_color(wb.accent)
                 .flex()
                 .flex_col()
                 .children(rows);
@@ -737,7 +738,7 @@ impl Render for Block {
         let block_gutter =
             self.render_block_gutter(focused, block_group.clone(), &theme, &strings, cx);
         let drop_target = cx.entity().downgrade();
-        let drop_border = theme.colors.text_link;
+        let drop_border = wb.accent;
         let drop_placement = self.block_drop_placement;
         if selection_toolbar.is_some() || slash_menu.is_some() || block_gutter.is_some() {
             div()

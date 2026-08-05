@@ -7,7 +7,7 @@ use super::{
     yaml_frontmatter_body,
 };
 use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
-use crate::components::{TableAxisKind, TableAxisMarker};
+use crate::components::{CalloutVariant, TableAxisKind, TableAxisMarker};
 use crate::i18n::I18nManager;
 use crate::theme::{Theme, ThemeManager};
 use gpui::{Hsla, Rgba, TestAppContext, px};
@@ -177,6 +177,18 @@ fn top_gutter_only_appears_for_column_axis_state() {
 fn grouped_surfaces_own_their_horizontal_padding() {
     assert_eq!(block_content_insets(36.0, 12.0, 2, false), (60.0, 36.0));
     assert_eq!(block_content_insets(36.0, 12.0, 2, true), (24.0, 0.0));
+}
+
+#[test]
+fn callout_surfaces_use_workbench_semantic_roles() {
+    let theme = Theme::default_theme();
+    let (accent, background) =
+        super::callout_accent_and_background(CalloutVariant::Warning, &theme);
+
+    assert_eq!(accent, theme.colors.workbench.warning);
+    assert_eq!(background.h, accent.h);
+    assert_eq!(background.s, accent.s);
+    assert!(background.a < accent.a);
 }
 
 fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {

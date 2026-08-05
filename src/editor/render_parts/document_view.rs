@@ -5,6 +5,22 @@ use super::*;
 #[path = "../render/file_open_failure.rs"]
 mod file_open_failure;
 
+/// Resolves grouped Markdown callouts through the shared workbench roles so
+/// the outer surface and block-local header always use the same theme accent.
+fn markdown_callout_colors(
+    variant: crate::components::CalloutVariant,
+    theme: &Theme,
+) -> (Hsla, Hsla) {
+    let wb = &theme.colors.workbench;
+    match variant {
+        crate::components::CalloutVariant::Note => (wb.info, wb.info.opacity(0.12)),
+        crate::components::CalloutVariant::Tip => (wb.success, wb.success.opacity(0.12)),
+        crate::components::CalloutVariant::Important => (wb.accent, wb.accent.opacity(0.14)),
+        crate::components::CalloutVariant::Warning => (wb.warning, wb.warning.opacity(0.14)),
+        crate::components::CalloutVariant::Caution => (wb.danger, wb.danger.opacity(0.14)),
+    }
+}
+
 impl Editor {
     /// 构建文档滚动面、虚拟化行与自定义滚动条。
     pub(super) fn render_document_content(
@@ -464,7 +480,7 @@ impl Editor {
                         }
                         row_index += 1;
                     }
-                    let (accent, background) = callout_colors(variant, &theme);
+                    let (accent, background) = markdown_callout_colors(variant, &theme);
                     div()
                         .w(px(centered_width))
                         .max_w(relative(1.0))
@@ -528,7 +544,7 @@ impl Editor {
             .flex_grow()
             .h_full()
             .items_center()
-            .bg(theme.colors.editor_background)
+            .bg(theme.colors.workbench.editor_surface)
             .overflow_y_scroll()
             .scrollbar_width(px(0.0))
             .track_scroll(&self.scroll_handle)
@@ -612,7 +628,7 @@ impl Editor {
             .h_full()
             .flex_1()
             .min_w(px(0.0))
-            .bg(theme.colors.editor_background)
+            .bg(theme.colors.workbench.editor_surface)
             .relative()
             .child(scroll_content);
 
@@ -655,7 +671,7 @@ impl Editor {
                             .right_0()
                             .w(px(scrollbar_visual_width))
                             .rounded(px(999.0))
-                            .bg(theme.colors.scrollbar_thumb),
+                            .bg(theme.colors.workbench.control_surface),
                     )
                     .child(
                         canvas(

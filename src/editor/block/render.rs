@@ -143,6 +143,7 @@ fn fallback_image_label(alt: &str, strings: &I18nStrings) -> SharedString {
 }
 
 fn render_complex_warning(message: String, theme: &Theme, id: &'static str) -> AnyElement {
+    let wb = &theme.colors.workbench;
     div()
         .id(id)
         .debug_selector(move || id.to_owned())
@@ -155,12 +156,12 @@ fn render_complex_warning(message: String, theme: &Theme, id: &'static str) -> A
         .items_center()
         .gap(px(4.0))
         .overflow_hidden()
-        .rounded(px(4.0))
-        .bg(theme.colors.callout_warning_bg)
+        .rounded(px(6.0))
+        .bg(wb.warning.opacity(0.14))
         .border_l(px(2.0))
-        .border_color(theme.colors.callout_warning_border)
+        .border_color(wb.warning)
         .text_size(px(theme.typography.code_size))
-        .text_color(theme.colors.text_default)
+        .text_color(wb.text_primary)
         .child(
             div()
                 .size(px(14.0))
@@ -168,7 +169,7 @@ fn render_complex_warning(message: String, theme: &Theme, id: &'static str) -> A
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme.colors.callout_warning_border)
+                .text_color(wb.warning)
                 .debug_selector(move || format!("{id}-icon"))
                 .child(svg().path(CALLOUT_WARNING_ICON).size(px(13.0))),
         )
@@ -341,6 +342,7 @@ fn render_image_placeholder(
     strings: &I18nStrings,
 ) -> AnyElement {
     let c = &theme.colors;
+    let wb = &c.workbench;
     let d = &theme.dimensions;
     let t = &theme.typography;
     div()
@@ -351,12 +353,12 @@ fn render_image_placeholder(
         .justify_center()
         .rounded(px(d.image_radius))
         .border(px(1.0))
-        .border_color(c.image_placeholder_border)
-        .bg(c.image_placeholder_bg)
+        .border_color(wb.border_subtle)
+        .bg(wb.elevated_surface)
         .px(px(d.block_padding_x))
         .text_center()
         .text_size(px(t.text_size))
-        .text_color(c.image_placeholder_text)
+        .text_color(wb.text_secondary)
         .child(fallback_image_label(&runtime.alt, strings))
         .into_any_element()
 }
@@ -369,6 +371,7 @@ fn render_loading_placeholder(
     strings: &I18nStrings,
 ) -> AnyElement {
     let c = &theme.colors;
+    let wb = &c.workbench;
     let d = &theme.dimensions;
     let t = &theme.typography;
     div()
@@ -379,12 +382,12 @@ fn render_loading_placeholder(
         .justify_center()
         .rounded(px(d.image_radius))
         .border(px(1.0))
-        .border_color(c.image_placeholder_border)
-        .bg(c.image_placeholder_bg)
+        .border_color(wb.border_subtle)
+        .bg(wb.elevated_surface)
         .px(px(d.block_padding_x))
         .text_center()
         .text_size(px(t.code_size))
-        .text_color(c.image_placeholder_text)
+        .text_color(wb.text_secondary)
         .child(if runtime.alt.trim().is_empty() {
             SharedString::from(strings.image_loading_without_alt.clone())
         } else {
@@ -428,13 +431,13 @@ fn wrap_with_quote_guides(content: AnyElement, quote_depth: usize, theme: &Theme
 }
 
 fn callout_accent_and_background(variant: super::CalloutVariant, theme: &Theme) -> (Hsla, Hsla) {
-    let c = &theme.colors;
+    let wb = &theme.colors.workbench;
     match variant {
-        super::CalloutVariant::Note => (c.callout_note_border, c.callout_note_bg),
-        super::CalloutVariant::Tip => (c.callout_tip_border, c.callout_tip_bg),
-        super::CalloutVariant::Important => (c.callout_important_border, c.callout_important_bg),
-        super::CalloutVariant::Warning => (c.callout_warning_border, c.callout_warning_bg),
-        super::CalloutVariant::Caution => (c.callout_caution_border, c.callout_caution_bg),
+        super::CalloutVariant::Note => (wb.info, wb.info.opacity(0.12)),
+        super::CalloutVariant::Tip => (wb.success, wb.success.opacity(0.12)),
+        super::CalloutVariant::Important => (wb.accent, wb.accent.opacity(0.14)),
+        super::CalloutVariant::Warning => (wb.warning, wb.warning.opacity(0.14)),
+        super::CalloutVariant::Caution => (wb.danger, wb.danger.opacity(0.14)),
     }
 }
 

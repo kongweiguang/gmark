@@ -128,13 +128,14 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         if !document.is_semantic() {
             return div()
                 .w_full()
                 .rounded_sm()
-                .bg(c.source_mode_block_bg)
+                .bg(wb.solid_surface)
                 .px(px(d.block_padding_x))
                 .py(px(d.block_padding_y))
                 .text_size(px(t.code_size))
@@ -165,6 +166,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
 
@@ -172,7 +174,7 @@ impl Block {
             return div()
                 .w_full()
                 .rounded_sm()
-                .bg(c.source_mode_block_bg)
+                .bg(wb.solid_surface)
                 .px(px(d.block_padding_x * 0.6))
                 .py(px(d.block_padding_y * 0.6))
                 .text_size(px(t.code_size))
@@ -301,7 +303,7 @@ impl Block {
                         .min_w(px(0.0))
                         .flex_grow()
                         .border(px(1.0))
-                        .border_color(c.table_border)
+                        .border_color(wb.border_subtle)
                         .px(px(d.table_cell_padding_x))
                         .py(px(d.table_cell_padding_y))
                         .text_size(px(node_style.computed.font_size))
@@ -494,7 +496,7 @@ impl Block {
         let mut element = div()
             .w_full()
             .border(px(1.0))
-            .border_color(theme.colors.table_border)
+            .border_color(theme.colors.workbench.border_subtle)
             .text_size(px(node_style.computed.font_size))
             .text_color(node_style.computed.color)
             .children(
@@ -552,7 +554,7 @@ impl Block {
             .w_full()
             .rounded_sm()
             .border(px(1.0))
-            .border_color(theme.colors.table_border)
+            .border_color(theme.colors.workbench.border_subtle)
             .px(px(theme.dimensions.block_padding_x))
             .py(px(theme.dimensions.block_padding_y))
             .text_size(px(node_style.computed.font_size))

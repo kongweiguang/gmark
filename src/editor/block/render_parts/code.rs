@@ -13,6 +13,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let language_placeholder = SharedString::from(strings.code_language_placeholder.clone());
@@ -35,16 +36,16 @@ impl Block {
                     .px(px(8.0))
                     .flex()
                     .items_center()
-                    .rounded(px(4.0))
+                    .rounded(px(6.0))
                     .bg(if selected {
-                        c.dialog_secondary_button_hover
+                        wb.control_hover
                     } else {
-                        c.dialog_surface
+                        wb.control_surface
                     })
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .hover(|this| this.bg(wb.control_hover))
                     .cursor_pointer()
                     .text_size(px((t.code_size - 1.0).max(10.0)))
-                    .text_color(c.dialog_body)
+                    .text_color(wb.text_primary)
                     .child(*language)
                     .on_click(cx.listener(move |block, _event, _window, cx| {
                         block.select_code_language_menu_item(index, cx);
@@ -65,10 +66,10 @@ impl Block {
                     .overflow_y_scroll()
                     .p(px(3.0))
                     .occlude()
-                    .bg(c.dialog_surface)
+                    .bg(wb.elevated_surface)
                     .border(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
-                    .rounded(px(6.0))
+                    .border_color(wb.border_subtle)
+                    .rounded(px(10.0))
                     .shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                         cx.stop_propagation();
@@ -87,10 +88,10 @@ impl Block {
             .pl(px(d.code_language_input_padding_x))
             .flex()
             .items_center()
-            .rounded(px(d.code_language_input_radius.min(6.0)))
+            .rounded(px(d.code_language_input_radius.max(6.0).min(10.0)))
             .border(px(d.code_language_input_border_width))
-            .border_color(c.code_language_input_border)
-            .bg(c.code_language_input_bg)
+            .border_color(wb.border_subtle)
+            .bg(wb.input_surface)
             .key_context(BLOCK_EDITOR_CONTEXT)
             .track_focus(&self.code_language_focus_handle)
             .on_action(cx.listener(Self::on_code_language_newline))
@@ -125,7 +126,7 @@ impl Block {
             )
             .on_mouse_move(cx.listener(Self::on_code_language_mouse_move))
             .text_size(px((t.code_size - 1.0).max(10.0)))
-            .text_color(c.code_language_input_text)
+            .text_color(wb.text_primary)
             .cursor(CursorStyle::IBeam)
             .child(CodeLanguageInputElement::new(
                 cx.entity(),
@@ -142,13 +143,13 @@ impl Block {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.0))
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .rounded(px(6.0))
+                    .hover(|this| this.bg(wb.control_hover))
                     .cursor_pointer()
                     .tooltip(move |_window, cx| {
                         crate::ui::ui_tooltip(language_menu_tooltip.clone(), cx)
                     })
-                    .text_color(c.code_language_input_text)
+                    .text_color(wb.text_primary)
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                         cx.stop_propagation();
                     })
@@ -159,7 +160,7 @@ impl Block {
                         svg()
                             .path(CHEVRON_DOWN_ICON)
                             .size(px(14.0))
-                            .text_color(c.code_language_input_text),
+                            .text_color(wb.text_primary),
                     ),
             )
             .children(language_menu);
@@ -171,15 +172,15 @@ impl Block {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
-            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+            .rounded(px(6.0))
+            .hover(|this| this.bg(wb.control_hover))
             .active(|this| this.opacity(0.86))
             .cursor_pointer()
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(copy_tooltip.clone(), cx))
             .text_color(if self.code_copy_feedback {
-                c.text_link
+                wb.accent
             } else {
-                c.code_language_input_placeholder
+                wb.text_tertiary
             })
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation();
@@ -214,7 +215,7 @@ impl Block {
             .w_full()
             .min_w(px(0.0))
             .bg(c.code_bg)
-            .rounded_sm()
+            .rounded(px(8.0))
             .pl(px(d.code_block_padding_x))
             .pr(px(d.code_block_padding_x))
             .pt(px(2.0))

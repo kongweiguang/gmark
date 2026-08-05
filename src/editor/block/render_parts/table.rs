@@ -15,6 +15,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let t = &theme.typography;
         let Some(runtime) = self.table_runtime.clone() else {
@@ -419,14 +420,14 @@ impl Block {
                             .items_center()
                             .justify_center()
                             .rounded(px(999.0))
-                            .bg(c.table_append_button_bg)
-                            .hover(|this| this.bg(c.table_append_button_hover))
+                            .bg(wb.control_surface)
+                            .hover(|this| this.bg(wb.control_hover))
                             .cursor_pointer()
                             .tooltip(move |_window, cx| {
                                 crate::ui::ui_tooltip(append_column_tooltip.clone(), cx)
                             })
                             .text_size(px(t.text_size))
-                            .text_color(c.table_append_button_text)
+                            .text_color(wb.text_primary)
                             .block_mouse_except_scroll()
                             .on_hover(cx.listener(Self::on_table_append_column_button_hover))
                             .on_click(cx.listener(Self::on_append_table_column))
@@ -466,14 +467,14 @@ impl Block {
                             .items_center()
                             .justify_center()
                             .rounded(px(999.0))
-                            .bg(c.table_append_button_bg)
-                            .hover(|this| this.bg(c.table_append_button_hover))
+                            .bg(wb.control_surface)
+                            .hover(|this| this.bg(wb.control_hover))
                             .cursor_pointer()
                             .tooltip(move |_window, cx| {
                                 crate::ui::ui_tooltip(append_row_tooltip.clone(), cx)
                             })
                             .text_size(px(t.text_size))
-                            .text_color(c.table_append_button_text)
+                            .text_color(wb.text_primary)
                             .block_mouse_except_scroll()
                             .on_hover(cx.listener(Self::on_table_append_row_button_hover))
                             .on_click(cx.listener(Self::on_append_table_row))

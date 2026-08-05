@@ -24,6 +24,7 @@ impl Block {
             .map(|runtime| (runtime.record.clone(), runtime.status.clone()))
             .unwrap_or((fallback, ResourceStatus::Loading));
         let c = &theme.colors;
+        let wb = &c.workbench;
         let d = &theme.dimensions;
         let strings = cx.global::<crate::i18n::I18nManager>().strings();
         let (kind_icon, kind_label) = match record.kind {
@@ -92,9 +93,9 @@ impl Block {
             ResourceStatus::Missing
             | ResourceStatus::PermissionDenied
             | ResourceStatus::UnsafeScheme
-            | ResourceStatus::OpenFailed => c.text_link,
-            ResourceStatus::Loading => c.text_placeholder,
-            ResourceStatus::Ready { .. } => c.text_placeholder,
+            | ResourceStatus::OpenFailed => wb.danger,
+            ResourceStatus::Loading => wb.text_tertiary,
+            ResourceStatus::Ready { .. } => wb.text_tertiary,
         };
 
         div()
@@ -112,17 +113,17 @@ impl Block {
             .rounded(px(8.0))
             .border(px(1.0))
             .border_color(if selected {
-                c.text_link
+                wb.accent
             } else {
-                c.dialog_border
+                wb.border_subtle
             })
-            .bg(c.source_mode_block_bg)
+            .bg(wb.solid_surface)
             .text_size(px(theme.typography.text_size))
-            .text_color(c.text_default)
+            .text_color(wb.text_primary)
             .cursor_pointer()
             .tab_index(0)
             .track_focus(&self.focus_handle)
-            .focus(|this| this.border_color(c.text_link))
+            .focus(|this| this.border_color(wb.focus_ring))
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
             .child(
                 div()
@@ -136,9 +137,9 @@ impl Block {
                     .items_center()
                     .justify_center()
                     .rounded(px(6.0))
-                    .bg(c.dialog_secondary_button_bg)
+                    .bg(wb.control_surface)
                     .tooltip(move |_window, cx| crate::ui::ui_tooltip(kind_label.clone(), cx))
-                    .child(svg().path(kind_icon).size(px(18.0)).text_color(c.text_link)),
+                    .child(svg().path(kind_icon).size(px(18.0)).text_color(wb.accent)),
             )
             .child(
                 div()
@@ -160,7 +161,7 @@ impl Block {
                             .overflow_hidden()
                             .truncate()
                             .whitespace_nowrap()
-                            .text_color(c.text_placeholder)
+                            .text_color(wb.text_tertiary)
                             .child(SharedString::from(target)),
                     ),
             )
@@ -173,7 +174,7 @@ impl Block {
                     .px(px(8.0))
                     .py(px(4.0))
                     .rounded(px(6.0))
-                    .bg(c.dialog_secondary_button_bg)
+                    .bg(wb.control_surface)
                     .text_color(status_color)
                     .debug_selector(|| "resource-primary-action".to_owned())
                     .tooltip({
@@ -182,7 +183,7 @@ impl Block {
                     .child(SharedString::from(primary_label))
                     .when(primary_enabled, |button| {
                         button
-                            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            .hover(|this| this.bg(wb.control_hover))
                             .cursor_pointer()
                             .on_click(cx.listener(move |block, _event, _window, cx| {
                                 if retryable {

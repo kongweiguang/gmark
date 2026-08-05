@@ -95,6 +95,7 @@ impl Element for BlockTextElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let theme = cx.global::<ThemeManager>().current_arc();
+        let wb = &theme.colors.workbench;
         let input = self.input.read(cx);
         let shared_text = input.shared_display_text();
         let is_placeholder = self.is_placeholder;
@@ -145,7 +146,7 @@ impl Element for BlockTextElement {
                     px(theme.dimensions.underline_thickness),
                     theme.colors.text_link,
                     theme.colors.code_bg,
-                    theme.colors.dialog_danger_button_bg,
+                    wb.danger,
                     show_inline_code_backgrounds,
                 )
             }
@@ -261,6 +262,7 @@ impl Element for BlockTextElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let theme = cx.global::<ThemeManager>().current_arc();
+        let wb = &theme.colors.workbench;
         let input = self.input.read(cx);
         let editor_selection_range = input
             .editor_selection_range
@@ -285,7 +287,7 @@ impl Element for BlockTextElement {
             .unwrap_or(px(0.0));
         let text_bounds = source_text_bounds(bounds, source_line_number_gutter_width);
         let source_line_numbers = if show_source_line_numbers {
-            let run_color = theme.colors.text_placeholder;
+            let run_color = wb.text_tertiary;
             (1..=lines.len().max(1))
                 .map(|line_number| {
                     let label = line_number.to_string();
@@ -313,7 +315,7 @@ impl Element for BlockTextElement {
                     point(text_bounds.left() - px(1.0), bounds.top()),
                     size(px(1.0), bounds.size.height),
                 ),
-                theme.colors.dialog_border.opacity(0.7),
+                wb.border_subtle.opacity(0.7),
             )
         });
 
@@ -324,7 +326,7 @@ impl Element for BlockTextElement {
             c
         };
         let cursor_width = theme.dimensions.cursor_width;
-        let selection_color = theme.colors.selection;
+        let selection_color = wb.selection;
         let text_align = input.text_align();
 
         let (selection_quads, cursor_quad) =
@@ -399,7 +401,7 @@ impl Element for BlockTextElement {
                                 point(bounds.left(), caret.top()),
                                 size(bounds.size.width, caret.size.height),
                             ),
-                            theme.colors.source_mode_block_bg.opacity(0.55),
+                            wb.accent_soft,
                         )
                     })
                 })
