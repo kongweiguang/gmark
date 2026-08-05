@@ -11,6 +11,24 @@ impl Render for PreferencesWindow {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        let resolved_visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let workbench = &theme.colors.workbench;
+        let app_surface = workbench.material(
+            crate::theme::workbench::SurfaceKind::App,
+            resolved_visual_preferences,
+        );
+        let navigation_surface = workbench.material(
+            crate::theme::workbench::SurfaceKind::Navigation,
+            resolved_visual_preferences,
+        );
+        let solid_surface = workbench.material(
+            crate::theme::workbench::SurfaceKind::Solid,
+            resolved_visual_preferences,
+        );
+        let compact = f32::from(window.viewport_size().width) < 720.0;
         let can_save = self.has_unsaved_changes() && !self.has_invalid_numeric_input(cx);
         let search_query = self.search_query(cx);
         let clear_search_tooltip: SharedString = strings.ui_clear_search.clone().into();
@@ -19,6 +37,8 @@ impl Render for PreferencesWindow {
             SharedString::from(format!("gmark - {}", strings.preferences_window_title));
         window.set_window_title(window_title.as_ref());
         let titlebar_height = custom_titlebar_height(window, d);
+        let cancel_focus_handle = self.action_focus_handles[0].clone();
+        let save_focus_handle = self.action_focus_handles[1].clone();
 
         let content = div()
             .id("preferences-content")
@@ -26,25 +46,32 @@ impl Render for PreferencesWindow {
             .size_full()
             .pt(px(titlebar_height))
             .flex()
+            .when(compact, |this| this.flex_col())
             .key_context("Preferences")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::capture_shortcut_key))
-            .bg(c.editor_background)
-            .text_color(c.dialog_body)
+            .bg(app_surface.background)
+            .text_color(workbench.text_primary)
             .child(
                 div()
                     .id("preferences-navigation")
                     .debug_selector(|| "preferences-navigation".to_owned())
                     .w(px(PREFERENCES_NAV_WIDTH))
                     .h_full()
+                    .when(compact, |this| {
+                        this.w_full()
+                            .h(px(284.0))
+                            .border_r(px(0.0))
+                            .border_b(px(d.dialog_border_width))
+                    })
                     .px(px(12.0))
                     .pt(px(16.0))
                     .flex_shrink_0()
                     .flex()
                     .items_start()
-                    .bg(c.sidebar_background)
+                    .bg(navigation_surface.background)
                     .border_r(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
+                    .border_color(navigation_surface.border)
                     .child(
                         div()
                             .w_full()
@@ -63,8 +90,8 @@ impl Render for PreferencesWindow {
                                     .gap(px(7.0))
                                     .rounded(px(6.0))
                                     .border(px(d.dialog_border_width))
-                                    .border_color(c.dialog_border)
-                                    .bg(c.dialog_surface)
+                                    .border_color(solid_surface.border)
+                                    .bg(solid_surface.background)
                                     .child(
                                         div()
                                             .id("preferences-search-icon")
@@ -206,6 +233,7 @@ impl Render for PreferencesWindow {
                     .flex_1()
                     .min_w(px(0.0))
                     .h_full()
+                    .when(compact, |this| this.w_full())
                     .p(px(d.dialog_padding))
                     .flex()
                     .flex_col()
@@ -230,7 +258,7 @@ impl Render for PreferencesWindow {
                                     .flex_shrink_0()
                                     .text_size(px(t.dialog_title_size))
                                     .font_weight(t.dialog_title_weight.to_font_weight())
-                                    .text_color(c.dialog_title)
+                                    .text_color(workbench.text_primary)
                                     .child(if search_query.is_empty() {
                                         match self.nav {
                                             PreferencesNav::File => {
@@ -358,7 +386,7 @@ impl Render for PreferencesWindow {
                             .gap(px(d.dialog_button_gap))
                             .pt(px(12.0))
                             .border_t(px(d.dialog_border_width))
-                            .border_color(c.dialog_border)
+                            .border_color(solid_surface.border)
                             .child(
                                 div()
                                     .id("preferences-cancel")
@@ -368,17 +396,21 @@ impl Render for PreferencesWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
+                                    .tab_index(0)
+                                    .track_focus(&cancel_focus_handle)
                                     .rounded(px((d.dialog_radius - 4.0).max(0.0)))
                                     .border(px(d.dialog_border_width))
-                                    .border_color(c.dialog_border)
-                                    .bg(c.dialog_secondary_button_bg)
-                                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                    .border_color(solid_surface.border)
+                                    .bg(workbench.control_surface)
+                                    .hover(|this| this.bg(workbench.control_hover))
+                                    .focus(|this| this.border_color(workbench.focus_ring))
                                     .cursor_pointer()
                                     .text_size(px(t.dialog_button_size))
                                     .font_weight(t.dialog_button_weight.to_font_weight())
-                                    .text_color(c.dialog_secondary_button_text)
+                                    .text_color(workbench.text_primary)
                                     .child(strings.preferences_cancel.clone())
-                                    .on_click(cx.listener(Self::cancel)),
+                                    .on_click(cx.listener(Self::cancel))
+                                    .on_key_down(cx.listener(Self::cancel_from_key)),
                             )
                             .child(
                                 div()
@@ -389,31 +421,35 @@ impl Render for PreferencesWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
+                                    .tab_index(0)
+                                    .track_focus(&save_focus_handle)
                                     .rounded(px((d.dialog_radius - 4.0).max(0.0)))
                                     .border(px(if can_save { 0.0 } else { d.dialog_border_width }))
-                                    .border_color(c.dialog_border)
+                                    .border_color(solid_surface.border)
                                     .bg(if can_save {
-                                        c.dialog_primary_button_bg
+                                        workbench.accent
                                     } else {
-                                        c.dialog_secondary_button_bg
+                                        workbench.control_surface
                                     })
                                     .hover(move |this| {
                                         if can_save {
-                                            this.bg(c.dialog_primary_button_hover)
+                                            this.bg(workbench.accent_hover)
                                         } else {
-                                            this.bg(c.dialog_secondary_button_bg)
+                                            this.bg(workbench.control_surface)
                                         }
                                     })
+                                    .focus(|this| this.border_color(workbench.focus_ring))
                                     .when(can_save, |this| this.cursor_pointer())
                                     .text_size(px(t.dialog_button_size))
                                     .font_weight(t.dialog_button_weight.to_font_weight())
                                     .text_color(if can_save {
-                                        c.dialog_primary_button_text
+                                        workbench.text_inverse
                                     } else {
-                                        c.dialog_secondary_button_text
+                                        workbench.text_secondary
                                     })
                                     .child(strings.preferences_save.clone())
-                                    .on_click(cx.listener(Self::save)),
+                                    .on_click(cx.listener(Self::save))
+                                    .on_key_down(cx.listener(Self::save_from_key)),
                             ),
                     ),
             );
@@ -421,7 +457,7 @@ impl Render for PreferencesWindow {
         let root = div()
             .size_full()
             .relative()
-            .bg(c.editor_background)
+            .bg(app_surface.background)
             .child(content);
 
         if let Some(titlebar) = render_custom_titlebar(

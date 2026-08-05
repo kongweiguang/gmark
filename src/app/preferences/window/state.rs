@@ -47,6 +47,36 @@ pub(super) enum PreferencesSwitch {
     StatusBarModeSwitch,
 }
 
+/// Visual accessibility controls are intentionally grouped as a segmented
+/// control.  Keeping a stable order makes keyboard navigation predictable and
+/// lets the preference window preserve focus when the layout reflows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PreferencesAccessibilityControl {
+    ReducedMotion,
+    ReducedTransparency,
+    HighContrast,
+}
+
+impl PreferencesAccessibilityControl {
+    pub(super) const COUNT: usize = 3;
+
+    pub(super) fn index(self) -> usize {
+        match self {
+            Self::ReducedMotion => 0,
+            Self::ReducedTransparency => 1,
+            Self::HighContrast => 2,
+        }
+    }
+
+    pub(super) fn id(self) -> &'static str {
+        match self {
+            Self::ReducedMotion => "preferences-accessibility-reduced-motion",
+            Self::ReducedTransparency => "preferences-accessibility-reduced-transparency",
+            Self::HighContrast => "preferences-accessibility-high-contrast",
+        }
+    }
+}
+
 impl PreferencesSwitch {
     pub(super) const COUNT: usize = 12;
 
@@ -229,6 +259,7 @@ pub(crate) struct PreferencesWindow {
     pub(super) image_paste_behavior: ImagePasteBehavior,
     pub(super) keybindings: BTreeMap<String, Vec<String>>,
     pub(super) document_loading: DocumentLoadingPreferences,
+    pub(super) visual_accessibility: VisualAccessibilityPreferences,
     pub(super) saved_startup_open: StartupOpenPreference,
     pub(super) saved_auto_check_updates: bool,
     pub(super) saved_auto_save: AutoSavePreference,
@@ -248,13 +279,17 @@ pub(crate) struct PreferencesWindow {
     pub(super) saved_image_paste_behavior: ImagePasteBehavior,
     pub(super) saved_keybindings: BTreeMap<String, Vec<String>>,
     pub(super) saved_document_loading: DocumentLoadingPreferences,
+    pub(super) saved_visual_accessibility: VisualAccessibilityPreferences,
     pub(super) language_options: Vec<LanguageCatalogEntry>,
     pub(super) font_options: Vec<String>,
     pub(super) focus_handle: FocusHandle,
+    pub(super) action_focus_handles: [FocusHandle; 2],
     pub(super) nav_focus_handles: [FocusHandle; 6],
     pub(super) dropdown_focus_handles: [FocusHandle; PreferencesDropdown::COUNT],
     pub(super) theme_appearance_focus_handles: [FocusHandle; 3],
     pub(super) theme_palette_focus_handles: [FocusHandle; 4],
+    pub(super) accessibility_focus_handles:
+        [[FocusHandle; 3]; PreferencesAccessibilityControl::COUNT],
     pub(super) dropdown_selected_indices: [usize; PreferencesDropdown::COUNT],
     pub(super) switch_focus_handles: [FocusHandle; PreferencesSwitch::COUNT],
     pub(super) stepper_focus_handles: [FocusHandle; PreferencesStepperControl::COUNT],

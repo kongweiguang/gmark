@@ -22,7 +22,10 @@ fn try_open_preferences_window_with_state(
         .update(cx, |view, window, cx| {
             let preferences = cx.entity().downgrade();
             window.on_window_should_close(cx, move |_window, cx| {
-                let _ = preferences.update(cx, |view, cx| view.restore_saved_theme(cx));
+                let _ = preferences.update(cx, |view, cx| {
+                    view.restore_saved_visual_accessibility(cx);
+                    view.restore_saved_theme(cx);
+                });
                 true
             });
             window.activate_window();

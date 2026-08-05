@@ -29,6 +29,7 @@ impl PreferencesWindow {
         let image_paste_behavior = preferences.image_paste_behavior;
         let keybindings = preferences.keybindings;
         let document_loading = preferences.document_loading.clone();
+        let visual_accessibility = preferences.visual_accessibility;
         // 字体枚举成本较高，偏好设置窗口创建时只读取一次，渲染阶段复用稳定列表。
         let mut font_options = cx.text_system().all_font_names();
         font_options.retain(|font| !font.trim().is_empty());
@@ -114,13 +115,19 @@ impl PreferencesWindow {
             saved_image_paste_behavior: image_paste_behavior,
             saved_keybindings: keybindings,
             saved_document_loading: document_loading,
+            visual_accessibility,
+            saved_visual_accessibility: visual_accessibility,
             language_options,
             font_options,
             focus_handle: cx.focus_handle(),
+            action_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             nav_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             dropdown_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             theme_appearance_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             theme_palette_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
+            accessibility_focus_handles: std::array::from_fn(|_| {
+                std::array::from_fn(|_| cx.focus_handle())
+            }),
             dropdown_selected_indices: [0; PreferencesDropdown::COUNT],
             switch_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             stepper_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
@@ -262,6 +269,21 @@ impl PreferencesWindow {
                 nav: PreferencesNav::Theme,
                 category: strings.preferences_nav_theme.clone(),
                 label: strings.menu_language.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::Theme,
+                category: strings.preferences_accessibility_title.clone(),
+                label: strings.preferences_reduced_motion.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::Theme,
+                category: strings.preferences_accessibility_title.clone(),
+                label: strings.preferences_reduced_transparency.clone(),
+            },
+            PreferenceSearchItem {
+                nav: PreferencesNav::Theme,
+                category: strings.preferences_accessibility_title.clone(),
+                label: strings.preferences_high_contrast.clone(),
             },
             PreferenceSearchItem {
                 nav: PreferencesNav::Image,

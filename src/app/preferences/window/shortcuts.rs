@@ -202,6 +202,12 @@ impl PreferencesWindow {
             let search_focused = self.search_input.read(cx).focus_handle.is_focused(window);
             let query = self.search_query(cx);
             if !search_focused || query.is_empty() {
+                if event.keystroke.key == "escape" {
+                    self.restore_saved_visual_accessibility(cx);
+                    self.restore_saved_theme(cx);
+                    window.remove_window();
+                    cx.stop_propagation();
+                }
                 return;
             }
 

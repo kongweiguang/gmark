@@ -45,8 +45,23 @@ impl PreferencesWindow {
     }
 
     pub(super) fn cancel(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.restore_saved_visual_accessibility(cx);
         self.restore_saved_theme(cx);
         window.remove_window();
+    }
+
+    pub(super) fn cancel_from_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+            self.restore_saved_visual_accessibility(cx);
+            self.restore_saved_theme(cx);
+            window.remove_window();
+            cx.stop_propagation();
+        }
     }
 
     pub(super) fn on_titlebar_close(
@@ -56,17 +71,34 @@ impl PreferencesWindow {
         cx: &mut Context<Self>,
     ) {
         if event.standard_click() {
+            self.restore_saved_visual_accessibility(cx);
             self.restore_saved_theme(cx);
             window.remove_window();
         }
     }
 
     pub(super) fn save(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_changes(window, cx);
+    }
+
+    pub(super) fn save_from_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+            self.save_changes(window, cx);
+            cx.stop_propagation();
+        }
+    }
+
+    fn save_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_unsaved_changes() || self.has_invalid_numeric_input(cx) {
             return;
         }
 
-        let preferences = match save_preferences_from_window(
+        let mut preferences = match save_preferences_from_window(
             self.startup_open,
             self.auto_check_updates,
             self.auto_save,
@@ -110,6 +142,27 @@ impl PreferencesWindow {
                 return;
             }
         };
+
+        if preferences.visual_accessibility != self.visual_accessibility {
+            preferences = match super::super::storage::save_visual_accessibility_preferences(
+                self.visual_accessibility,
+            ) {
+                Ok(preferences) => preferences,
+                Err(err) => {
+                    let strings = cx.global::<I18nManager>().strings().clone();
+                    let ok = strings.info_dialog_ok;
+                    let buttons = [ok.as_str()];
+                    let _ = window.prompt(
+                        PromptLevel::Critical,
+                        &strings.preferences_save_failed_title,
+                        Some(&err.to_string()),
+                        &buttons,
+                        cx,
+                    );
+                    return;
+                }
+            };
+        }
 
         self.apply_saved_preferences(preferences, window, cx);
     }
@@ -160,6 +213,16 @@ impl PreferencesWindow {
             settings.status_bar_settings.custom_buttons = preferences.status_bar.custom_buttons;
         });
         crate::updater::UpdateCoordinator::set_auto_check(preferences.auto_check_updates, cx);
+        if cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .is_some()
+        {
+            cx.update_global::<crate::ui::visual_preferences::VisualPreferencesManager, _>(
+                |manager, _cx| {
+                    manager.set_preferences(preferences.visual_accessibility);
+                },
+            );
+        }
         cx.refresh_windows();
         window.activate_window();
         self.focus_handle.focus(window);
@@ -182,6 +245,8 @@ impl PreferencesWindow {
         self.saved_image_paste_behavior = self.image_paste_behavior;
         self.saved_keybindings = normalize_shortcut_config(&self.keybindings);
         self.saved_document_loading = self.document_loading.clone();
+        self.visual_accessibility = preferences.visual_accessibility;
+        self.saved_visual_accessibility = preferences.visual_accessibility;
         self.saved_status_bar_enabled = self.status_bar_enabled;
         self.saved_status_bar_show_word_count = self.status_bar_show_word_count;
         self.saved_status_bar_show_cursor_position = self.status_bar_show_cursor_position;

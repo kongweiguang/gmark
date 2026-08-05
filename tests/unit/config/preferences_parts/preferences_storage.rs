@@ -2,6 +2,7 @@
 
 use super::{
     AppPreferences, AutoSavePreference, DocumentLoadingPreferences, EditorSettings,
+    PreferencesAccessibilityControl,
     ImagePasteBehavior, PreferencesDropdown, PreferencesNav, PreferencesNumericInput,
     PreferencesStepperControl, PreferencesSwitch, ResourceInsertBehavior,
     StartupOpenPreference, StatusBarButton, StatusBarPreferences,

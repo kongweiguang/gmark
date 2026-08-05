@@ -152,3 +152,93 @@ async fn numeric_preference_text_input_updates_preview_and_stays_in_sync(cx: &mu
         })
         .expect("preferences window should remain updateable");
 }
+
+#[gpui::test]
+async fn visual_accessibility_drafts_preview_and_restore_with_keyboard_focus(
+    cx: &mut TestAppContext,
+) {
+    init_preferences_test_app(cx);
+    cx.update(|cx| {
+        crate::ui::visual_preferences::VisualPreferencesManager::init(
+            cx,
+            gmark_config::VisualAccessibilityPreferences::default(),
+        );
+    });
+    let handle = cx.update(|cx| {
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
+    });
+    cx.run_until_parked();
+
+    handle
+        .update(cx, |preferences, window, cx| {
+            preferences.nav = PreferencesNav::Theme;
+            preferences.accessibility_focus_handles[0][1].focus(window);
+            preferences.set_accessibility_override(
+                PreferencesAccessibilityControl::ReducedMotion,
+                gmark_config::AccessibilityOverride::Enabled,
+                cx,
+            );
+            assert_eq!(
+                preferences.visual_accessibility.reduced_motion,
+                gmark_config::AccessibilityOverride::Enabled
+            );
+            assert!(preferences.has_unsaved_changes());
+            assert!(cx
+                .global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+                .current()
+                .reduced_motion);
+            assert!(preferences.accessibility_focus_handles[0][1].is_focused(window));
+
+            preferences.restore_saved_visual_accessibility(cx);
+            assert_eq!(
+                preferences.visual_accessibility,
+                gmark_config::VisualAccessibilityPreferences::default()
+            );
+            assert!(!preferences.has_unsaved_changes());
+            assert!(!cx
+                .global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+                .current()
+                .reduced_motion);
+        })
+        .expect("preferences window should remain updateable");
+}
+
+#[gpui::test]
+async fn visual_accessibility_controls_reflow_below_navigation_on_narrow_windows(
+    cx: &mut TestAppContext,
+) {
+    init_preferences_test_app(cx);
+    let handle = cx.update(|cx| {
+        open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
+    });
+    cx.run_until_parked();
+    let mut visual = VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_resize(size(px(680.0), px(520.0)));
+    handle
+        .update(&mut visual, |preferences, _window, cx| {
+            preferences.nav = PreferencesNav::Theme;
+            cx.notify();
+        })
+        .expect("preferences window should remain updateable");
+    visual.update(|window, cx| window.draw(cx).clear());
+    visual.run_until_parked();
+
+    let content = visual.debug_bounds("preferences-content").unwrap();
+    let navigation = visual.debug_bounds("preferences-navigation").unwrap();
+    let main = visual.debug_bounds("preferences-main").unwrap();
+    let page = visual.debug_bounds("preferences-page-scroll").unwrap();
+    assert_eq!(navigation.left(), content.left());
+    assert_eq!(navigation.right(), content.right());
+    assert!(main.top() >= navigation.bottom());
+    for selector in [
+        "preferences-accessibility-reduced-motion",
+        "preferences-accessibility-reduced-transparency",
+        "preferences-accessibility-high-contrast",
+    ] {
+        let bounds = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing {selector}"));
+        assert!(bounds.left() >= page.left(), "{selector} escaped left");
+        assert!(bounds.right() <= page.right(), "{selector} escaped right");
+    }
+}

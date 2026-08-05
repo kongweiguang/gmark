@@ -5,6 +5,52 @@
 use super::*;
 
 impl PreferencesWindow {
+    pub(super) fn set_accessibility_override(
+        &mut self,
+        control: PreferencesAccessibilityControl,
+        value: gmark_config::AccessibilityOverride,
+        cx: &mut Context<Self>,
+    ) {
+        match control {
+            PreferencesAccessibilityControl::ReducedMotion => {
+                self.visual_accessibility.reduced_motion = value;
+            }
+            PreferencesAccessibilityControl::ReducedTransparency => {
+                self.visual_accessibility.reduced_transparency = value;
+            }
+            PreferencesAccessibilityControl::HighContrast => {
+                self.visual_accessibility.high_contrast = value;
+            }
+        }
+        self.preview_visual_accessibility(cx);
+    }
+
+    pub(super) fn preview_visual_accessibility(&mut self, cx: &mut Context<Self>) {
+        let preferences = self.visual_accessibility;
+        let changed = if cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .is_some()
+        {
+            cx.update_global::<crate::ui::visual_preferences::VisualPreferencesManager, _>(
+                |manager, _cx| manager.set_preferences(preferences),
+            )
+        } else {
+            false
+        };
+        if changed {
+            cx.refresh_windows();
+        }
+        cx.notify();
+    }
+
+    pub(super) fn restore_saved_visual_accessibility(&mut self, cx: &mut Context<Self>) {
+        if self.visual_accessibility == self.saved_visual_accessibility {
+            return;
+        }
+        self.visual_accessibility = self.saved_visual_accessibility;
+        self.preview_visual_accessibility(cx);
+    }
+
     pub(super) fn toggle_preference_switch(
         &mut self,
         preference: PreferencesSwitch,

@@ -153,6 +153,45 @@ impl PreferencesWindow {
             .child(control)
     }
 
+    pub(super) fn accessibility_row(
+        &self,
+        title: String,
+        hint: String,
+        control: impl IntoElement,
+        theme: &Theme,
+    ) -> Div {
+        let workbench = &theme.colors.workbench;
+        div()
+            .w_full()
+            .max_w(px(PREFERENCES_FORM_WIDTH))
+            .flex()
+            .items_start()
+            .justify_between()
+            .gap(px(20.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(180.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(theme.typography.dialog_body_size))
+                            .font_weight(theme.typography.dialog_button_weight.to_font_weight())
+                            .text_color(workbench.text_primary)
+                            .child(SharedString::from(title)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(theme.typography.dialog_body_size - 1.0))
+                            .text_color(workbench.text_secondary)
+                            .child(SharedString::from(hint)),
+                    ),
+            )
+            .child(div().w(px(280.0)).flex_shrink_0().child(control))
+    }
+
     pub(super) fn theme_appearance_option(
         &self,
         id: &'static str,
@@ -276,6 +315,86 @@ impl PreferencesWindow {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                     focus_handle.focus(window);
                     this.preview_theme_palette(option, cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    pub(super) fn accessibility_option(
+        &self,
+        control: PreferencesAccessibilityControl,
+        option: gmark_config::AccessibilityOverride,
+        selected: bool,
+        label: SharedString,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let workbench = &theme.colors.workbench;
+        let visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let material = workbench.material(
+            crate::theme::workbench::SurfaceKind::Solid,
+            visual_preferences,
+        );
+        let option_index = match option {
+            gmark_config::AccessibilityOverride::System => 0,
+            gmark_config::AccessibilityOverride::Enabled => 1,
+            gmark_config::AccessibilityOverride::Disabled => 2,
+        };
+        let focus_handle = self.accessibility_focus_handles[control.index()][option_index].clone();
+        let pointer_focus_handle = focus_handle.clone();
+        let id = control.id();
+        div()
+            .id(id)
+            .debug_selector(move || id.to_owned())
+            .flex_1()
+            .min_w(px(0.0))
+            .h(px(36.0))
+            .tab_index(0)
+            .track_focus(&focus_handle)
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(8.0))
+            .rounded(px(theme.dimensions.menu_item_radius))
+            .border(px(theme.dimensions.dialog_border_width))
+            .border_color(if selected {
+                workbench.accent
+            } else {
+                material.border
+            })
+            .bg(if selected {
+                workbench.accent_soft
+            } else {
+                material.background
+            })
+            .hover(|this| this.bg(workbench.control_hover))
+            .focus(|this| this.border_color(workbench.focus_ring))
+            .cursor_pointer()
+            .text_size(px(theme.typography.dialog_body_size))
+            .text_color(if selected {
+                workbench.accent
+            } else {
+                workbench.text_secondary
+            })
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .truncate()
+                    .child(label),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                pointer_focus_handle.focus(window);
+                this.set_accessibility_override(control, option, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let key = event.keystroke.key.as_str();
+                if matches!(key, "enter" | "space") {
+                    focus_handle.focus(window);
+                    this.set_accessibility_override(control, option, cx);
                     cx.stop_propagation();
                 }
             }))

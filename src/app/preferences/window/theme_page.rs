@@ -144,6 +144,46 @@ impl PreferencesWindow {
             None
         };
 
+        let mut accessibility_control =
+            |control: PreferencesAccessibilityControl,
+             selected: gmark_config::AccessibilityOverride| {
+                let labels = [
+                    strings.preferences_accessibility_system.clone(),
+                    strings.preferences_accessibility_enabled.clone(),
+                    strings.preferences_accessibility_disabled.clone(),
+                ];
+                let options = [
+                    gmark_config::AccessibilityOverride::System,
+                    gmark_config::AccessibilityOverride::Enabled,
+                    gmark_config::AccessibilityOverride::Disabled,
+                ];
+                div()
+                    .w_full()
+                    .flex()
+                    .gap(px(4.0))
+                    .children(options.into_iter().zip(labels).map(|(option, label)| {
+                        self.accessibility_option(
+                            control,
+                            option,
+                            selected == option,
+                            label.into(),
+                            theme,
+                            cx,
+                        )
+                    }))
+            };
+
+        let accessibility_heading = div()
+            .w_full()
+            .max_w(px(PREFERENCES_FORM_WIDTH))
+            .pt(px(12.0))
+            .border_t(px(theme.dimensions.dialog_border_width))
+            .border_color(theme.colors.workbench.border_subtle)
+            .text_size(px(theme.typography.dialog_title_size))
+            .font_weight(theme.typography.dialog_title_weight.to_font_weight())
+            .text_color(theme.colors.workbench.text_primary)
+            .child(strings.preferences_accessibility_title.clone());
+
         div()
             .relative()
             .w_full()
@@ -154,6 +194,34 @@ impl PreferencesWindow {
             .child(self.labeled_row(&appearance_label, appearance_control, theme))
             .child(self.labeled_row(&palette_label, palette_control, theme))
             .child(self.labeled_row(&strings.menu_language, language_dropdown, theme))
+            .child(accessibility_heading)
+            .child(self.accessibility_row(
+                strings.preferences_reduced_motion.clone(),
+                strings.preferences_reduced_motion_hint.clone(),
+                accessibility_control(
+                    PreferencesAccessibilityControl::ReducedMotion,
+                    self.visual_accessibility.reduced_motion,
+                ),
+                theme,
+            ))
+            .child(self.accessibility_row(
+                strings.preferences_reduced_transparency.clone(),
+                strings.preferences_reduced_transparency_hint.clone(),
+                accessibility_control(
+                    PreferencesAccessibilityControl::ReducedTransparency,
+                    self.visual_accessibility.reduced_transparency,
+                ),
+                theme,
+            ))
+            .child(self.accessibility_row(
+                strings.preferences_high_contrast.clone(),
+                strings.preferences_high_contrast_hint.clone(),
+                accessibility_control(
+                    PreferencesAccessibilityControl::HighContrast,
+                    self.visual_accessibility.high_contrast,
+                ),
+                theme,
+            ))
             .children(language_list)
     }
 }

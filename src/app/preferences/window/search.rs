@@ -102,6 +102,7 @@ impl PreferencesWindow {
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
             || self.document_loading != self.saved_document_loading
+            || self.visual_accessibility != self.saved_visual_accessibility
             || self.status_bar_enabled != self.saved_status_bar_enabled
             || self.status_bar_show_word_count != self.saved_status_bar_show_word_count
             || self.status_bar_show_cursor_position != self.saved_status_bar_show_cursor_position
