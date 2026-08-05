@@ -3,6 +3,8 @@
 //! Composition root for the virtualized structured-document panel.
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl DocumentHost {
     /// 构建结构化 CSV/JSON/Markdown 表格面板；源码滚动面保持独立所有权。
@@ -10,6 +12,16 @@ impl DocumentHost {
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings_arc();
         let colors = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let content_material = colors
+            .workbench
+            .material(SurfaceKind::Solid, visual_preferences);
+        let divider_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let layout = self.structured_panel_layout(&strings);
         let structured_width = layout.width;
         let structured_list = self.render_structured_list(&layout, colors, cx);
@@ -59,7 +71,8 @@ impl DocumentHost {
                 .relative()
                 .overflow_hidden()
                 .border_l(px(1.0))
-                .border_color(colors.dialog_border)
+                .border_color(divider_material.border)
+                .bg(content_material.background)
                 .child(horizontal_scroll)
                 .children(structured_scrollbar)
         } else {
@@ -78,6 +91,7 @@ impl DocumentHost {
                 .min_h(px(0.0))
                 .relative()
                 .overflow_hidden()
+                .bg(content_material.background)
                 .child(horizontal_scroll)
                 .children(structured_scrollbar)
         }

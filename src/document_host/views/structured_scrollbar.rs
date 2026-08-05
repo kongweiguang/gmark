@@ -3,7 +3,8 @@
 //! Vertical scrollbar geometry for virtualized structured rows.
 
 use super::*;
-use crate::theme::ThemeColors;
+use crate::theme::{ThemeColors, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl DocumentHost {
     pub(super) fn render_structured_scrollbar(
@@ -12,6 +13,13 @@ impl DocumentHost {
         colors: &ThemeColors,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let structured_count = row_count;
 
         let structured_scroll = self.structured_scroll_handle.0.borrow().base_handle.clone();
@@ -55,6 +63,7 @@ impl DocumentHost {
                 .right(px(3.0))
                 .w(px(12.0))
                 .cursor_pointer()
+                .bg(control_material.background.opacity(0.32))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, window, _cx| {
@@ -111,7 +120,7 @@ impl DocumentHost {
                         .w(px(7.0))
                         .h(px(structured_thumb_height))
                         .rounded(px(999.0))
-                        .bg(colors.scrollbar_thumb),
+                        .bg(colors.workbench.icon.opacity(0.62)),
                 )
         })
     }

@@ -3,6 +3,8 @@
 //! Source virtual-list and scrollbar rendering for the document host.
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 #[derive(Clone, Copy)]
 pub(super) struct SourceSurfaceMetrics {
@@ -96,11 +98,18 @@ impl DocumentHost {
         let dimensions = &theme.dimensions;
         let source_text_size = theme.typography.text_size;
         let source_line_height = theme.typography.text_line_height;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let source_material = colors
+            .workbench
+            .material(SurfaceKind::Editor, visual_preferences);
         let line_text_color = colors.text_default;
         let line_number_color = colors.text_placeholder;
-        let gutter_separator_color = colors.dialog_border.opacity(0.7);
+        let gutter_separator_color = source_material.border.opacity(0.7);
         let active_line_color = colors.source_mode_block_bg.opacity(0.55);
-        let source_background = colors.editor_background;
+        let source_background = source_material.background;
         let fold_placeholder_accent_color = colors.code_syntax_property;
         let fold_placeholder_punctuation_color = colors.code_syntax_punctuation;
         let fold_placeholder_background = fold_placeholder_accent_color.opacity(0.12);
@@ -307,7 +316,7 @@ impl DocumentHost {
         .w(px(surface.content_width))
         .max_w(relative(1.0))
         .px(px(dimensions.block_padding_x))
-        .bg(colors.editor_background)
+        .bg(source_material.background)
     }
 
     pub(super) fn render_source_scrollbar(
@@ -316,6 +325,13 @@ impl DocumentHost {
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let colors = &cx.global::<ThemeManager>().current_arc().colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let scrollbar_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let source_scroll = self.scroll_handle.0.borrow().base_handle.clone();
         let source_scroll_bounds = source_scroll.bounds();
         let source_viewport_height = f32::from(source_scroll_bounds.size.height.max(px(1.0)));
@@ -355,6 +371,7 @@ impl DocumentHost {
                 .right(px(3.0))
                 .w(px(12.0))
                 .cursor_pointer()
+                .bg(scrollbar_material.background.opacity(0.28))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, window, _cx| {
@@ -394,7 +411,7 @@ impl DocumentHost {
                         .w(px(7.0))
                         .h(px(source_thumb_height))
                         .rounded(px(999.0))
-                        .bg(colors.scrollbar_thumb),
+                        .bg(colors.workbench.icon.opacity(0.62)),
                 )
         })
     }
@@ -407,6 +424,13 @@ impl DocumentHost {
         let theme = cx.global::<ThemeManager>().current_arc();
         let colors = &theme.colors;
         let dimensions = &theme.dimensions;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let scrollbar_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let source_scroll = self.scroll_handle.0.borrow().base_handle.clone();
         let source_scroll_bounds = source_scroll.bounds();
         let source_max_window_start = surface
@@ -441,6 +465,7 @@ impl DocumentHost {
                 .bottom(px(2.0))
                 .h(px(12.0))
                 .cursor_pointer()
+                .bg(scrollbar_material.background.opacity(0.28))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
@@ -476,7 +501,7 @@ impl DocumentHost {
                         .w(px(source_horizontal_thumb_width))
                         .h(px(7.0))
                         .rounded(px(999.0))
-                        .bg(colors.scrollbar_thumb),
+                        .bg(colors.workbench.icon.opacity(0.62)),
                 )
         })
     }

@@ -5,6 +5,8 @@
 use super::model::{MAX_ZOOM as GRAPH_MAX_ZOOM, MIN_ZOOM as GRAPH_MIN_ZOOM, fit_camera};
 use super::panel_state::JsonGraphRenderContext;
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 use gpui::AnyElement;
 
 pub(super) struct JsonGraphControls {
@@ -23,6 +25,16 @@ pub(super) fn render_json_graph_controls(
     let theme = cx.global::<ThemeManager>().current_arc();
     let strings = cx.global::<I18nManager>().strings_arc();
     let colors = &theme.colors;
+    let visual_preferences = cx
+        .try_global::<VisualPreferencesManager>()
+        .map(VisualPreferencesManager::current)
+        .unwrap_or_default();
+    let control_material = colors
+        .workbench
+        .material(SurfaceKind::Glass, visual_preferences);
+    let floating_material = colors
+        .workbench
+        .material(SurfaceKind::GlassStrong, visual_preferences);
     let control_button = |id: &'static str,
                           icon: &'static str,
                           glyph_size: f32,
@@ -33,14 +45,16 @@ pub(super) fn render_json_graph_controls(
             .id(id)
             .debug_selector(move || id.to_owned())
             .size(px(28.0))
+            .tab_index(0)
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(6.0))
             .border(px(1.0))
-            .border_color(colors.dialog_border)
-            .bg(colors.dialog_surface)
-            .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+            .border_color(control_material.border)
+            .bg(control_material.background)
+            .hover(|button| button.bg(colors.workbench.control_hover))
+            .focus(|button| button.border_color(colors.workbench.focus_ring))
             .cursor_pointer()
             .occlude()
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
@@ -51,7 +65,7 @@ pub(super) fn render_json_graph_controls(
                     .relative()
                     .left(px(glyph_offset_x))
                     .top(px(glyph_offset_y))
-                    .text_color(colors.dialog_body),
+                    .text_color(colors.workbench.text_secondary),
             )
     };
     let zoom_out = control_button(
@@ -93,6 +107,7 @@ pub(super) fn render_json_graph_controls(
         .id("json-graph-actual-size")
         .debug_selector(|| "json-graph-actual-size".to_owned())
         .h(px(28.0))
+        .tab_index(0)
         .min_w(px(48.0))
         .px(px(8.0))
         .flex()
@@ -101,8 +116,9 @@ pub(super) fn render_json_graph_controls(
         .rounded(px(6.0))
         .cursor_pointer()
         .text_size(px(11.0))
-        .text_color(colors.dialog_body)
-        .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+        .text_color(colors.workbench.text_secondary)
+        .hover(|button| button.bg(colors.workbench.control_hover))
+        .focus(|button| button.text_color(colors.workbench.text_primary))
         .tooltip(|_window, cx| crate::ui::ui_tooltip("实际大小（100%）", cx))
         .child(format!("{}%", (zoom * 100.0).round() as i32))
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -158,13 +174,13 @@ pub(super) fn render_json_graph_controls(
         .gap(px(5.0))
         .rounded(px(6.0))
         .border(px(1.0))
-        .border_color(colors.dialog_border)
-        .bg(colors.dialog_surface)
+        .border_color(control_material.border)
+        .bg(control_material.background)
         .child(
             svg()
                 .path("icon/ui/search.svg")
                 .size(px(13.0))
-                .text_color(colors.dialog_muted),
+                .text_color(colors.workbench.text_tertiary),
         )
         .child(host.structured_filter_input.clone());
     let search_count = (!context.query.is_empty()).then(|| {
@@ -173,7 +189,7 @@ pub(super) fn render_json_graph_controls(
             .debug_selector(|| "json-graph-search-count".to_owned())
             .min_w(px(42.0))
             .text_size(px(11.0))
-            .text_color(colors.dialog_muted)
+            .text_color(colors.workbench.text_tertiary)
             .child(if host.graph_search_matches.is_empty() {
                 "0 / 0".to_owned()
             } else {
@@ -228,17 +244,19 @@ pub(super) fn render_json_graph_controls(
             .id("json-graph-focus-subtree")
             .debug_selector(|| "json-graph-focus-subtree".to_owned())
             .h(px(28.0))
+            .tab_index(0)
             .px(px(9.0))
             .flex()
             .items_center()
             .rounded(px(6.0))
             .border(px(1.0))
-            .border_color(colors.dialog_border)
-            .bg(colors.dialog_surface)
-            .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+            .border_color(control_material.border)
+            .bg(control_material.background)
+            .hover(|button| button.bg(colors.workbench.control_hover))
+            .focus(|button| button.border_color(colors.workbench.focus_ring))
             .cursor_pointer()
             .text_size(px(11.0))
-            .text_color(colors.dialog_body)
+            .text_color(colors.workbench.text_secondary)
             .child(strings.json_graph_focus_subtree.clone())
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.derived_projection_root = Some(root.clone());
@@ -254,17 +272,19 @@ pub(super) fn render_json_graph_controls(
             .id("json-graph-reset-root")
             .debug_selector(|| "json-graph-reset-root".to_owned())
             .h(px(28.0))
+            .tab_index(0)
             .px(px(9.0))
             .flex()
             .items_center()
             .rounded(px(6.0))
             .border(px(1.0))
-            .border_color(colors.dialog_border)
-            .bg(colors.dialog_surface)
-            .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+            .border_color(control_material.border)
+            .bg(control_material.background)
+            .hover(|button| button.bg(colors.workbench.control_hover))
+            .focus(|button| button.border_color(colors.workbench.focus_ring))
             .cursor_pointer()
             .text_size(px(11.0))
-            .text_color(colors.dialog_body)
+            .text_color(colors.workbench.text_secondary)
             .child(strings.json_graph_reset_root.clone())
             .on_click(cx.listener(|this, _, _, cx| {
                 this.derived_projection_root = None;
@@ -305,8 +325,8 @@ pub(super) fn render_json_graph_controls(
         .gap(px(3.0))
         .rounded(px(9.0))
         .border(px(1.0))
-        .border_color(colors.dialog_border)
-        .bg(colors.dialog_surface)
+        .border_color(floating_material.border)
+        .bg(floating_material.background)
         .shadow_md()
         .occlude()
         .child(zoom_out)
@@ -336,14 +356,14 @@ pub(super) fn render_json_graph_controls(
             .border_color(colors.callout_warning_border)
             .bg(colors.callout_warning_bg)
             .text_size(px(11.0))
-            .text_color(colors.text_default)
+            .text_color(colors.workbench.text_primary)
             .child(strings.json_graph_stale.clone())
             .child(
                 div()
                     .min_w(px(0.0))
                     .flex_1()
                     .truncate()
-                    .text_color(colors.dialog_muted)
+                    .text_color(colors.workbench.text_tertiary)
                     .child(detail),
             )
             .into_any_element()
@@ -359,10 +379,10 @@ pub(super) fn render_json_graph_controls(
             .items_center()
             .rounded(px(6.0))
             .border(px(1.0))
-            .border_color(colors.dialog_border)
-            .bg(colors.dialog_surface)
+            .border_color(control_material.border)
+            .bg(control_material.background)
             .text_size(px(11.0))
-            .text_color(colors.dialog_muted)
+            .text_color(colors.workbench.text_tertiary)
             .child(strings.json_graph_truncated.clone())
             .into_any_element()
     });

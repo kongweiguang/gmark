@@ -3,6 +3,8 @@
 //! Mode-specific document content panels.
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl DocumentHost {
     pub(super) fn render_main_panel(
@@ -17,6 +19,16 @@ impl DocumentHost {
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings_arc();
         let colors = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let editor_material = colors
+            .workbench
+            .material(SurfaceKind::Editor, visual_preferences);
+        let divider_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let viewport_width = f32::from(window.viewport_size().width).max(1.0);
         let viewport_height = f32::from(window.viewport_size().height).max(1.0);
         let structured_panel_available = self.structured_index.is_some();
@@ -87,7 +99,7 @@ impl DocumentHost {
                                 .size_full()
                                 .flex()
                                 .justify_center()
-                                .bg(colors.editor_background)
+                                .bg(editor_material.background)
                                 .px(px(surface.horizontal_padding))
                                 .pt(px(surface.top_padding))
                                 .overflow_hidden()
@@ -113,8 +125,8 @@ impl DocumentHost {
                         .when(!narrow_split, |divider| divider.cursor_col_resize())
                         .tab_index(0)
                         .track_focus(&self.json_split_focus_handle)
-                        .hover(|divider| divider.bg(colors.text_link.opacity(0.08)))
-                        .focus(|divider| divider.bg(colors.text_link.opacity(0.08)))
+                        .hover(|divider| divider.bg(colors.workbench.accent_soft))
+                        .focus(|divider| divider.bg(colors.workbench.accent_soft))
                         .child(
                             div()
                                 .absolute()
@@ -125,9 +137,9 @@ impl DocumentHost {
                                     line.top_0().bottom_0().left(px(3.0)).w(px(1.0))
                                 })
                                 .bg(if split_divider_active {
-                                    colors.text_link.opacity(0.72)
+                                    colors.workbench.focus_ring
                                 } else {
-                                    colors.dialog_border
+                                    divider_material.border
                                 })
                                 .debug_selector(|| "json-graph-split-divider-line".to_owned()),
                         )
@@ -219,7 +231,7 @@ impl DocumentHost {
                                 .size_full()
                                 .flex()
                                 .justify_center()
-                                .bg(colors.editor_background)
+                                .bg(editor_material.background)
                                 .px(px(surface.horizontal_padding))
                                 .pt(px(surface.top_padding))
                                 .overflow_hidden()
@@ -252,7 +264,7 @@ impl DocumentHost {
                 .items_center()
                 .justify_center()
                 .text_size(px(13.0))
-                .text_color(colors.text_placeholder)
+                .text_color(colors.workbench.text_tertiary)
                 .child(strings.large_document_text("preparing_template").replace(
                     "{mib}",
                     &format!("{:.1}", self.probe.len as f64 / (1024.0 * 1024.0)),
@@ -271,7 +283,7 @@ impl DocumentHost {
                         .size_full()
                         .flex()
                         .justify_center()
-                        .bg(colors.editor_background)
+                        .bg(editor_material.background)
                         .px(px(surface.horizontal_padding))
                         .pt(px(surface.top_padding))
                         .overflow_hidden()

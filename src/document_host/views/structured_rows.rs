@@ -3,7 +3,8 @@
 //! Virtualized structured rows and cell interactions.
 
 use super::*;
-use crate::theme::ThemeColors;
+use crate::theme::{ThemeColors, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl DocumentHost {
     pub(super) fn render_structured_list(
@@ -21,8 +22,16 @@ impl DocumentHost {
         let loading_text = layout.loading_text.clone();
         let line_text_color = colors.text_default;
         let line_number_color = colors.text_placeholder;
-        let structured_border_color = colors.dialog_border;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let content_material = colors
+            .workbench
+            .material(SurfaceKind::Solid, visual_preferences);
+        let structured_border_color = content_material.border;
         let structured_selection_color = colors.table_axis_selected_bg;
+        let focus_ring_color = colors.workbench.focus_ring;
 
         uniform_list(
             "document-host-structured-rows",
@@ -65,6 +74,7 @@ impl DocumentHost {
                             .border_color(structured_border_color)
                             .text_size(px(12.0))
                             .text_color(line_text_color)
+                            .bg(content_material.background)
                             .child(
                                 div()
                                     .id(("document-host-structured-row-number", logical_row))
@@ -158,10 +168,16 @@ impl DocumentHost {
                                             .items_center()
                                             .overflow_hidden()
                                             .whitespace_nowrap()
+                                            .tab_index(0)
                                             .border_l(px(1.0))
                                             .border_color(structured_border_color)
+                                            .focus(|cell_view| {
+                                                cell_view.border_color(focus_ring_color)
+                                            })
                                             .when(selected, |cell_view| {
-                                                cell_view.bg(structured_selection_color)
+                                                cell_view
+                                                    .bg(structured_selection_color)
+                                                    .border_color(focus_ring_color)
                                             })
                                             .pl(px(10.0 + row_depth as f32 * 14.0))
                                             .child(if editing {

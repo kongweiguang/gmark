@@ -13,6 +13,8 @@ use super::support::{
     node_edit_target_for_identity,
 };
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -60,6 +62,16 @@ impl DocumentHost {
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings().clone();
         let colors = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let content_material = colors
+            .workbench
+            .material(SurfaceKind::Editor, visual_preferences);
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let (title, detail): (SharedString, SharedString) =
             if let Some(error) = &self.derived_projection_error {
                 (
@@ -81,13 +93,13 @@ impl DocumentHost {
             .items_center()
             .justify_center()
             .gap(px(8.0))
-            .bg(colors.editor_background)
-            .text_color(colors.text_default)
+            .bg(content_material.background)
+            .text_color(colors.workbench.text_primary)
             .child(div().text_size(px(14.0)).child(title))
             .child(
                 div()
                     .text_size(px(12.0))
-                    .text_color(colors.text_placeholder)
+                    .text_color(colors.workbench.text_tertiary)
                     .child(detail),
             )
             .children(self.derived_projection_error_offset.map(|offset| {
@@ -99,8 +111,8 @@ impl DocumentHost {
                     .py(px(6.0))
                     .rounded(px(6.0))
                     .cursor_pointer()
-                    .bg(colors.dialog_secondary_button_bg)
-                    .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                    .bg(control_material.background)
+                    .hover(|button| button.bg(colors.workbench.control_hover))
                     .child(
                         strings
                             .json_graph_locate_byte_template

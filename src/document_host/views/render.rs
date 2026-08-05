@@ -3,6 +3,8 @@
 //! GPUI composition root for the normalized document host.
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 #[path = "render/context_menu.rs"]
 mod context_menu;
@@ -105,6 +107,13 @@ impl Render for DocumentHost {
         let graph_edit_overlay = (self.probe.format == DocumentFormat::Json)
             .then(|| self.render_json_graph_edit_overlay(viewport_width, viewport_height, cx));
         let colors = &cx.global::<ThemeManager>().current_arc().colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let editor_material = colors
+            .workbench
+            .material(SurfaceKind::Editor, visual_preferences);
         let content = div()
             .size_full()
             .flex()
@@ -142,7 +151,7 @@ impl Render for DocumentHost {
             .on_action(cx.listener(Self::on_format_document))
             .on_action(cx.listener(Self::on_format_selection))
             .on_action(cx.listener(Self::on_cancel_formatting))
-            .bg(colors.editor_background)
+            .bg(editor_material.background)
             .children(external_banner)
             .children(oversized_selection_banner)
             .children(structure_banner)

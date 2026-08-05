@@ -75,7 +75,7 @@ fn render_json_graph_card(
         !context.query.is_empty() && json_graph_node_matches_query(node, &context.query);
     let branch_color = context
         .palette
-        .branch(position.branch, colors.dialog_border);
+        .branch(position.branch, colors.workbench.border_subtle);
     let left = context.camera_x + position.x * context.zoom;
     let top = context.camera_y + position.y * context.zoom;
     let width = position.width * context.zoom;
@@ -130,12 +130,12 @@ fn render_json_graph_card(
                 .items_center()
                 .justify_center()
                 .border_t(px(1.0))
-                .border_color(colors.dialog_border.opacity(0.58))
+                .border_color(colors.workbench.border_subtle.opacity(0.58))
                 .bg(context.palette.surface)
                 .text_size(px((10.5 * context.zoom).clamp(8.5, 15.0)))
-                .text_color(colors.text_link)
+                .text_color(colors.workbench.accent)
                 .cursor_pointer()
-                .hover(|row| row.bg(colors.dialog_secondary_button_hover))
+                .hover(|row| row.bg(colors.workbench.control_hover))
                 .child(
                     strings
                         .json_graph_show_more_template
@@ -194,7 +194,7 @@ fn render_json_graph_card(
                     branch_color.opacity(0.18)
                 })
                 .text_size(px((12.0 * context.zoom).clamp(9.0, 18.0)))
-                .text_color(colors.text_default)
+                .text_color(colors.workbench.text_primary)
                 .child(
                     div()
                         .id(SharedString::from(format!(
@@ -220,7 +220,7 @@ fn render_json_graph_card(
                         .items_center()
                         .justify_center()
                         .rounded(px(4.0))
-                        .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                        .hover(|button| button.bg(colors.workbench.control_hover))
                         .child(if collapsed { "+" } else { "−" })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -336,7 +336,7 @@ fn render_json_graph_child_row(
         .items_center()
         .gap(px(6.0 * context.zoom))
         .border_t(px(1.0))
-        .border_color(colors.dialog_border.opacity(0.58))
+        .border_color(colors.workbench.border_subtle.opacity(0.58))
         .bg(if row_selected {
             context.palette.accent.opacity(0.11)
         } else {
@@ -361,7 +361,11 @@ fn render_json_graph_child_row(
                 })
                 .child(child_label),
         )
-        .child(div().text_color(colors.dialog_muted).child(child_summary))
+        .child(
+            div()
+                .text_color(colors.workbench.text_tertiary)
+                .child(child_summary),
+        )
         .child(
             div()
                 .id(SharedString::from(port_selector.clone()))

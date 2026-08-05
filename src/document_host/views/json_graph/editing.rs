@@ -4,6 +4,8 @@
 
 use super::support::{field_edit_target, node_edit_target};
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl DocumentHost {
     pub(in crate::document_host::implementation) fn begin_json_graph_edit(
@@ -187,6 +189,16 @@ impl DocumentHost {
         let theme = cx.global::<ThemeManager>().current();
         let colors = &theme.colors;
         let strings = cx.global::<I18nManager>().strings();
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let overlay_material = colors
+            .workbench
+            .material(SurfaceKind::GlassStrong, visual_preferences);
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let container = matches!(target.kind, JsonValueKind::Object | JsonValueKind::Array);
         let error = self.graph_edit_error.clone();
         let issue = self.graph_edit_issue;
@@ -204,7 +216,7 @@ impl DocumentHost {
                 .items_center()
                 .justify_center()
                 .occlude()
-                .bg(colors.editor_background.opacity(0.42))
+                .bg(colors.workbench.overlay_scrim)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| this.cancel_json_graph_edit_if_pristine(cx)),
@@ -234,20 +246,20 @@ impl DocumentHost {
                         .gap(px(9.0))
                         .rounded(px(9.0))
                         .border(px(1.0))
-                        .border_color(colors.dialog_border)
-                        .bg(colors.dialog_surface)
+                        .border_color(overlay_material.border)
+                        .bg(overlay_material.background)
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div()
                                 .text_size(px(13.0))
-                                .text_color(colors.text_default)
+                                .text_color(colors.workbench.text_primary)
                                 .child(title),
                         )
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(colors.dialog_muted)
+                                .text_color(colors.workbench.text_tertiary)
                                 .child(strings.json_graph_edit_help.clone()),
                         )
                         .child(
@@ -263,9 +275,9 @@ impl DocumentHost {
                                 .border_color(if error.is_some() {
                                     colors.callout_warning_border
                                 } else {
-                                    colors.dialog_border
+                                    overlay_material.border
                                 })
-                                .bg(colors.editor_background)
+                                .bg(colors.workbench.editor_surface)
                                 .child(self.graph_edit_input.clone()),
                         )
                         .children(error.map(|error| {
@@ -273,7 +285,7 @@ impl DocumentHost {
                                 .id("json-graph-edit-error")
                                 .debug_selector(|| "json-graph-edit-error".to_owned())
                                 .text_size(px(11.0))
-                                .text_color(colors.text_default)
+                                .text_color(colors.workbench.text_primary)
                                 .child(error)
                         }))
                         .child(
@@ -287,17 +299,19 @@ impl DocumentHost {
                                         .id("json-graph-edit-reload")
                                         .debug_selector(|| "json-graph-edit-reload".to_owned())
                                         .h(px(30.0))
+                                        .tab_index(0)
                                         .px(px(11.0))
                                         .flex()
                                         .items_center()
                                         .rounded(px(6.0))
                                         .cursor_pointer()
-                                        .bg(colors.dialog_secondary_button_bg)
-                                        .hover(|button| {
-                                            button.bg(colors.dialog_secondary_button_hover)
+                                        .bg(control_material.background)
+                                        .hover(|button| button.bg(colors.workbench.control_hover))
+                                        .focus(|button| {
+                                            button.border_color(colors.workbench.focus_ring)
                                         })
                                         .text_size(px(11.0))
-                                        .text_color(colors.dialog_body)
+                                        .text_color(colors.workbench.text_secondary)
                                         .child(strings.json_graph_reload_value.clone())
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.reload_json_graph_edit(window, cx)
@@ -310,17 +324,21 @@ impl DocumentHost {
                                             .id("json-graph-edit-source")
                                             .debug_selector(|| "json-graph-edit-source".to_owned())
                                             .h(px(30.0))
+                                            .tab_index(0)
                                             .px(px(11.0))
                                             .flex()
                                             .items_center()
                                             .rounded(px(6.0))
                                             .cursor_pointer()
-                                            .bg(colors.dialog_secondary_button_bg)
+                                            .bg(control_material.background)
                                             .hover(|button| {
-                                                button.bg(colors.dialog_secondary_button_hover)
+                                                button.bg(colors.workbench.control_hover)
+                                            })
+                                            .focus(|button| {
+                                                button.border_color(colors.workbench.focus_ring)
                                             })
                                             .text_size(px(11.0))
-                                            .text_color(colors.dialog_body)
+                                            .text_color(colors.workbench.text_secondary)
                                             .child(strings.json_graph_edit_source.clone())
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.cancel_json_graph_edit(cx);
@@ -340,17 +358,19 @@ impl DocumentHost {
                                         .id("json-graph-edit-cancel")
                                         .debug_selector(|| "json-graph-edit-cancel".to_owned())
                                         .h(px(30.0))
+                                        .tab_index(0)
                                         .px(px(11.0))
                                         .flex()
                                         .items_center()
                                         .rounded(px(6.0))
                                         .cursor_pointer()
-                                        .bg(colors.dialog_secondary_button_bg)
-                                        .hover(|button| {
-                                            button.bg(colors.dialog_secondary_button_hover)
+                                        .bg(control_material.background)
+                                        .hover(|button| button.bg(colors.workbench.control_hover))
+                                        .focus(|button| {
+                                            button.border_color(colors.workbench.focus_ring)
                                         })
                                         .text_size(px(11.0))
-                                        .text_color(colors.dialog_body)
+                                        .text_color(colors.workbench.text_secondary)
                                         .child(strings.unsaved_changes_cancel.clone())
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.cancel_json_graph_edit(cx)
@@ -362,17 +382,21 @@ impl DocumentHost {
                                             .id("json-graph-edit-save")
                                             .debug_selector(|| "json-graph-edit-save".to_owned())
                                             .h(px(30.0))
+                                            .tab_index(0)
                                             .px(px(11.0))
                                             .flex()
                                             .items_center()
                                             .rounded(px(6.0))
                                             .cursor_pointer()
-                                            .bg(colors.dialog_primary_button_bg)
+                                            .bg(colors.workbench.accent)
                                             .hover(|button| {
-                                                button.bg(colors.dialog_primary_button_hover)
+                                                button.bg(colors.workbench.accent_hover)
+                                            })
+                                            .focus(|button| {
+                                                button.border_color(colors.workbench.focus_ring)
                                             })
                                             .text_size(px(11.0))
-                                            .text_color(colors.dialog_primary_button_text)
+                                            .text_color(colors.workbench.text_inverse)
                                             .child(strings.menu_save.clone())
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.commit_json_graph_edit(cx)

@@ -3,7 +3,8 @@
 //! Table switchers, operations, and context-menu controls.
 
 use super::*;
-use crate::theme::ThemeColors;
+use crate::theme::{ThemeColors, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl DocumentHost {
     pub(super) fn render_markdown_table_switcher(
@@ -14,6 +15,13 @@ impl DocumentHost {
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
         let structured_width = width;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
 
         match self.structured_index.as_ref() {
             Some(StructuredIndex::MarkdownTables { tables, selected }) if tables.len() > 1 => {
@@ -32,24 +40,27 @@ impl DocumentHost {
                         .items_center()
                         .gap(px(6.0))
                         .border_b(px(1.0))
-                        .border_color(colors.dialog_border)
+                        .border_color(control_material.border)
+                        .bg(control_material.background)
                         .text_size(px(12.0))
-                        .text_color(colors.dialog_muted)
+                        .text_color(colors.workbench.text_tertiary)
                         .child(
                             div()
                                 .id("document-host-markdown-table-previous")
                                 .size(px(24.0))
+                                .tab_index(0)
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(4.0))
                                 .cursor_pointer()
                                 .text_color(if selected == 0 {
-                                    colors.text_placeholder
+                                    colors.workbench.text_tertiary
                                 } else {
-                                    colors.text_default
+                                    colors.workbench.text_primary
                                 })
-                                .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                                .hover(|button| button.bg(colors.workbench.control_hover))
+                                .focus(|button| button.border_color(colors.workbench.focus_ring))
                                 .child("‹")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.select_markdown_table(previous, cx);
@@ -72,17 +83,19 @@ impl DocumentHost {
                                 .id("document-host-markdown-table-next")
                                 .debug_selector(|| "document-host-markdown-table-next".to_owned())
                                 .size(px(24.0))
+                                .tab_index(0)
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(4.0))
                                 .cursor_pointer()
                                 .text_color(if selected + 1 == table_count {
-                                    colors.text_placeholder
+                                    colors.workbench.text_tertiary
                                 } else {
-                                    colors.text_default
+                                    colors.workbench.text_primary
                                 })
-                                .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                                .hover(|button| button.bg(colors.workbench.control_hover))
+                                .focus(|button| button.border_color(colors.workbench.focus_ring))
                                 .child("›")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.select_markdown_table(next, cx);
@@ -100,6 +113,13 @@ impl DocumentHost {
         strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         let column_progress = self
             .structured_column_progress
             .as_ref()
@@ -114,7 +134,8 @@ impl DocumentHost {
                 .items_center()
                 .gap(px(6.0))
                 .border_b(px(1.0))
-                .border_color(colors.dialog_border)
+                .border_color(control_material.border)
+                .bg(control_material.background)
                 .when_some(column_progress, |bar, (processed, total)| {
                     bar.child(
                         strings
@@ -127,9 +148,11 @@ impl DocumentHost {
                             .id("document-host-cancel-column-update")
                             .px(px(8.0))
                             .py(px(4.0))
+                            .tab_index(0)
                             .rounded(px(4.0))
                             .cursor_pointer()
-                            .bg(colors.dialog_secondary_button_bg)
+                            .bg(colors.workbench.control_surface)
+                            .focus(|button| button.border_color(colors.workbench.focus_ring))
                             .child(strings.large_document_text("cancel").to_owned())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.cancel_delimited_column_transform(cx)
@@ -142,8 +165,10 @@ impl DocumentHost {
                             .id("document-host-show-all-columns")
                             .px(px(8.0))
                             .py(px(4.0))
+                            .tab_index(0)
                             .rounded(px(4.0))
-                            .bg(colors.dialog_secondary_button_bg)
+                            .bg(colors.workbench.control_surface)
+                            .focus(|button| button.border_color(colors.workbench.focus_ring))
                             .child(strings.large_document_text("show_all_columns").to_owned())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.hidden_structured_columns.clear();
@@ -161,6 +186,13 @@ impl DocumentHost {
         strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
         structured_live.then(|| {
             let row_count = self
                 .structured_index
@@ -171,12 +203,14 @@ impl DocumentHost {
                 .debug_selector(|| "document-host-structured-add-row".to_owned())
                 .h(px(30.0))
                 .px(px(12.0))
+                .tab_index(0)
                 .flex()
                 .items_center()
                 .border_t(px(1.0))
-                .border_color(colors.dialog_border)
+                .border_color(control_material.border)
                 .cursor_pointer()
-                .text_color(colors.text_link)
+                .text_color(colors.workbench.accent)
+                .focus(|row| row.border_color(colors.workbench.focus_ring))
                 .child(strings.large_document_text("add_row").to_owned())
                 .on_click(
                     cx.listener(move |this, _, _, cx| this.insert_delimited_row(row_count, cx)),
@@ -190,6 +224,13 @@ impl DocumentHost {
         strings: &I18nStrings,
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::GlassStrong, visual_preferences);
         self.structured_context_target.map(|target| {
             let row_count = self
                 .structured_index
@@ -204,7 +245,7 @@ impl DocumentHost {
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .hover(|item| item.bg(colors.dialog_secondary_button_hover))
+                    .hover(|item| item.bg(colors.workbench.control_hover))
                     .child(strings.large_document_text(key).to_owned())
             };
             let menu = div()
@@ -217,8 +258,8 @@ impl DocumentHost {
                 .p(px(4.0))
                 .rounded(px(6.0))
                 .border(px(1.0))
-                .border_color(colors.dialog_border)
-                .bg(colors.dialog_surface)
+                .border_color(control_material.border)
+                .bg(control_material.background)
                 .shadow_md();
             match target {
                 StructuredMenuTarget::Row(row) => menu

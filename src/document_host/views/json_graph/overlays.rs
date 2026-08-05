@@ -5,6 +5,8 @@
 use super::panel_state::JsonGraphRenderContext;
 use super::support::{bounded_node_content, jsonpath_for_display, node_edit_target_for_identity};
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 use gpui::AnyElement;
 
 pub(super) struct JsonGraphOverlays {
@@ -20,6 +22,16 @@ pub(super) fn render_json_graph_overlays(
     let theme = cx.global::<ThemeManager>().current_arc();
     let strings = cx.global::<I18nManager>().strings_arc();
     let colors = &theme.colors;
+    let visual_preferences = cx
+        .try_global::<VisualPreferencesManager>()
+        .map(VisualPreferencesManager::current)
+        .unwrap_or_default();
+    let floating_material = colors
+        .workbench
+        .material(SurfaceKind::GlassStrong, visual_preferences);
+    let control_material = colors
+        .workbench
+        .material(SurfaceKind::Glass, visual_preferences);
     let viewport_width = context.viewport_width;
     let viewport_height = context.viewport_height;
     let detail_panel = context.selected_detail.clone().map(|detail| {
@@ -51,8 +63,8 @@ pub(super) fn render_json_graph_overlays(
             .occlude()
             .rounded(px(9.0))
             .border(px(1.0))
-            .border_color(colors.dialog_border)
-            .bg(colors.dialog_surface)
+            .border_color(floating_material.border)
+            .bg(floating_material.background)
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation()
@@ -64,7 +76,7 @@ pub(super) fn render_json_graph_overlays(
                     .items_center()
                     .justify_between()
                     .text_size(px(13.0))
-                    .text_color(colors.text_default)
+                    .text_color(colors.workbench.text_primary)
                     .child(strings.json_graph_details_title.clone())
                     .child(
                         div()
@@ -75,14 +87,18 @@ pub(super) fn render_json_graph_overlays(
                                 div()
                                     .id("json-graph-node-details-copy-path")
                                     .h(px(26.0))
+                                    .tab_index(0)
                                     .px(px(8.0))
                                     .flex()
                                     .items_center()
                                     .rounded(px(5.0))
                                     .cursor_pointer()
                                     .text_size(px(11.0))
-                                    .text_color(colors.dialog_body)
-                                    .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                                    .text_color(colors.workbench.text_secondary)
+                                    .hover(|button| button.bg(colors.workbench.control_hover))
+                                    .focus(|button| {
+                                        button.text_color(colors.workbench.text_primary)
+                                    })
                                     .child(strings.json_graph_copy_path.clone())
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
@@ -94,14 +110,18 @@ pub(super) fn render_json_graph_overlays(
                                 div()
                                     .id("json-graph-node-details-edit")
                                     .h(px(26.0))
+                                    .tab_index(0)
                                     .px(px(8.0))
                                     .flex()
                                     .items_center()
                                     .rounded(px(5.0))
                                     .cursor_pointer()
                                     .text_size(px(11.0))
-                                    .text_color(colors.dialog_body)
-                                    .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                                    .text_color(colors.workbench.text_secondary)
+                                    .hover(|button| button.bg(colors.workbench.control_hover))
+                                    .focus(|button| {
+                                        button.text_color(colors.workbench.text_primary)
+                                    })
                                     .child(strings.json_graph_edit_value.clone())
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.begin_json_graph_edit(
@@ -115,12 +135,16 @@ pub(super) fn render_json_graph_overlays(
                                 div()
                                     .id("json-graph-node-details-close")
                                     .size(px(26.0))
+                                    .tab_index(0)
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .rounded(px(5.0))
                                     .cursor_pointer()
-                                    .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                                    .hover(|button| button.bg(colors.workbench.control_hover))
+                                    .focus(|button| {
+                                        button.border_color(colors.workbench.focus_ring)
+                                    })
                                     .tooltip({
                                         let label: SharedString = strings.ui_close.clone().into();
                                         move |_window, cx| crate::ui::ui_tooltip(label.clone(), cx)
@@ -129,7 +153,7 @@ pub(super) fn render_json_graph_overlays(
                                         svg()
                                             .path(CLOSE_ICON)
                                             .size(px(14.0))
-                                            .text_color(colors.dialog_muted),
+                                            .text_color(colors.workbench.text_tertiary),
                                     )
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.dismiss_json_graph_details();
@@ -146,7 +170,7 @@ pub(super) fn render_json_graph_overlays(
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(colors.dialog_muted)
+                            .text_color(colors.workbench.text_tertiary)
                             .child(strings.json_graph_content.clone()),
                     )
                     .child(
@@ -156,10 +180,10 @@ pub(super) fn render_json_graph_overlays(
                             .p(px(10.0))
                             .overflow_y_scroll()
                             .rounded(px(6.0))
-                            .bg(colors.editor_background)
+                            .bg(colors.workbench.editor_surface)
                             .font_family(source_monospace_font_family())
                             .text_size(px(11.0))
-                            .text_color(colors.text_default)
+                            .text_color(colors.workbench.text_primary)
                             .child(detail.content),
                     ),
             )
@@ -171,7 +195,7 @@ pub(super) fn render_json_graph_overlays(
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(colors.dialog_muted)
+                            .text_color(colors.workbench.text_tertiary)
                             .child(strings.json_graph_path.clone()),
                     )
                     .child(
@@ -182,10 +206,10 @@ pub(super) fn render_json_graph_overlays(
                             .overflow_hidden()
                             .truncate()
                             .rounded(px(6.0))
-                            .bg(colors.editor_background)
+                            .bg(colors.workbench.editor_surface)
                             .font_family(source_monospace_font_family())
                             .text_size(px(11.0))
-                            .text_color(colors.text_link)
+                            .text_color(colors.workbench.accent)
                             .child(json_path),
                     ),
             )
@@ -227,13 +251,15 @@ pub(super) fn render_json_graph_overlays(
                 .id(id)
                 .debug_selector(move || id.to_owned())
                 .h(px(30.0))
+                .tab_index(0)
                 .px(px(10.0))
                 .flex()
                 .items_center()
                 .rounded(px(5.0))
                 .text_size(px(11.0))
-                .text_color(colors.dialog_body)
-                .hover(|item| item.bg(colors.dialog_secondary_button_hover))
+                .text_color(colors.workbench.text_secondary)
+                .hover(|item| item.bg(colors.workbench.control_hover))
+                .focus(|item| item.text_color(colors.workbench.text_primary))
                 .cursor_pointer()
                 .child(label)
         };
@@ -267,8 +293,8 @@ pub(super) fn render_json_graph_overlays(
                         .gap(px(2.0))
                         .rounded(px(8.0))
                         .border(px(1.0))
-                        .border_color(colors.dialog_border)
-                        .bg(colors.dialog_surface)
+                        .border_color(control_material.border)
+                        .bg(control_material.background)
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())

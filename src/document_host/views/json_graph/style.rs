@@ -25,14 +25,16 @@ pub(super) struct JsonGraphPalette {
 impl JsonGraphPalette {
     pub(super) fn from_theme(colors: &ThemeColors) -> Self {
         Self {
-            canvas: colors.editor_background,
-            surface: colors.dialog_surface,
-            text: colors.text_default,
-            muted: colors.dialog_muted,
-            accent: colors.text_link,
+            // Graph cards are dense data content: keep the canvas and rows solid,
+            // while the controls/inspector layers provide the elevated material.
+            canvas: colors.workbench.editor_surface,
+            surface: colors.workbench.solid_surface,
+            text: colors.workbench.text_primary,
+            muted: colors.workbench.text_tertiary,
+            accent: colors.workbench.accent,
             search: colors.code_syntax_constant,
-            grid: colors.dialog_border.opacity(0.22),
-            edge: colors.dialog_border.opacity(0.7),
+            grid: colors.workbench.border_subtle.opacity(0.22),
+            edge: colors.workbench.border_subtle.opacity(0.7),
             branches: [
                 colors.code_syntax_function,
                 colors.code_syntax_string,

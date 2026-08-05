@@ -44,7 +44,7 @@ pub(super) fn render_json_graph_field_row(
         .items_center()
         .gap(px(6.0 * context.zoom))
         .border_t(px(1.0))
-        .border_color(colors.dialog_border.opacity(0.58))
+        .border_color(colors.workbench.border_subtle.opacity(0.58))
         .bg(if row_selected {
             context.palette.accent.opacity(0.11)
         } else {

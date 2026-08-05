@@ -3,7 +3,8 @@
 //! Structured table headers and column-window controls.
 
 use super::*;
-use crate::theme::ThemeColors;
+use crate::theme::{ThemeColors, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl DocumentHost {
     pub(super) fn render_structured_header(
@@ -17,17 +18,24 @@ impl DocumentHost {
         let structured_column_widths = layout.column_widths.clone();
         let structured_live = layout.structured_live;
         let structured_selection_color = colors.table_axis_selected_bg;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let header_material = colors
+            .workbench
+            .material(SurfaceKind::Elevated, visual_preferences);
 
         div()
             .h(px(30.0))
             .w(px(structured_width))
             .flex()
             .items_center()
-            .bg(colors.dialog_secondary_button_bg)
+            .bg(header_material.background)
             .border_b(px(1.0))
-            .border_color(colors.dialog_border)
+            .border_color(header_material.border)
             .text_size(px(11.0))
-            .text_color(colors.text_default)
+            .text_color(colors.workbench.text_primary)
             .child(div().w(px(76.0)).px(px(10.0)).child("#"))
             .children(
                 visible_structured_headers
@@ -63,10 +71,16 @@ impl DocumentHost {
                             .items_center()
                             .overflow_hidden()
                             .whitespace_nowrap()
+                            .tab_index(0)
                             .border_l(px(1.0))
-                            .border_color(colors.dialog_border)
+                            .border_color(header_material.border)
+                            .focus(|header_view| {
+                                header_view.border_color(colors.workbench.focus_ring)
+                            })
                             .when(selected, |header_view| {
-                                header_view.bg(structured_selection_color)
+                                header_view
+                                    .bg(structured_selection_color)
+                                    .border_color(colors.workbench.focus_ring)
                             })
                             .child(if editing {
                                 div()
@@ -141,6 +155,13 @@ impl DocumentHost {
     ) -> Option<Stateful<Div>> {
         let structured_width = layout.width;
         let structured_column_count = layout.column_count;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let control_material = colors
+            .workbench
+            .material(SurfaceKind::Glass, visual_preferences);
 
         (structured_column_count > STRUCTURED_COLUMN_WINDOW).then(|| {
             let start = self.structured_column_window_start;
@@ -161,25 +182,28 @@ impl DocumentHost {
                 .items_center()
                 .gap(px(6.0))
                 .border_b(px(1.0))
-                .border_color(colors.dialog_border)
+                .border_color(control_material.border)
                 .text_size(px(12.0))
-                .text_color(colors.dialog_muted)
+                .text_color(colors.workbench.text_tertiary)
                 .child(
                     div()
                         .id("document-host-structured-columns-previous")
                         .debug_selector(|| "document-host-structured-columns-previous".to_owned())
                         .size(px(24.0))
+                        .tab_index(0)
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded(px(4.0))
                         .cursor_pointer()
                         .text_color(if start == 0 {
-                            colors.text_placeholder
+                            colors.workbench.text_tertiary
                         } else {
-                            colors.text_default
+                            colors.workbench.text_primary
                         })
-                        .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                        .bg(control_material.background)
+                        .hover(|button| button.bg(colors.workbench.control_hover))
+                        .focus(|button| button.border_color(colors.workbench.focus_ring))
                         .child("‹")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.set_structured_column_window_start(previous, cx);
@@ -197,17 +221,20 @@ impl DocumentHost {
                         .id("document-host-structured-columns-next")
                         .debug_selector(|| "document-host-structured-columns-next".to_owned())
                         .size(px(24.0))
+                        .tab_index(0)
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded(px(4.0))
                         .cursor_pointer()
                         .text_color(if end == structured_column_count {
-                            colors.text_placeholder
+                            colors.workbench.text_tertiary
                         } else {
-                            colors.text_default
+                            colors.workbench.text_primary
                         })
-                        .hover(|button| button.bg(colors.dialog_secondary_button_hover))
+                        .bg(control_material.background)
+                        .hover(|button| button.bg(colors.workbench.control_hover))
+                        .focus(|button| button.border_color(colors.workbench.focus_ring))
                         .child("›")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.set_structured_column_window_start(next, cx);

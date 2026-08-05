@@ -50,7 +50,13 @@ pub(super) fn render_json_graph_canvas(
     let keyboard_nodes = context.keyboard_nodes.clone();
     let keyboard_selected_position = context.keyboard_selected_position;
     let palette = context.palette;
-    let focus_border = cx.global::<ThemeManager>().current_arc().colors.text_link;
+    let focus_border = cx
+        .global::<ThemeManager>()
+        .current_arc()
+        .colors
+        .workbench
+        .focus_ring;
+    let clear_border = focus_border.opacity(0.0);
     div()
         .id("json-graph-canvas")
         .debug_selector(|| "json-graph-canvas".to_owned())
@@ -58,13 +64,13 @@ pub(super) fn render_json_graph_canvas(
         .relative()
         .overflow_hidden()
         .border(px(if split_canvas { 0.0 } else { 1.0 }))
-        .border_color(hsla(0.0, 0.0, 0.0, 0.0))
+        .border_color(clear_border)
         .bg(palette.canvas)
         .tab_index(0)
         .track_focus(&host.graph_focus_handle)
         .focus(move |canvas| {
             canvas.border_color(if split_canvas {
-                hsla(0.0, 0.0, 0.0, 0.0)
+                clear_border
             } else {
                 focus_border
             })
