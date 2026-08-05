@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(in crate::editor) fn render_workspace_panel(
@@ -25,6 +27,22 @@ impl Editor {
         let resize_key_editor = editor.clone();
         let c = &theme.colors;
         let d = &theme.dimensions;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        // Docked navigation is a quiet material; compact navigation is the
+        // only workspace surface allowed to float over the editor.
+        let panel_material = c.workbench.material(
+            if resizable {
+                SurfaceKind::Navigation
+            } else {
+                SurfaceKind::Glass
+            },
+            visual_preferences,
+        );
+        let content_material = c.workbench.material(SurfaceKind::Solid, visual_preferences);
+        let transparent = c.workbench.control_surface.opacity(0.0);
         let resize_focus_handle = resizable.then(|| self.ensure_workspace_resize_focus_handle(cx));
         let header_focus_handles = self.ensure_workspace_header_focus_handles(cx);
         let resize_active = self.workspace.resize_session.is_some();
@@ -59,22 +77,22 @@ impl Editor {
                 .rounded(px(5.0))
                 .border(px(1.0))
                 .border_color(if active {
-                    c.dialog_border
+                    c.workbench.border_subtle
                 } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
+                    transparent
                 })
                 .bg(if active {
-                    c.chrome_hover
+                    c.workbench.control_hover
                 } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
+                    transparent
                 })
-                .hover(|this| this.bg(c.chrome_hover))
-                .focus(|this| this.border_color(c.text_link))
+                .hover(|this| this.bg(c.workbench.control_hover))
+                .focus(|this| this.border_color(c.workbench.focus_ring))
                 .cursor_pointer()
                 .text_color(if active {
-                    c.text_default
+                    c.workbench.text_primary
                 } else {
-                    c.dialog_muted
+                    c.workbench.text_secondary
                 })
                 // GPUI 的 SVG 不稳定继承父级 currentColor，chrome 图标必须显式着色。
                 .child(
@@ -82,9 +100,9 @@ impl Editor {
                         .path(icon)
                         .size(px(16.0))
                         .text_color(if active {
-                            c.text_default
+                            c.workbench.text_primary
                         } else {
-                            c.dialog_muted
+                            c.workbench.text_secondary
                         })
                         .debug_selector(move || format!("{tab_id}-icon")),
                 )
@@ -127,9 +145,9 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
-                .bg(c.sidebar_background)
+                .bg(panel_material.background)
                 .border_r(px(d.dialog_border_width))
-                .border_color(c.dialog_border)
+                .border_color(panel_material.border)
                 .child(
                     div()
                         .id("workspace-panel-header")
@@ -139,6 +157,8 @@ impl Editor {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
+                        .border_b(px(1.0))
+                        .border_color(panel_material.border)
                         .child(tab(
                             strings.workspace_tab_files.clone(),
                             FILES_TAB_ICON,
@@ -160,6 +180,7 @@ impl Editor {
                         .flex_1()
                         .min_h(px(0.0))
                         .overflow_y_scroll()
+                        .bg(content_material.background)
                         .px(px(8.0))
                         .py(px(10.0))
                         .child(body),
@@ -178,8 +199,8 @@ impl Editor {
                         .tab_index(0)
                         .track_focus(&focus_handle)
                         .cursor_col_resize()
-                        .hover(|this| this.bg(c.text_link.opacity(0.08)))
-                        .focus(|this| this.bg(c.text_link.opacity(0.08)))
+                        .hover(|this| this.bg(c.workbench.control_hover.opacity(0.7)))
+                        .focus(|this| this.bg(c.workbench.control_hover.opacity(0.7)))
                         .child(
                             div()
                                 .id("workspace-resize-line")
@@ -190,9 +211,9 @@ impl Editor {
                                 .left(px((WORKSPACE_RESIZE_HIT_WIDTH - 1.0) * 0.5))
                                 .w(px(1.0))
                                 .bg(if resize_active {
-                                    c.text_link.opacity(0.72)
+                                    c.workbench.focus_ring.opacity(0.72)
                                 } else {
-                                    c.dialog_border
+                                    panel_material.border
                                 }),
                         );
                     let handle = handle.right(px(-WORKSPACE_RESIZE_HIT_WIDTH * 0.5));

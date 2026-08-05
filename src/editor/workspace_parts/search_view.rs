@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use gpui::prelude::FluentBuilder;
 
 impl Editor {
     pub(super) fn render_workspace_search(
@@ -12,6 +13,8 @@ impl Editor {
     ) -> AnyElement {
         let c = &theme.colors;
         let t = &theme.typography;
+        let wb = &c.workbench;
+        let transparent = wb.control_surface.opacity(0.0);
         let input = self.workspace.search_input.clone();
         let toggle = |index: usize,
                       id: &'static str,
@@ -36,30 +39,27 @@ impl Editor {
                 .rounded(px(4.0))
                 .border(px(1.0))
                 .border_color(if keyboard_selected {
-                    c.text_link
+                    wb.focus_ring
                 } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
+                    transparent
                 })
-                .bg(if active {
-                    c.selection
-                } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
-                })
-                .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                .bg(if active { wb.selection } else { transparent })
+                .focus(|this| this.border_color(wb.focus_ring))
+                .hover(|this| this.bg(wb.control_hover))
                 .cursor_pointer()
                 .text_color(if active {
-                    c.text_default
+                    wb.text_primary
                 } else {
-                    c.dialog_muted
+                    wb.text_secondary
                 })
                 .child(
                     svg()
                         .path(icon)
                         .size(px(15.0))
                         .text_color(if active {
-                            c.text_default
+                            wb.text_primary
                         } else {
-                            c.dialog_muted
+                            wb.text_secondary
                         })
                         .debug_selector(move || format!("{id}-icon")),
                 )
@@ -84,14 +84,14 @@ impl Editor {
                 strings.workspace_search_running.clone(),
                 REFRESH_ICON,
                 "workspace-search-running-icon",
-                c.text_link,
+                wb.accent,
             ))
         } else if let Some(error) = self.workspace.search_error.as_ref() {
             Some((
                 error.clone(),
                 WARNING_ICON,
                 "workspace-search-error-icon",
-                c.dialog_danger_button_bg,
+                wb.danger,
             ))
         } else if input.as_ref().is_some_and(|input| {
             !input.read(cx).display_text().is_empty() && self.workspace.search_results.is_empty()
@@ -100,7 +100,7 @@ impl Editor {
                 strings.workspace_search_no_results.clone(),
                 SEARCH_TAB_ICON,
                 "workspace-search-empty-icon",
-                c.dialog_muted,
+                wb.text_tertiary,
             ))
         } else {
             None
@@ -123,14 +123,14 @@ impl Editor {
                     .gap(px(7.0))
                     .rounded(px(10.0))
                     .border(px(1.0))
-                    .border_color(c.dialog_border)
-                    .bg(c.dialog_secondary_button_bg)
+                    .border_color(wb.border_subtle)
+                    .bg(wb.input_surface)
                     .child(
                         svg()
                             .path(SEARCH_TAB_ICON)
                             .size(px(14.0))
                             .flex_shrink_0()
-                            .text_color(c.dialog_muted)
+                            .text_color(wb.text_secondary)
                             .debug_selector(|| "workspace-search-input-icon".to_owned()),
                     )
                     .child(div().flex_1().min_w(px(0.0)).children(input)),
@@ -187,6 +187,7 @@ impl Editor {
                         let editor = editor.clone();
                         let path = result.path.clone();
                         let line = result.line;
+                        let relative_path = result.relative_path.clone();
                         let keyboard_selected = self.workspace.keyboard_zone
                             == WorkspaceKeyboardZone::SearchResults
                             && self.workspace.search_selected == index;
@@ -203,11 +204,14 @@ impl Editor {
                             .gap(px(2.0))
                             .rounded(px(4.0))
                             .bg(if keyboard_selected {
-                                c.selection
+                                wb.selection
                             } else {
-                                hsla(0.0, 0.0, 0.0, 0.0)
+                                transparent
                             })
-                            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            .border(px(1.0))
+                            .border_color(transparent)
+                            .focus(|this| this.border_color(wb.focus_ring))
+                            .hover(|this| this.bg(wb.control_hover))
                             .cursor_pointer()
                             .child(
                                 div()
@@ -217,7 +221,7 @@ impl Editor {
                                     .items_center()
                                     .gap(px(4.0))
                                     .text_size(px(t.text_size * 0.8))
-                                    .text_color(c.dialog_muted)
+                                    .text_color(wb.text_secondary)
                                     .child(
                                         div()
                                             .id(("workspace-search-result-path", index))
@@ -228,7 +232,10 @@ impl Editor {
                                             .min_w(px(0.0))
                                             .overflow_hidden()
                                             .truncate()
-                                            .child(middle_ellipsis(&result.relative_path, 34)),
+                                            .child(middle_ellipsis(&relative_path, 34))
+                                            .tooltip(move |_window, cx| {
+                                                crate::ui::ui_tooltip(relative_path.clone(), cx)
+                                            }),
                                     )
                                     .child(
                                         div()
@@ -245,7 +252,7 @@ impl Editor {
                                     .overflow_hidden()
                                     .truncate()
                                     .text_size(px(t.text_size * 0.88))
-                                    .text_color(c.text_default)
+                                    .text_color(wb.text_primary)
                                     .child(result.preview.clone()),
                             )
                             .on_click(move |_event, window, cx| {
@@ -309,6 +316,7 @@ impl Editor {
         };
         let c = &theme.colors;
         let t = &theme.typography;
+        let wb = &c.workbench;
 
         let tree = div()
             .w_full()
@@ -326,11 +334,11 @@ impl Editor {
                     "workspace-operation-error-icon",
                     WARNING_ICON,
                     error.clone(),
-                    c.dialog_danger_button_bg,
+                    wb.danger,
                     t.text_size * 0.82,
                 )
                 .rounded(px(4.0))
-                .bg(c.dialog_secondary_button_bg)
+                .bg(wb.control_surface)
             }))
             .child(tree)
             .into_any_element()
@@ -364,6 +372,7 @@ impl Editor {
         }
         let c = &theme.colors;
         let t = &theme.typography;
+        let wb = &c.workbench;
         div()
             .w_full()
             .flex()
@@ -374,7 +383,7 @@ impl Editor {
                     "workspace-outline-progress-icon",
                     REFRESH_ICON,
                     strings.workspace_outline_updating.clone(),
-                    c.text_link,
+                    wb.accent,
                     t.text_size * 0.78,
                 )
             }))
@@ -393,12 +402,13 @@ impl Editor {
     ) -> AnyElement {
         let c = &theme.colors;
         let t = &theme.typography;
+        let wb = &c.workbench;
         let has_primary_action = open_folder_action.is_some();
         let title = (!has_primary_action && !title.is_empty()).then(|| {
             div()
                 .text_size(px(t.text_size))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(c.text_default)
+                .text_color(wb.text_primary)
                 .child(title.to_string())
         });
 
@@ -416,19 +426,19 @@ impl Editor {
                 .gap(px(7.0))
                 .rounded(px(10.0))
                 .border(px(1.0))
-                .border_color(c.dialog_border)
-                .bg(c.dialog_secondary_button_bg)
-                .hover(|this| this.bg(c.chrome_hover))
+                .border_color(wb.border_subtle)
+                .bg(wb.control_surface)
+                .hover(|this| this.bg(wb.control_hover))
                 .cursor_pointer()
                 .text_size(px(t.text_size * 0.86))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(c.text_default)
+                .text_color(wb.text_primary)
                 .child(
                     svg()
                         .path(FOLDER_ICON)
                         .size(px(14.0))
                         .flex_shrink_0()
-                        .text_color(c.text_default)
+                        .text_color(wb.text_primary)
                         .debug_selector(|| "workspace-empty-open-folder-icon".to_owned()),
                 )
                 .child(
@@ -466,12 +476,12 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .rounded(px(6.0))
-                    .text_color(c.dialog_muted)
+                    .text_color(wb.text_secondary)
                     .child(
                         svg()
                             .path(icon)
                             .size(px(24.0))
-                            .text_color(c.dialog_muted)
+                            .text_color(wb.text_secondary)
                             .debug_selector(move || format!("{id}-icon-svg")),
                     )
             }))
@@ -480,7 +490,7 @@ impl Editor {
                 div()
                     .text_size(px(t.text_size * 0.9))
                     .line_height(px(t.text_size * t.text_line_height))
-                    .text_color(c.dialog_muted)
+                    .text_color(wb.text_secondary)
                     .child(message.to_string())
             }))
             .children(action)
@@ -518,6 +528,7 @@ impl Editor {
     ) -> AnyElement {
         let c = &theme.colors;
         let t = &theme.typography;
+        let wb = &c.workbench;
         let is_expanded = self.workspace.expanded.contains(&node.id);
         let has_children = !node.children.is_empty();
         let selected = match (&self.workspace.selected, &node.kind) {
@@ -538,15 +549,15 @@ impl Editor {
                 Some(WorkspaceDragPayload {
                     path: path.clone(),
                     label: node.label.clone(),
-                    background: c.dialog_surface,
-                    text: c.text_default,
+                    background: wb.solid_surface,
+                    text: wb.text_primary,
                 })
             }
             WorkspaceTreeKind::File(path) => Some(WorkspaceDragPayload {
                 path: path.clone(),
                 label: node.label.clone(),
-                background: c.dialog_surface,
-                text: c.text_default,
+                background: wb.solid_surface,
+                text: wb.text_primary,
             }),
             _ => None,
         };
@@ -556,7 +567,7 @@ impl Editor {
             WorkspaceTreeKind::Heading { .. } => None,
         };
         let drop_editor = editor.clone();
-        let drop_background = c.selection;
+        let drop_background = wb.accent_soft;
         let arrow_node_id = node.id.clone();
         let arrow_editor = editor.clone();
         let arrow = has_children.then_some(if is_expanded {
@@ -566,21 +577,27 @@ impl Editor {
         });
 
         let icon = match &node.kind {
-            WorkspaceTreeKind::Directory(_) => Some((FOLDER_ICON, c.dialog_muted)),
+            WorkspaceTreeKind::Directory(_) => Some((FOLDER_ICON, wb.text_secondary)),
             WorkspaceTreeKind::File(path) if is_markdown_file(path) => {
-                Some((MARKDOWN_ICON, c.text_link))
+                Some((MARKDOWN_ICON, wb.accent))
             }
-            WorkspaceTreeKind::File(_) => Some((FILE_ICON, c.dialog_muted)),
+            WorkspaceTreeKind::File(_) => Some((FILE_ICON, wb.text_secondary)),
             WorkspaceTreeKind::Heading { .. } => None,
         };
 
         let label_color = if selected {
-            c.text_default
+            wb.text_primary
         } else {
-            c.dialog_muted
+            wb.text_secondary
         };
         let label_budget = 28usize.saturating_sub(depth.saturating_mul(2)).max(12);
         let display_label = middle_ellipsis(&node.label, label_budget);
+        let truncated_tooltip = (display_label != node.label).then(|| match &node.kind {
+            WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::File(path) => {
+                path.to_string_lossy().into_owned()
+            }
+            WorkspaceTreeKind::Heading { .. } => node.label.clone(),
+        });
 
         let mut arrow_el = div()
             .w(px(14.0))
@@ -589,8 +606,13 @@ impl Editor {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(c.dialog_muted)
-            .children(arrow.map(|path| svg().path(path).size(px(14.0)).text_color(c.dialog_muted)));
+            .text_color(wb.text_secondary)
+            .children(arrow.map(|path| {
+                svg()
+                    .path(path)
+                    .size(px(14.0))
+                    .text_color(wb.text_secondary)
+            }));
         if has_children {
             arrow_el = arrow_el.cursor_pointer().on_mouse_down(
                 MouseButton::Left,
@@ -614,12 +636,15 @@ impl Editor {
             .pl(px(8.0 + depth as f32 * WORKSPACE_NODE_INDENT))
             .pr(px(8.0))
             .rounded(px(6.0))
+            .border(px(1.0))
+            .border_color(wb.control_surface.opacity(0.0))
             .bg(if selected {
-                c.selection
+                wb.selection
             } else {
-                hsla(0.0, 0.0, 0.0, 0.0)
+                wb.control_surface.opacity(0.0)
             })
-            .hover(|this| this.bg(c.chrome_hover))
+            .hover(|this| this.bg(wb.control_hover))
+            .focus(|this| this.border_color(wb.focus_ring))
             .cursor_pointer()
             .child(arrow_el)
             .children(icon.map(|(path, color)| {
@@ -669,6 +694,9 @@ impl Editor {
                 });
                 cx.stop_propagation();
             });
+        let row = row.when_some(truncated_tooltip, |row, label| {
+            row.tooltip(move |_window, cx| crate::ui::ui_tooltip(label.clone(), cx))
+        });
         let row = if let Some(payload) = drag_payload {
             row.cursor_move()
                 .on_drag(payload, |payload, position, _, cx| {

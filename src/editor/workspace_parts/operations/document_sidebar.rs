@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(in crate::editor) fn render_document_sidebar(
@@ -25,6 +27,19 @@ impl Editor {
         let resize_editor = editor.clone();
         let c = &theme.colors;
         let d = &theme.dimensions;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let panel_material = c.workbench.material(
+            if resizable {
+                SurfaceKind::Navigation
+            } else {
+                SurfaceKind::Glass
+            },
+            visual_preferences,
+        );
+        let content_material = c.workbench.material(SurfaceKind::Solid, visual_preferences);
         let (title, icon, body) = if let Some(host) = self.document_host.clone() {
             let (format, paged) = {
                 let host = host.read(cx);
@@ -103,9 +118,9 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
-                .bg(c.sidebar_background)
+                .bg(panel_material.background)
                 .border_l(px(d.dialog_border_width))
-                .border_color(c.dialog_border)
+                .border_color(panel_material.border)
                 .child(
                     div()
                         .id("document-sidebar-header")
@@ -115,13 +130,15 @@ impl Editor {
                         .flex()
                         .items_center()
                         .gap(px(8.0))
+                        .border_b(px(1.0))
+                        .border_color(panel_material.border)
                         .text_size(px(theme.typography.text_size))
-                        .text_color(c.text_default)
+                        .text_color(c.workbench.text_primary)
                         .child(
                             svg()
                                 .path(icon)
                                 .size(px(16.0))
-                                .text_color(c.dialog_muted)
+                                .text_color(c.workbench.text_secondary)
                                 .debug_selector(|| "document-sidebar-header-icon".to_owned()),
                         )
                         .child(div().flex_1().min_w(px(0.0)).truncate().child(title)),
@@ -134,6 +151,7 @@ impl Editor {
                         .flex_1()
                         .min_h(px(0.0))
                         .overflow_y_scroll()
+                        .bg(content_material.background)
                         .px(px(8.0))
                         .py(px(10.0))
                         .child(body),
@@ -150,8 +168,8 @@ impl Editor {
                         .tab_index(0)
                         .track_focus(&focus_handle)
                         .cursor_col_resize()
-                        .hover(|this| this.bg(c.text_link.opacity(0.08)))
-                        .focus(|this| this.bg(c.text_link.opacity(0.08)))
+                        .hover(|this| this.bg(c.workbench.control_hover.opacity(0.7)))
+                        .focus(|this| this.bg(c.workbench.control_hover.opacity(0.7)))
                         .child(
                             div()
                                 .id("document-sidebar-resize-line")
@@ -161,7 +179,7 @@ impl Editor {
                                 .bottom_0()
                                 .left(px((WORKSPACE_RESIZE_HIT_WIDTH - 1.0) * 0.5))
                                 .w(px(1.0))
-                                .bg(c.dialog_border),
+                                .bg(panel_material.border),
                         )
                         .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                             focus_handle.focus(window);
@@ -236,6 +254,7 @@ impl Editor {
             .gap(px(2.0))
             .children(rows.into_iter().map(|(label, value)| {
                 let selector_label = label.clone();
+                let value_selector_label = selector_label.clone();
                 div()
                     .id(SharedString::from(format!("document-sidebar-info-{label}")))
                     .debug_selector(move || format!("document-sidebar-info-{selector_label}"))
@@ -247,14 +266,22 @@ impl Editor {
                     .justify_between()
                     .rounded(px(6.0))
                     .text_size(px(12.0))
-                    .child(div().text_color(colors.text_placeholder).child(label))
                     .child(
                         div()
+                            .text_color(colors.workbench.text_secondary)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "document-sidebar-info-value-{value_selector_label}"
+                            )))
                             .max_w(px(150.0))
                             .overflow_hidden()
                             .truncate()
-                            .text_color(colors.text_default)
-                            .child(value),
+                            .text_color(colors.workbench.text_primary)
+                            .child(value.clone())
+                            .tooltip(move |_window, cx| crate::ui::ui_tooltip(value.clone(), cx)),
                     )
             }))
             .into_any_element()

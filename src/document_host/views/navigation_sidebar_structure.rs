@@ -100,7 +100,10 @@ impl DocumentHost {
                     .items_center()
                     .gap(px(6.0))
                     .rounded(px(7.0))
-                    .hover(|this| this.bg(colors.dialog_secondary_button_hover))
+                    .border(px(1.0))
+                    .border_color(colors.workbench.control_surface.opacity(0.0))
+                    .hover(|this| this.bg(colors.workbench.control_hover))
+                    .focus(|this| this.border_color(colors.workbench.focus_ring))
                     .cursor_pointer()
                     .text_size(px(12.0))
                     .children(expandable.then(|| {
@@ -125,7 +128,7 @@ impl DocumentHost {
                                         "icon/ui/chevron-right.svg"
                                     })
                                     .size(px(13.0))
-                                    .text_color(colors.text_placeholder),
+                                    .text_color(colors.workbench.text_secondary),
                             )
                             .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
                                 let _ = expand_editor.update(cx, |host, cx| {
@@ -136,20 +139,24 @@ impl DocumentHost {
                     }))
                     .child(
                         div()
+                            .id(("document-sidebar-structure-label", index))
                             .flex_1()
                             .min_w(px(0.0))
                             .overflow_hidden()
                             .truncate()
-                            .text_color(colors.text_default)
-                            .child(label),
+                            .text_color(colors.workbench.text_primary)
+                            .child(label.clone())
+                            .tooltip(move |_window, cx| crate::ui::ui_tooltip(label.clone(), cx)),
                     )
                     .child(
                         div()
+                            .id(("document-sidebar-structure-value", index))
                             .max_w(px(110.0))
                             .overflow_hidden()
                             .truncate()
-                            .text_color(colors.text_placeholder)
-                            .child(value),
+                            .text_color(colors.workbench.text_secondary)
+                            .child(value.clone())
+                            .tooltip(move |_window, cx| crate::ui::ui_tooltip(value.clone(), cx)),
                     )
                     .when_some(offset, |row, offset| {
                         let row = row.on_click(cx.listener(move |this, _, window, cx| {
@@ -199,7 +206,7 @@ impl DocumentHost {
                     .mt(px(8.0))
                     .px(px(8.0))
                     .text_size(px(11.0))
-                    .text_color(colors.text_placeholder)
+                    .text_color(colors.workbench.text_tertiary)
                     .child(
                         strings
                             .document_sidebar_items_limit
@@ -219,10 +226,14 @@ impl DocumentHost {
             .id("document-sidebar-loading")
             .debug_selector(|| "document-sidebar-loading".to_owned())
             .w_full()
+            .min_h(px(96.0))
             .px(px(8.0))
             .py(px(12.0))
+            .flex()
+            .items_center()
+            .justify_center()
             .text_size(px(12.0))
-            .text_color(colors.text_placeholder)
+            .text_color(colors.workbench.text_secondary)
             .child(strings.document_sidebar_loading.clone())
             .into_any_element()
     }
@@ -236,10 +247,14 @@ impl DocumentHost {
             .id("document-sidebar-empty")
             .debug_selector(|| "document-sidebar-empty".to_owned())
             .w_full()
+            .min_h(px(96.0))
             .px(px(8.0))
             .py(px(12.0))
+            .flex()
+            .items_center()
+            .justify_center()
             .text_size(px(12.0))
-            .text_color(colors.text_placeholder)
+            .text_color(colors.workbench.text_secondary)
             .child(strings.document_sidebar_empty.clone())
             .into_any_element()
     }

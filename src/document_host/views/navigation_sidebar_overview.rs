@@ -3,7 +3,9 @@
 //! Sidebar overview, column navigation, and format summary.
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
 use crate::theme::{Theme, ThemeColors};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 use gpui::{AnyElement, WeakEntity};
 
 impl DocumentHost {
@@ -59,8 +61,15 @@ impl DocumentHost {
         &self,
         colors: &ThemeColors,
         strings: &I18nStrings,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let content = colors
+            .workbench
+            .material(SurfaceKind::Solid, visual_preferences);
         let format = match self.document_menu_format() {
             DocumentMenuFormat::Text => strings.document_sidebar_text.clone(),
             format => format.label(false).to_owned(),
@@ -104,14 +113,19 @@ impl DocumentHost {
                     .justify_between()
                     .rounded(px(6.0))
                     .text_size(px(12.0))
-                    .child(div().text_color(colors.text_placeholder).child(label))
+                    .child(
+                        div()
+                            .text_color(colors.workbench.text_secondary)
+                            .child(label),
+                    )
                     .child(
                         div()
                             .max_w(px(150.0))
                             .overflow_hidden()
                             .truncate()
-                            .text_color(colors.text_default)
-                            .child(value),
+                            .text_color(colors.workbench.text_primary)
+                            .child(value)
+                            .bg(content.background),
                     )
             }))
             .into_any_element()
@@ -163,24 +177,29 @@ impl DocumentHost {
                     .items_center()
                     .gap(px(8.0))
                     .rounded(px(7.0))
-                    .hover(|this| this.bg(colors.dialog_secondary_button_hover))
+                    .border(px(1.0))
+                    .border_color(colors.workbench.control_surface.opacity(0.0))
+                    .hover(|this| this.bg(colors.workbench.control_hover))
+                    .focus(|this| this.border_color(colors.workbench.focus_ring))
                     .cursor_pointer()
                     .text_size(px(12.0))
                     .child(
                         div()
                             .w(px(24.0))
                             .flex_shrink_0()
-                            .text_color(colors.text_placeholder)
+                            .text_color(colors.workbench.text_tertiary)
                             .child(format!("{}", column + 1)),
                     )
                     .child(
                         div()
+                            .id(("document-sidebar-column-label", column))
                             .flex_1()
                             .min_w(px(0.0))
                             .overflow_hidden()
                             .truncate()
-                            .text_color(colors.text_default)
-                            .child(label),
+                            .text_color(colors.workbench.text_primary)
+                            .child(label.clone())
+                            .tooltip(move |_window, cx| crate::ui::ui_tooltip(label.clone(), cx)),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.reveal_document_sidebar_target(
@@ -208,7 +227,7 @@ impl DocumentHost {
                 .mt(px(8.0))
                 .px(px(8.0))
                 .text_size(px(11.0))
-                .text_color(colors.text_placeholder)
+                .text_color(colors.workbench.text_tertiary)
                 .child(
                     strings
                         .document_sidebar_rows_template

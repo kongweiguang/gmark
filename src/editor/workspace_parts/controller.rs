@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::ui::motion::MotionTokens;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(in crate::editor) fn workspace_docked_open_preference(&self) -> bool {
@@ -325,8 +327,22 @@ impl Editor {
         self.workspace.tooltip_hovered = hovered.then_some(id);
         self.workspace.tooltip_visible = None;
         if hovered {
+            let reduced_motion = cx
+                .try_global::<VisualPreferencesManager>()
+                .map(VisualPreferencesManager::current)
+                .unwrap_or_default()
+                .reduced_motion;
+            let tooltip_delay = if MotionTokens::default()
+                .resolved(reduced_motion)
+                .feedback_enter
+                .is_zero()
+            {
+                Duration::ZERO
+            } else {
+                TOOLTIP_DELAY
+            };
             self.workspace.tooltip_task = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(TOOLTIP_DELAY).await;
+                cx.background_executor().timer(tooltip_delay).await;
                 let _ = this.update(cx, |editor, cx| {
                     if editor.workspace.tooltip_hovered == Some(id) {
                         editor.workspace.tooltip_visible = Some(id);

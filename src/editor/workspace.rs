@@ -49,8 +49,10 @@ pub(super) const DOCUMENT_SIDEBAR_COMPACT_OVERLAY_WIDTH: f32 = 280.0;
 const WORKSPACE_RESIZE_HIT_WIDTH: f32 = 7.0;
 const WORKSPACE_RESIZE_KEYBOARD_STEP: f32 = 4.0;
 const WORKSPACE_RESIZE_KEYBOARD_LARGE_STEP: f32 = 16.0;
-const WORKSPACE_NODE_HEIGHT: f32 = 26.0;
-const WORKSPACE_NODE_INDENT: f32 = 14.0;
+/// Dense navigation rows remain compact while preserving a comfortable 30px
+/// pointer target and a clear hierarchy at nested depths.
+const WORKSPACE_NODE_HEIGHT: f32 = 30.0;
+const WORKSPACE_NODE_INDENT: f32 = 16.0;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const QUICK_OPEN_DEBOUNCE: Duration = Duration::from_millis(30);
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);

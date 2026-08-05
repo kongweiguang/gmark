@@ -40,6 +40,14 @@
     fn workspace_panel_width_uses_ratio_with_bounds() {
         assert!(workspace_uses_overlay(899.0));
         assert!(!workspace_uses_overlay(900.0));
+        assert_eq!(
+            workspace_panel_width_for_viewport(899.0, None),
+            WORKSPACE_COMPACT_OVERLAY_WIDTH
+        );
+        assert_eq!(
+            workspace_panel_width_for_viewport(900.0, None),
+            WORKSPACE_PANEL_AUTO_MIN_WIDTH
+        );
         assert_eq!(workspace_panel_width_for_viewport(720.0, None), 280.0);
         assert_eq!(workspace_panel_width_for_viewport(1000.0, None), 248.0);
         assert_eq!(workspace_panel_width_for_viewport(2000.0, None), 300.0);
@@ -64,6 +72,14 @@
 
     #[test]
     fn document_sidebar_width_uses_independent_bounds_and_compact_overlay() {
+        assert_eq!(
+            document_sidebar_panel_width_for_viewport(899.0, None),
+            DOCUMENT_SIDEBAR_COMPACT_OVERLAY_WIDTH
+        );
+        assert_eq!(
+            document_sidebar_panel_width_for_viewport(900.0, None),
+            DOCUMENT_SIDEBAR_PANEL_AUTO_MIN_WIDTH
+        );
         assert_eq!(
             document_sidebar_panel_width_for_viewport(1200.0, None),
             240.0

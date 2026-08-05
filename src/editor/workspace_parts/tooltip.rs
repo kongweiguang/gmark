@@ -17,12 +17,19 @@ pub(super) fn render_workspace_tooltip(label: String, top: f32, theme: &Theme) -
         .justify_center()
         .whitespace_nowrap()
         .rounded(px(5.0))
-        .bg(theme.colors.dialog_surface)
+        .bg(theme
+            .colors
+            .workbench
+            .material(
+                crate::theme::workbench::SurfaceKind::GlassStrong,
+                gmark_config::ResolvedVisualPreferences::default(),
+            )
+            .background)
         .border(px(theme.dimensions.dialog_border_width))
-        .border_color(theme.colors.dialog_border)
+        .border_color(theme.colors.workbench.border_subtle)
         .shadow_md()
         .text_size(px(theme.typography.text_size * 0.78))
-        .text_color(theme.colors.text_default)
+        .text_color(theme.colors.workbench.text_primary)
         .child(label)
         .into_any_element()
 }
