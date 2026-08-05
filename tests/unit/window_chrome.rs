@@ -80,23 +80,30 @@ fn titlebar_drag_strategy_matches_platform_window_api() {
 }
 
 #[test]
-fn custom_titlebar_background_uses_dedicated_chrome_token() {
+fn custom_titlebar_background_uses_workbench_material() {
     let theme = Theme::light_theme();
     assert_eq!(
         custom_titlebar_background(&theme),
-        theme.colors.chrome_background
+        theme
+            .colors
+            .workbench
+            .material(
+                crate::ui::theme::workbench::SurfaceKind::Glass,
+                gmark_config::ResolvedVisualPreferences::default(),
+            )
+            .background
     );
 }
 
 #[test]
-fn custom_titlebar_icon_color_contrasts_with_theme_surface() {
+fn custom_titlebar_icon_color_uses_theme_text_token() {
     assert_eq!(
         custom_titlebar_icon_color(&Theme::default_theme()),
-        Hsla::from(rgba(0xf4f4f5ff))
+        Theme::default_theme().colors.workbench.text_primary
     );
     assert_eq!(
         custom_titlebar_icon_color(&Theme::light_theme()),
-        Hsla::from(rgba(0x18181bff))
+        Theme::light_theme().colors.workbench.text_primary
     );
 }
 

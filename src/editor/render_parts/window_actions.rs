@@ -45,6 +45,12 @@ impl Editor {
             self.status_bar.mode_menu_open = false;
             changed = true;
         }
+        if self.dismiss_tab_context_menu() {
+            changed = true;
+        }
+        if self.dismiss_new_tab_menu() {
+            changed = true;
+        }
         if changed {
             cx.notify();
         }

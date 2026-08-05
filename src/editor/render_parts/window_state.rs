@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// Keep transparent hit-area geometry tied to a semantic token rather than a
+/// palette-independent color literal.
+fn transparent_color(mut color: Hsla) -> Hsla {
+    color.a = 0.0;
+    color
+}
+
 impl Editor {
     pub(super) fn sync_window_edited_state(&mut self, window: &mut Window) {
         if self.pending_window_edited {
@@ -59,6 +66,15 @@ impl Editor {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        let visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let workbench = &c.workbench;
+        let chrome_material = workbench.material(
+            crate::ui::theme::workbench::SurfaceKind::Glass,
+            visual_preferences,
+        );
         let editor = cx.entity().downgrade();
         let button_widths = menu_labels
             .iter()
@@ -86,16 +102,20 @@ impl Editor {
             .px(px(d.menu_bar_padding_x))
             .py(px(d.menu_bar_padding_y))
             .bg(if integrated {
-                hsla(0.0, 0.0, 0.0, 0.0)
+                transparent_color(chrome_material.background)
             } else {
-                c.chrome_background
+                chrome_material.background
             })
             .border_b(px(if integrated {
                 0.0
             } else {
                 theme.dimensions.dialog_border_width
             }))
-            .border_color(c.dialog_border)
+            .border_color(if integrated {
+                transparent_color(chrome_material.border)
+            } else {
+                chrome_material.border
+            })
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation();
             })
@@ -137,11 +157,11 @@ impl Editor {
                             .justify_center()
                             .rounded(px(d.menu_bar_button_radius))
                             .bg(if is_open {
-                                c.chrome_hover
+                                workbench.control_hover
                             } else {
-                                c.chrome_background
+                                transparent_color(workbench.control_surface)
                             })
-                            .hover(|this| this.bg(c.chrome_hover))
+                            .hover(|this| this.bg(workbench.control_hover))
                             .active(|this| this.opacity(0.92))
                             .cursor_pointer()
                             .text_size(px(d.menu_text_size))
@@ -151,9 +171,9 @@ impl Editor {
                                 t.dialog_button_weight.to_font_weight()
                             })
                             .text_color(if index == 0 {
-                                c.dialog_title
+                                workbench.text_primary
                             } else {
-                                c.dialog_secondary_button_text
+                                workbench.text_secondary
                             })
                             .whitespace_nowrap();
 
@@ -210,6 +230,15 @@ impl Editor {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        let visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let workbench = &c.workbench;
+        let menu_material = workbench.material(
+            crate::ui::theme::workbench::SurfaceKind::GlassStrong,
+            visual_preferences,
+        );
 
         match item {
             OwnedMenuItem::Separator => div()
@@ -218,7 +247,7 @@ impl Editor {
                 .mx(px(d.menu_separator_margin_x))
                 .my(px(d.menu_separator_margin_y))
                 .h(px(d.menu_separator_height))
-                .bg(c.dialog_border)
+                .bg(menu_material.border)
                 .into_any_element(),
             OwnedMenuItem::Action { name, action, .. } => {
                 let is_disabled = action.as_ref().as_any().is::<NoRecentFiles>();
@@ -240,23 +269,23 @@ impl Editor {
                     .items_center()
                     .rounded(px(d.menu_item_radius))
                     .bg(if is_keyboard_focused {
-                        c.dialog_secondary_button_hover
+                        workbench.control_hover
                     } else {
-                        c.dialog_surface
+                        menu_material.background
                     })
                     .text_size(px(d.menu_text_size))
                     .font_weight(t.dialog_body_weight.to_font_weight())
                     .text_color(if is_disabled {
-                        c.dialog_muted
+                        workbench.text_tertiary
                     } else {
-                        c.dialog_secondary_button_text
+                        workbench.text_primary
                     })
                     .child(menu_icon_slot(
                         checked.then_some("icon/ui/check.svg"),
                         if is_disabled {
-                            c.dialog_muted
+                            workbench.text_tertiary
                         } else {
-                            c.dialog_secondary_button_text
+                            workbench.icon
                         },
                     ))
                     .child(
@@ -289,7 +318,7 @@ impl Editor {
                 if is_disabled {
                     base.into_any_element()
                 } else {
-                    base.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    base.hover(|this| this.bg(workbench.control_hover))
                         .active(|this| this.opacity(0.92))
                         .cursor_pointer()
                         .on_click(move |_, window, cx| {
@@ -318,17 +347,17 @@ impl Editor {
                     .items_center()
                     .rounded(px(d.menu_item_radius))
                     .bg(if is_open || is_keyboard_focused {
-                        c.dialog_secondary_button_hover
+                        workbench.control_hover
                     } else {
-                        c.dialog_surface
+                        menu_material.background
                     })
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .hover(|this| this.bg(workbench.control_hover))
                     .cursor_pointer()
                     .text_size(px(d.menu_text_size))
                     .font_weight(t.dialog_body_weight.to_font_weight())
-                    .text_color(c.dialog_secondary_button_text)
+                    .text_color(workbench.text_primary)
                     // 所有菜单项共用固定前导槽，避免子菜单标题比普通命令向左错位。
-                    .child(menu_icon_slot(None, c.dialog_secondary_button_text))
+                    .child(menu_icon_slot(None, workbench.icon))
                     .child(
                         div()
                             .flex_1()
@@ -357,10 +386,10 @@ impl Editor {
                 .flex()
                 .items_center()
                 .rounded(px(d.menu_item_radius))
-                .bg(c.dialog_surface)
+                .bg(menu_material.background)
                 .text_size(px(d.menu_text_size))
-                .text_color(c.dialog_muted)
-                .child(menu_icon_slot(None, c.dialog_muted))
+                .text_color(workbench.text_tertiary)
+                .child(menu_icon_slot(None, workbench.icon))
                 .child(
                     div()
                         .flex_1()
@@ -379,7 +408,7 @@ impl Editor {
     pub(super) fn render_in_window_menu_panel(
         &self,
         theme: &Theme,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
         menus: Option<&[gpui::OwnedMenu]>,
         menu_labels: &[SharedString],
@@ -394,6 +423,39 @@ impl Editor {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        let visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let workbench = &c.workbench;
+        let menu_material = workbench.material(
+            crate::ui::theme::workbench::SurfaceKind::GlassStrong,
+            visual_preferences,
+        );
+        let motion =
+            crate::ui::motion::MotionTokens::default().resolved(visual_preferences.reduced_motion);
+        let panel_state = window.use_keyed_state(
+            ElementId::named_usize("app-menu-panel-motion", open_index),
+            cx,
+            |_, _| crate::ui::motion::TransitionState::hidden(),
+        );
+        let now = std::time::Instant::now();
+        panel_state.update(cx, |state, _| {
+            state.sample(now);
+            if state.target() < 1.0 {
+                state.retarget(
+                    1.0,
+                    now,
+                    motion.popover_enter,
+                    crate::ui::motion::MotionOrigin::Pointer,
+                );
+            }
+        });
+        let panel_transition = panel_state.read(cx).clone();
+        if panel_transition.is_active() && !motion.popover_enter.is_zero() {
+            window.request_animation_frame();
+        }
+        let panel_opacity = panel_transition.value();
         let editor = cx.entity().downgrade();
         let menu_item_labels = owned_menu_item_labels(&menu_items);
         let menu_panel_width = menu_panel_width_for_labels(&menu_item_labels, d);
@@ -419,7 +481,7 @@ impl Editor {
                             .left(px(geometry.left))
                             .w(px(geometry.width))
                             .h(px(geometry.height))
-                            .bg(hsla(0.0, 0.0, 0.0, 0.0))
+                            .bg(transparent_color(menu_material.background))
                             .on_hover(cx.listener(Self::on_menu_submenu_bridge_hover))
                             .into_any_element(),
                     )
@@ -448,7 +510,7 @@ impl Editor {
                                     .mx(px(d.menu_separator_margin_x))
                                     .my(px(d.menu_separator_margin_y))
                                     .h(px(d.menu_separator_height))
-                                    .bg(c.dialog_border)
+                                    .bg(menu_material.border)
                                     .into_any_element(),
                                 OwnedMenuItem::Action { name, action, .. } => {
                                     let is_disabled =
@@ -474,23 +536,23 @@ impl Editor {
                                         .items_center()
                                         .rounded(px(d.menu_item_radius))
                                         .bg(if is_keyboard_focused {
-                                            c.dialog_secondary_button_hover
+                                            workbench.control_hover
                                         } else {
-                                            c.dialog_surface
+                                            menu_material.background
                                         })
                                         .text_size(px(d.menu_text_size))
                                         .font_weight(t.dialog_body_weight.to_font_weight())
                                         .text_color(if is_disabled {
-                                            c.dialog_muted
+                                            workbench.text_tertiary
                                         } else {
-                                            c.dialog_secondary_button_text
+                                            workbench.text_primary
                                         })
                                         .child(menu_icon_slot(
                                             checked.then_some("icon/ui/check.svg"),
                                             if is_disabled {
-                                                c.dialog_muted
+                                                workbench.text_tertiary
                                             } else {
-                                                c.dialog_secondary_button_text
+                                                workbench.icon
                                             },
                                         ))
                                         .child(
@@ -527,7 +589,7 @@ impl Editor {
                                     if is_disabled {
                                         base.into_any_element()
                                     } else {
-                                        base.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                        base.hover(|this| this.bg(workbench.control_hover))
                                             .active(|this| this.opacity(0.92))
                                             .cursor_pointer()
                                             .on_click(move |_, window, cx| {
@@ -552,9 +614,9 @@ impl Editor {
                                     .flex()
                                     .items_center()
                                     .rounded(px(d.menu_item_radius))
-                                    .bg(c.dialog_surface)
+                                    .bg(menu_material.background)
                                     .text_size(px(d.menu_text_size))
-                                    .text_color(c.dialog_muted)
+                                    .text_color(workbench.text_tertiary)
                                     .child(
                                         div()
                                             .flex_1()
@@ -572,9 +634,9 @@ impl Editor {
                                     .flex()
                                     .items_center()
                                     .rounded(px(d.menu_item_radius))
-                                    .bg(c.dialog_surface)
+                                    .bg(menu_material.background)
                                     .text_size(px(d.menu_text_size))
-                                    .text_color(c.dialog_muted)
+                                    .text_color(workbench.text_tertiary)
                                     .child(
                                         div()
                                             .flex_1()
@@ -599,11 +661,15 @@ impl Editor {
                                 .flex()
                                 .flex_col()
                                 .gap(px(d.menu_panel_gap))
-                                .bg(c.dialog_surface)
+                                .bg(menu_material.background)
                                 .border(px(d.dialog_border_width))
-                                .border_color(c.dialog_border)
+                                .border_color(menu_material.border)
                                 .rounded(px(d.menu_panel_radius))
                                 .shadow_lg()
+                                .opacity(panel_opacity)
+                                .max_h(px((viewport_height - top_offset - top - 12.0)
+                                    .max(d.menu_item_height * 2.0)))
+                                .overflow_y_scroll()
                                 .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                                     cx.stop_propagation();
                                 })
@@ -633,11 +699,15 @@ impl Editor {
             .flex()
             .flex_col()
             .gap(px(d.menu_panel_gap))
-            .bg(c.dialog_surface)
+            .bg(menu_material.background)
             .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
+            .border_color(menu_material.border)
             .rounded(px(d.menu_panel_radius))
             .shadow_lg()
+            .opacity(panel_opacity)
+            .max_h(px((viewport_height - top_offset - d.menu_panel_top - 12.0)
+                .max(d.menu_item_height * 2.0)))
+            .overflow_y_scroll()
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation();
             })

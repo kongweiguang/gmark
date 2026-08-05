@@ -38,6 +38,10 @@ impl Editor {
         dismissed
     }
 
+    pub(in crate::editor) fn dismiss_new_tab_menu(&mut self) -> bool {
+        self.tabs.new_tab_menu.take().is_some()
+    }
+
     pub(in crate::editor) fn tab_context_menu_info(&self) -> Option<(usize, bool, bool)> {
         let menu = self.tabs.context_menu.as_ref()?;
         let pinned = self

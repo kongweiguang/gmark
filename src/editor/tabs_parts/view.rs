@@ -57,11 +57,20 @@ impl Editor {
             return None;
         }
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let workbench = &c.workbench;
+        let strip_material = workbench.material(
+            crate::ui::theme::workbench::SurfaceKind::Glass,
+            visual_preferences,
+        );
         let show_tab_bar_actions = EditorSettings::show_tab_bar_actions(cx);
         let strings = cx.global::<crate::i18n::I18nManager>().strings().clone();
         let close_tab_tooltip = strings.menu_close_tab.clone();
         let new_tab_tooltip = strings.menu_new_tab.clone();
-        let tab_drop_background = c.chrome_hover;
+        let tab_drop_background = workbench.accent_soft;
         let editor = cx.entity().downgrade();
         let strip_release_editor = editor.clone();
         let strip_detach_editor = editor.clone();
@@ -77,9 +86,9 @@ impl Editor {
             let click_editor = editor.clone();
             let key_editor = editor.clone();
             let icon_color = if active {
-                c.text_default
+                workbench.text_primary
             } else {
-                c.dialog_muted
+                workbench.text_secondary
             };
             div()
                 .id(("document-toolbar-action", action.index()))
@@ -94,17 +103,20 @@ impl Editor {
                 .rounded(px(6.0))
                 .border(px(1.0))
                 .border_color(if active {
-                    c.dialog_border
+                    workbench.border_strong
                 } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
+                    transparent_color(workbench.border_subtle)
                 })
                 .bg(if active {
-                    c.chrome_hover
+                    workbench.control_hover
                 } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
+                    transparent_color(workbench.control_surface)
                 })
-                .hover(|this| this.bg(c.chrome_hover).text_color(c.text_default))
-                .focus(|this| this.border_color(c.text_link))
+                .hover(|this| {
+                    this.bg(workbench.control_hover)
+                        .text_color(workbench.text_primary)
+                })
+                .focus(|this| this.border_color(workbench.focus_ring))
                 .cursor_pointer()
                 .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
                 .child(svg().path(icon).size(px(15.0)).text_color(icon_color))
@@ -136,16 +148,22 @@ impl Editor {
             .items_center()
             .justify_center()
             .rounded(px(6.0))
-            .text_color(c.dialog_muted)
-            .hover(|this| this.bg(c.chrome_hover).text_color(c.text_default))
-            .focus(|this| this.bg(c.chrome_hover).text_color(c.text_default))
+            .text_color(workbench.icon)
+            .hover(|this| {
+                this.bg(workbench.control_hover)
+                    .text_color(workbench.text_primary)
+            })
+            .focus(|this| {
+                this.bg(workbench.control_hover)
+                    .text_color(workbench.text_primary)
+            })
             .cursor_pointer()
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(new_tab_tooltip.clone(), cx))
             .child(
                 svg()
                     .path(NEW_TAB_ICON)
                     .size(px(14.0))
-                    .text_color(c.dialog_muted),
+                    .text_color(workbench.icon),
             )
             .on_click(move |event, _window, cx| {
                 let _ = new_tab_editor.update(cx, |editor, cx| {
@@ -174,7 +192,7 @@ impl Editor {
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .bg(c.tab_strip_background)
+                .bg(strip_material.background)
                 .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
                     let _ = strip_release_editor.update(cx, |editor, _cx| {
                         editor.tabs.dragging_tab = None;
@@ -267,8 +285,8 @@ impl Editor {
                             let drag_payload = TabDragPayload {
                                 id: record.id,
                                 title: title.clone(),
-                                background: c.tab_strip_background,
-                                text: c.text_default,
+                                background: strip_material.background,
+                                text: workbench.text_primary,
                             };
                             div()
                                 .id(("document-tab", tab_id))
@@ -287,22 +305,22 @@ impl Editor {
                                 .relative()
                                 .rounded_t(px(8.0))
                                 .bg(if active {
-                                    c.tab_active_background
+                                    workbench.selection
                                 } else {
-                                    c.tab_strip_background
+                                    strip_material.background
                                 })
                                 .hover(|this| {
                                     this.bg(if active {
-                                        c.tab_active_background
+                                        workbench.selection
                                     } else {
-                                        c.chrome_hover
+                                        workbench.control_hover
                                     })
                                 })
                                 .focus(|this| {
                                     this.bg(if active {
-                                        c.tab_active_background
+                                        workbench.selection
                                     } else {
-                                        c.chrome_hover
+                                        workbench.control_hover
                                     })
                                 })
                                 .cursor_pointer()
@@ -318,7 +336,7 @@ impl Editor {
                                         .right_0()
                                         .bottom(px(-4.0))
                                         .h(px(5.0))
-                                        .bg(c.tab_active_background)
+                                        .bg(workbench.selection)
                                         .debug_selector(move || {
                                             format!("document-tab-open-bottom-{index}")
                                         })
@@ -335,9 +353,9 @@ impl Editor {
                                         })
                                         .child(svg().path(leading_icon).size(px(13.0)).text_color(
                                             if record.pinned {
-                                                c.text_link
+                                                workbench.accent
                                             } else {
-                                                c.dialog_muted
+                                                workbench.icon
                                             },
                                         )),
                                 )
@@ -352,9 +370,9 @@ impl Editor {
                                         })
                                         .text_size(px(theme.typography.text_size * 0.88))
                                         .text_color(if active {
-                                            c.text_default
+                                            workbench.text_primary
                                         } else {
-                                            c.dialog_muted
+                                            workbench.text_secondary
                                         })
                                         .child(display_title),
                                 )
@@ -371,7 +389,7 @@ impl Editor {
                                         .items_center()
                                         .justify_center()
                                         .rounded(px(4.0))
-                                        .hover(|this| this.bg(c.chrome_hover))
+                                        .hover(|this| this.bg(workbench.control_hover))
                                         .cursor_pointer()
                                         .tooltip(move |_window, cx| {
                                             crate::ui::ui_tooltip(close_tooltip.clone(), cx)
@@ -381,7 +399,7 @@ impl Editor {
                                                 .absolute()
                                                 .size(px(6.0))
                                                 .rounded_full()
-                                                .bg(c.text_link)
+                                                .bg(workbench.accent)
                                                 .debug_selector(move || {
                                                     format!("document-tab-dirty-{index}")
                                                 })
@@ -398,7 +416,7 @@ impl Editor {
                                                 .debug_selector(move || {
                                                     format!("document-tab-close-icon-{index}")
                                                 })
-                                                .text_color(c.dialog_muted)
+                                                .text_color(workbench.icon)
                                                 .opacity(if active && !dirty { 1.0 } else { 0.0 })
                                                 .group_hover(group, |this| this.opacity(1.0)),
                                         )
@@ -473,9 +491,9 @@ impl Editor {
                         .flex_shrink_0()
                         .flex()
                         .items_center()
-                        .bg(c.chrome_background)
+                        .bg(strip_material.background)
                         .border_l(px(theme.dimensions.dialog_border_width))
-                        .border_color(c.dialog_border)
+                        .border_color(strip_material.border)
                         .children(show_tab_bar_actions.then(|| {
                             toolbar_button(
                                 DocumentToolbarAction::QuickOpen,
@@ -586,6 +604,15 @@ impl Editor {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        let visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let workbench = &c.workbench;
+        let menu_material = workbench.material(
+            crate::ui::theme::workbench::SurfaceKind::GlassStrong,
+            visual_preferences,
+        );
         let panel_width = d.context_menu_submenu_width.max(200.0);
         let panel_origin = clamped_floating_panel_origin(
             position,
@@ -595,6 +622,7 @@ impl Editor {
         );
         let editor = cx.entity().downgrade();
         let dismiss_editor = editor.clone();
+        let key_dismiss_editor = editor.clone();
         let pin_editor = editor.clone();
         let close_editor = editor.clone();
         let close_others_editor = editor;
@@ -613,20 +641,20 @@ impl Editor {
                 .gap(px(6.0))
                 .rounded(px(d.menu_item_radius))
                 .bg(if self.context_menu_keyboard_item == Some(keyboard_index) {
-                    c.dialog_secondary_button_hover
+                    workbench.control_hover
                 } else {
-                    c.dialog_surface
+                    menu_material.background
                 })
                 .text_size(px(d.menu_text_size))
                 .font_weight(t.dialog_body_weight.to_font_weight())
                 .text_color(if enabled {
-                    c.dialog_secondary_button_text
+                    workbench.text_primary
                 } else {
-                    c.dialog_muted
+                    workbench.text_tertiary
                 })
                 .opacity(if enabled { 1.0 } else { 0.5 })
                 .child(
-                    menu_icon_slot(Some(icon), c.dialog_muted)
+                    menu_icon_slot(Some(icon), workbench.icon)
                         .debug_selector(move || format!("{id}-icon")),
                 )
                 .on_hover(cx.listener(Self::on_context_menu_pointer_hover))
@@ -655,6 +683,15 @@ impl Editor {
                         cx.notify();
                     });
                 })
+                .on_key_down(move |event, _window, cx| {
+                    if event.keystroke.key == "escape" {
+                        let _ = key_dismiss_editor.update(cx, |editor, cx| {
+                            editor.dismiss_tab_context_menu();
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                    }
+                })
                 .child(
                     div()
                         .id("tab-context-menu")
@@ -667,11 +704,16 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .gap(px(d.menu_panel_gap))
-                        .bg(c.dialog_surface)
+                        .bg(menu_material.background)
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
+                        .border_color(menu_material.border)
                         .rounded(px(d.menu_panel_radius))
                         .shadow_lg()
+                        .max_h(px((f32::from(window.viewport_size().height)
+                            - f32::from(panel_origin.y)
+                            - 12.0)
+                            .max(d.menu_item_height * 2.0)))
+                        .overflow_y_scroll()
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                             cx.stop_propagation()
                         })
@@ -687,7 +729,7 @@ impl Editor {
                                 "icon/editor/tab-pin.svg",
                                 true,
                             )
-                            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            .hover(|this| this.bg(workbench.control_hover))
                             .cursor_pointer()
                             .on_click(move |_event, _window, cx| {
                                 let _ = pin_editor.update(cx, |editor, cx| {
@@ -704,7 +746,7 @@ impl Editor {
                                 TAB_CLOSE_ICON,
                                 true,
                             )
-                            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            .hover(|this| this.bg(workbench.control_hover))
                             .cursor_pointer()
                             .on_click(move |_event, _window, cx| {
                                 let _ = close_editor.update(cx, |editor, cx| {
@@ -722,7 +764,7 @@ impl Editor {
                                 can_close_others,
                             )
                             .when(can_close_others, |this| {
-                                this.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                this.hover(|this| this.bg(workbench.control_hover))
                                     .cursor_pointer()
                                     .on_click(move |_event, _window, cx| {
                                         let _ = close_others_editor.update(cx, |editor, cx| {

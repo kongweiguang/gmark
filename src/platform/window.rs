@@ -7,12 +7,15 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Decorations, Hsla, MouseButton, Pixels,
     PlatformDisplay, SharedString, TextAlign, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowDecorations, WindowOptions, div, img, point, px, rgba,
-    size, svg,
+    WindowBounds, WindowControlArea, WindowDecorations, WindowOptions, div, img, point, px, size,
+    svg,
 };
 
 use super::identity::GMARK_APP_ID;
+use crate::ui::theme::workbench::SurfaceKind;
 use crate::ui::theme::{Theme, ThemeDimensions};
+use crate::ui::visual_preferences::VisualPreferencesManager;
+use gmark_config::ResolvedVisualPreferences;
 
 const TITLEBAR_MIN_HEIGHT: f32 = 38.0;
 const TITLEBAR_BUTTON_WIDTH: f32 = 46.0;
@@ -247,16 +250,21 @@ pub(crate) fn custom_titlebar_height(window: &Window, dimensions: &ThemeDimensio
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn custom_titlebar_background(theme: &Theme) -> Hsla {
-    theme.colors.chrome_background
+    theme
+        .colors
+        .workbench
+        .material(SurfaceKind::Glass, ResolvedVisualPreferences::default())
+        .background
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn custom_titlebar_icon_color(theme: &Theme) -> Hsla {
-    if custom_titlebar_background(theme).l < 0.5 {
-        Hsla::from(rgba(0xf4f4f5ff))
-    } else {
-        Hsla::from(rgba(0x18181bff))
-    }
+    // The concrete palette owns the chrome foreground. Keeping this lookup
+    // semantic means titlebar icons follow Claude/Fleet accents as well as
+    // light and dark appearances instead of falling back to fixed black/white.
+    theme.colors.workbench.text_primary
 }
 
 pub(crate) fn titlebar_maximize_icon(is_maximized: bool, is_fullscreen: bool) -> &'static str {
@@ -290,7 +298,12 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
     let c = &theme.colors;
     let t = &theme.typography;
     let controls = window.window_controls();
-    let icon_color = custom_titlebar_icon_color(theme);
+    let visual_preferences = cx
+        .try_global::<VisualPreferencesManager>()
+        .map(VisualPreferencesManager::current)
+        .unwrap_or_default();
+    let titlebar_material = c.workbench.material(SurfaceKind::Glass, visual_preferences);
+    let icon_color = c.workbench.text_primary;
     let entity = cx.entity().downgrade();
 
     let centered_title = matches!(layout.controls, TitlebarControlMode::NativeTrafficLights);
@@ -303,7 +316,7 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
             .debug_selector(move || format!("{id}-title-label"))
             .text_size(px(theme.dimensions.menu_text_size))
             .font_weight(t.dialog_button_weight.to_font_weight())
-            .text_color(c.dialog_secondary_button_text)
+            .text_color(c.workbench.text_secondary)
             .child(title)
     });
     let drag_title = div()
@@ -362,9 +375,9 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
         .occlude()
         .flex()
         .items_center()
-        .bg(custom_titlebar_background(theme))
+        .bg(titlebar_material.background)
         .border_b(px(theme.dimensions.dialog_border_width))
-        .border_color(c.dialog_border);
+        .border_color(titlebar_material.border);
 
     let root = match layout.controls {
         TitlebarControlMode::NativeTrafficLights => root
@@ -385,7 +398,7 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
                         .items_center()
                         .justify_center()
                         .window_control_area(WindowControlArea::Min)
-                        .hover(|this| this.bg(c.chrome_hover))
+                        .hover(|this| this.bg(c.workbench.control_hover))
                         .cursor_pointer()
                         .child(
                             svg()
@@ -411,7 +424,7 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
                         .items_center()
                         .justify_center()
                         .window_control_area(WindowControlArea::Max)
-                        .hover(|this| this.bg(c.chrome_hover))
+                        .hover(|this| this.bg(c.workbench.control_hover))
                         .cursor_pointer()
                         .child(
                             svg()
@@ -439,7 +452,7 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
                     .items_center()
                     .justify_center()
                     .window_control_area(WindowControlArea::Close)
-                    .hover(|this| this.bg(c.dialog_danger_button_bg))
+                    .hover(|this| this.bg(c.workbench.danger))
                     .cursor_pointer()
                     .child(
                         svg()

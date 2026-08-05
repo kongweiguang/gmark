@@ -43,6 +43,14 @@ const TAB_TOOL_BUTTON_SIZE: f32 = 28.0;
 const TAB_TOOL_GROUP_PADDING: f32 = 4.0;
 const TAB_MIN_WIDTH: f32 = 96.0;
 const TAB_MAX_WIDTH: f32 = 220.0;
+
+/// Clears a semantic color without introducing a palette-independent brand
+/// value. Transparent geometry is used only for hit areas and integrated
+/// chrome where the surface below must remain visible.
+fn transparent_color(mut color: Hsla) -> Hsla {
+    color.a = 0.0;
+    color
+}
 #[cfg(not(test))]
 static SESSION_WRITE_GENERATIONS: OnceLock<Mutex<HashMap<uuid::Uuid, u64>>> = OnceLock::new();
 #[cfg(not(test))]

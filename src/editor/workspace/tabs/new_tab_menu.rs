@@ -13,6 +13,15 @@ impl Editor {
         let position = self.tabs.new_tab_menu.as_ref()?.position;
         let c = &theme.colors;
         let d = &theme.dimensions;
+        let visual_preferences = cx
+            .try_global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .map(crate::ui::visual_preferences::VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let workbench = &c.workbench;
+        let menu_material = workbench.material(
+            crate::ui::theme::workbench::SurfaceKind::GlassStrong,
+            visual_preferences,
+        );
         let panel_width = d.context_menu_submenu_width.max(210.0);
         let panel_origin = clamped_floating_panel_origin(
             position,
@@ -25,6 +34,7 @@ impl Editor {
         let markdown_editor = editor.clone();
         let untyped_editor = editor.clone();
         let json_editor = editor.clone();
+        let key_dismiss_editor = editor.clone();
         let csv_editor = editor;
         let item = |id: &'static str, label: String, icon: &'static str| {
             div()
@@ -37,10 +47,10 @@ impl Editor {
                 .gap(px(7.0))
                 .rounded(px(d.menu_item_radius))
                 .text_size(px(d.menu_text_size))
-                .text_color(c.dialog_secondary_button_text)
-                .hover(|item| item.bg(c.dialog_secondary_button_hover))
+                .text_color(workbench.text_primary)
+                .hover(|item| item.bg(workbench.control_hover))
                 .cursor_pointer()
-                .child(menu_icon_slot(Some(icon), c.dialog_muted))
+                .child(menu_icon_slot(Some(icon), workbench.icon))
                 .child(label)
         };
         Some(
@@ -58,6 +68,15 @@ impl Editor {
                         cx.notify();
                     });
                 })
+                .on_key_down(move |event, _window, cx| {
+                    if event.keystroke.key == "escape" {
+                        let _ = key_dismiss_editor.update(cx, |editor, cx| {
+                            editor.tabs.new_tab_menu = None;
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                    }
+                })
                 .child(
                     div()
                         .id("new-tab-type-menu")
@@ -70,11 +89,16 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .gap(px(d.menu_panel_gap))
-                        .bg(c.dialog_surface)
+                        .bg(menu_material.background)
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
+                        .border_color(menu_material.border)
                         .rounded(px(d.menu_panel_radius))
                         .shadow_lg()
+                        .max_h(px((f32::from(window.viewport_size().height)
+                            - f32::from(panel_origin.y)
+                            - 12.0)
+                            .max(d.menu_item_height * 2.0)))
+                        .overflow_y_scroll()
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                             cx.stop_propagation()
                         })
