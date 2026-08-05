@@ -580,9 +580,9 @@ impl Editor {
             .flex()
             .items_center()
             .justify_between()
-            .bg(c.status_bar_background)
+            .bg(c.workbench.navigation_surface)
             .border_t(px(1.0))
-            .border_color(c.dialog_border)
+            .border_color(c.workbench.border_subtle)
             .child(
                 div()
                     .flex()
@@ -611,10 +611,10 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .gap(px(6.0))
-                        .bg(c.dialog_surface)
+                        .bg(c.workbench.elevated_surface)
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
-                        .rounded(px(6.0))
+                        .border_color(c.workbench.border_subtle)
+                        .rounded(px(10.0))
                         .shadow_lg()
                         .children(overflow_items)
                 }),
@@ -706,7 +706,7 @@ fn source_format_labels(
 fn render_source_format_label(label: String, theme: &Theme) -> AnyElement {
     div()
         .text_size(px(theme.dimensions.status_bar_text_size))
-        .text_color(theme.colors.status_bar_text_dim)
+        .text_color(theme.colors.workbench.text_tertiary)
         .child(label)
         .into_any_element()
 }

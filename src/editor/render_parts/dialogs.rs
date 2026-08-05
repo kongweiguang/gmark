@@ -111,7 +111,7 @@ impl Editor {
                     div()
                         .text_size(px(t.dialog_button_size))
                         .font_weight(t.dialog_title_weight.to_font_weight())
-                        .text_color(c.dialog_title)
+                        .text_color(c.workbench.text_primary)
                         .child(label),
                 )
                 .child(
@@ -121,11 +121,11 @@ impl Editor {
                         .p(px(8.0))
                         .bg(c.code_bg)
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
+                        .border_color(c.workbench.border_subtle)
                         .rounded(px(4.0))
                         .font_family(crate::document_host::source_monospace_font_family())
                         .text_size(px(12.0))
-                        .text_color(c.dialog_body)
+                        .text_color(c.workbench.text_secondary)
                         .child(text),
                 )
         };
@@ -160,7 +160,7 @@ impl Editor {
                                     .id("external-conflict-path")
                                     .debug_selector(|| "external-conflict-path".to_owned())
                                     .text_size(px(t.dialog_button_size))
-                                    .text_color(c.status_bar_text_dim)
+                                    .text_color(c.workbench.text_tertiary)
                                     .child(preview.path.clone()),
                             )
                             .child(
@@ -168,7 +168,7 @@ impl Editor {
                                     .id("external-conflict-summary")
                                     .debug_selector(|| "external-conflict-summary".to_owned())
                                     .text_size(px(t.dialog_body_size))
-                                    .text_color(c.callout_warning_border)
+                                    .text_color(c.workbench.warning)
                                     .child(summary),
                             )
                             .child(
@@ -329,8 +329,8 @@ impl Editor {
             .items_center()
             .gap(px(4.0))
             .rounded(px(4.0))
-            .bg(c.dialog_secondary_button_bg)
-            .text_color(c.dialog_secondary_button_text)
+            .bg(c.workbench.control_surface)
+            .text_color(c.workbench.text_primary)
             .child(
                 svg()
                     .path(CLOSE_ICON)
@@ -342,7 +342,7 @@ impl Editor {
             cancel_button.opacity(0.55)
         } else {
             cancel_button
-                .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                .hover(|this| this.bg(c.workbench.control_hover))
                 .cursor_pointer()
                 .on_click(cx.listener(Self::on_cancel_export))
         };
@@ -365,11 +365,11 @@ impl Editor {
             .gap(px(10.0))
             .rounded(px(6.0))
             .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
-            .bg(c.dialog_surface)
+            .border_color(c.workbench.border_subtle)
+            .bg(c.workbench.glass_strong_surface)
             .shadow_md()
             .text_size(px(t.dialog_button_size))
-            .text_color(c.dialog_body)
+            .text_color(c.workbench.text_secondary)
             .child(
                 div()
                     .size(px(18.0))
@@ -377,7 +377,7 @@ impl Editor {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(c.text_link)
+                    .text_color(c.workbench.accent)
                     .debug_selector(|| "export-progress-icon".to_owned())
                     .child(svg().path(EXPORT_PROGRESS_ICON).size(px(16.0))),
             )

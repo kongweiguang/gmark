@@ -149,6 +149,7 @@ async fn mermaid_overlay_is_read_only_and_escape_restores_block_focus(cx: &mut T
         cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, source.to_owned(), None));
     redraw(visual);
     visual.executor().advance_clock(Duration::from_millis(300));
+    redraw(visual);
     visual.run_until_parked();
     redraw(visual);
     let open = visual
@@ -176,7 +177,28 @@ async fn mermaid_overlay_is_read_only_and_escape_restores_block_focus(cx: &mut T
             "overlay close control must own keyboard focus"
         );
     });
+    assert!(visual.debug_bounds("diagram-overlay-scale").is_some());
     assert!(visual.debug_bounds("diagram-overlay-close").is_some());
+    editor.update_in(visual, |editor, window, _cx| {
+        editor
+            .diagram_overlay
+            .as_ref()
+            .expect("overlay state")
+            .scale_focus_handle
+            .focus(window);
+    });
+    visual.simulate_keystrokes("space");
+    editor.read_with(visual, |editor, _cx| {
+        assert!(
+            editor
+                .diagram_overlay
+                .as_ref()
+                .expect("overlay state")
+                .manual_scale
+                .is_some(),
+            "keyboard activation must toggle the overlay scale"
+        );
+    });
     visual.simulate_keystrokes("escape");
     editor.read_with(visual, |editor, _cx| {
         assert!(
@@ -184,6 +206,8 @@ async fn mermaid_overlay_is_read_only_and_escape_restores_block_focus(cx: &mut T
             "Escape must clear overlay state"
         );
     });
+    redraw(visual);
+    visual.run_until_parked();
     redraw(visual);
     editor.read_with(visual, |editor, cx| {
         assert_eq!(

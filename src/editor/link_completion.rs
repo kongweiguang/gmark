@@ -90,10 +90,11 @@ impl Editor {
     pub(super) fn handle_diagram_overlay_key(
         &mut self,
         event: &KeyDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if self.diagram_overlay.is_some() && event.keystroke.key == "escape" {
-            self.close_diagram_overlay(cx);
+            self.close_diagram_overlay_from_keyboard(window, cx);
             return true;
         }
         false

@@ -6,12 +6,7 @@ use std::path::Path;
 
 use crate::source;
 
-const LEGACY_UI_COLOR_LINES: &[(&str, &str)] = &[
-    (
-        "src/editor/diagram_overlay.rs",
-        ".bg(gpui::black().opacity(0.58))",
-    ),
-];
+const LEGACY_UI_COLOR_LINES: &[(&str, &str)] = &[];
 
 const CONTENT_COLOR_PATHS: &[&str] = &[
     "src/editor/block/element.rs",

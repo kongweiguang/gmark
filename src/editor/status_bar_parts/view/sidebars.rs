@@ -18,9 +18,9 @@ pub(in crate::editor) fn render_recovery_status(
     cx: &mut Context<Editor>,
 ) -> AnyElement {
     let color = if has_conflict {
-        theme.colors.callout_warning_border
+        theme.colors.workbench.warning
     } else {
-        theme.colors.status_bar_text
+        theme.colors.workbench.text_secondary
     };
     let icon = if has_conflict {
         CONFLICT_ICON
@@ -79,8 +79,8 @@ pub(in crate::editor) fn render_recovery_status(
             .border(px(1.0))
             .border_color(hsla(0.0, 0.0, 0.0, 0.0))
             .cursor_pointer()
-            .hover(|this| this.bg(theme.colors.status_bar_button_hover))
-            .focus(|this| this.border_color(theme.colors.text_link))
+            .hover(|this| this.bg(theme.colors.workbench.control_hover))
+            .focus(|this| this.border_color(theme.colors.workbench.focus_ring))
             .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
                 pointer_focus_handle.focus(window);
                 let Some(path) = editor.file_path.clone() else {
@@ -134,18 +134,18 @@ pub(in crate::editor) fn render_sidebar_toggle(
         .border(px(1.0))
         .border_color(hsla(0.0, 0.0, 0.0, 0.0))
         .bg(if state.sidebar_hovered || is_open {
-            c.status_bar_button_hover
+            c.workbench.control_hover
         } else {
             hsla(0., 0., 0., 0.)
         })
         .cursor_pointer()
-        .focus(|this| this.border_color(c.text_link))
-        .text_color(c.text_default)
+        .focus(|this| this.border_color(c.workbench.focus_ring))
+        .text_color(c.workbench.text_secondary)
         .child(
             svg()
                 .path(SIDEBAR_ICON)
                 .size(px(15.0))
-                .text_color(c.text_default),
+                .text_color(c.workbench.icon),
         )
         .children(is_open.then(|| {
             div()
@@ -155,7 +155,7 @@ pub(in crate::editor) fn render_sidebar_toggle(
                 .bottom(px(0.0))
                 .h(px(2.0))
                 .rounded(px(1.0))
-                .bg(c.text_link)
+                .bg(c.workbench.accent)
                 .debug_selector(|| "status-bar-sidebar-indicator".to_owned())
         }))
         .children(
@@ -230,18 +230,18 @@ pub(in crate::editor) fn render_document_sidebar_toggle(
         .border(px(1.0))
         .border_color(hsla(0.0, 0.0, 0.0, 0.0))
         .bg(if state.document_sidebar_hovered || is_open {
-            c.status_bar_button_hover
+            c.workbench.control_hover
         } else {
             hsla(0., 0., 0., 0.)
         })
         .cursor_pointer()
-        .focus(|this| this.border_color(c.text_link))
-        .text_color(c.text_default)
+        .focus(|this| this.border_color(c.workbench.focus_ring))
+        .text_color(c.workbench.text_secondary)
         .child(
             svg()
                 .path(DOCUMENT_SIDEBAR_ICON)
                 .size(px(15.0))
-                .text_color(c.text_default),
+                .text_color(c.workbench.icon),
         )
         .children(is_open.then(|| {
             div()
@@ -251,7 +251,7 @@ pub(in crate::editor) fn render_document_sidebar_toggle(
                 .bottom(px(0.0))
                 .h(px(2.0))
                 .rounded(px(1.0))
-                .bg(c.text_link)
+                .bg(c.workbench.accent)
                 .debug_selector(|| "status-bar-document-sidebar-indicator".to_owned())
         }))
         .children(

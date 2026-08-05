@@ -156,6 +156,7 @@ struct DiagramOverlayState {
     rendered: crate::components::MermaidSvgRender,
     /// `None` 时随视口适配；用户滚轮缩放或请求原始尺寸后保留显式比例。
     manual_scale: Option<f32>,
+    scale_focus_handle: FocusHandle,
     close_focus_handle: FocusHandle,
     focus_close_on_render: bool,
 }
@@ -318,6 +319,7 @@ pub struct Editor {
     table_cell_drag_anchor: Option<(EntityId, TableCellPosition)>,
     table_fragment_merge: Option<TableFragmentMergeState>,
     diagram_overlay: Option<DiagramOverlayState>,
+    diagram_overlay_restore_focus: Option<FocusHandle>,
     workspace_link_completion: Option<WorkspaceLinkCompletionState>,
     cross_block_selection: Option<CrossBlockSelection>,
     cross_block_drag: Option<CrossBlockDrag>,

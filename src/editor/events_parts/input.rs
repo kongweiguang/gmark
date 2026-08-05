@@ -311,7 +311,7 @@ impl Editor {
     ) {
         if self.handle_update_panel_key(event, window, cx)
             || self.handle_workspace_link_completion_key(event, cx)
-            || self.handle_diagram_overlay_key(event, cx)
+            || self.handle_diagram_overlay_key(event, window, cx)
             || self.handle_table_cell_selection_key(event, cx)
             || self.handle_context_menu_key(event, window, cx)
             || self.open_resource_context_menu_from_keyboard(event, window, cx)

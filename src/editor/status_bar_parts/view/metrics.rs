@@ -12,7 +12,7 @@ pub(in crate::editor) fn render_cursor((line, col): (usize, usize), theme: &Them
         .id("status-bar-cursor")
         .debug_selector(|| "status-bar-cursor".to_owned())
         .text_size(px(d.status_bar_text_size))
-        .text_color(c.status_bar_text)
+        .text_color(c.workbench.text_secondary)
         .child(label)
         .into_any_element()
 }
@@ -39,7 +39,7 @@ pub(in crate::editor) fn render_character_count(
         .id("status-bar-word-count")
         .debug_selector(|| "status-bar-word-count".to_owned())
         .text_size(px(d.status_bar_text_size))
-        .text_color(c.status_bar_text_dim)
+        .text_color(c.workbench.text_tertiary)
         .child(label)
         .into_any_element()
 }
@@ -79,14 +79,14 @@ pub(in crate::editor) fn render_custom_button(
         .border(px(1.0))
         .border_color(hsla(0.0, 0.0, 0.0, 0.0))
         .bg(if hovered {
-            c.status_bar_button_hover
+            c.workbench.control_hover
         } else {
             hsla(0., 0., 0., 0.)
         })
         .cursor_pointer()
-        .focus(|this| this.border_color(c.text_link))
+        .focus(|this| this.border_color(c.workbench.focus_ring))
         .text_size(px(d.status_bar_text_size))
-        .text_color(c.status_bar_text)
+        .text_color(c.workbench.text_secondary)
         .child(button.label.clone())
         .on_hover(cx.listener(
             move |editor: &mut Editor,

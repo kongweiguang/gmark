@@ -10,7 +10,7 @@ pub(super) fn render_overflow_text(id: &'static str, label: String, theme: &Them
         .flex()
         .items_center()
         .text_size(px(theme.dimensions.status_bar_text_size))
-        .text_color(theme.colors.status_bar_text)
+        .text_color(theme.colors.workbench.text_secondary)
         .child(label)
         .into_any_element()
 }
@@ -30,14 +30,14 @@ pub(super) fn render_large_overflow_action(
         .items_center()
         .rounded(px(4.0))
         .bg(if active {
-            theme.colors.status_bar_button_hover
+            theme.colors.workbench.control_hover
         } else {
             hsla(0.0, 0.0, 0.0, 0.0)
         })
-        .hover(|item| item.bg(theme.colors.status_bar_button_hover))
+        .hover(|item| item.bg(theme.colors.workbench.control_hover))
         .cursor_pointer()
         .text_size(px(theme.dimensions.status_bar_text_size))
-        .text_color(theme.colors.status_bar_text)
+        .text_color(theme.colors.workbench.text_secondary)
         .child(label)
 }
 
@@ -69,19 +69,19 @@ pub(super) fn render_source_format_overflow_button(
         .border(px(1.0))
         .border_color(hsla(0.0, 0.0, 0.0, 0.0))
         .bg(if open {
-            theme.colors.status_bar_button_hover
+            theme.colors.workbench.control_hover
         } else {
             hsla(0., 0., 0., 0.)
         })
-        .hover(|this| this.bg(theme.colors.status_bar_button_hover))
-        .focus(|this| this.border_color(theme.colors.text_link))
+        .hover(|this| this.bg(theme.colors.workbench.control_hover))
+        .focus(|this| this.border_color(theme.colors.workbench.focus_ring))
         .cursor_pointer()
-        .text_color(theme.colors.status_bar_text)
+        .text_color(theme.colors.workbench.text_secondary)
         .child(
             svg()
                 .path(MORE_ICON)
                 .size(px(15.0))
-                .text_color(theme.colors.status_bar_text),
+                .text_color(theme.colors.workbench.icon),
         )
         .children(open.then(|| {
             div()
@@ -91,7 +91,7 @@ pub(super) fn render_source_format_overflow_button(
                 .bottom(px(-1.0))
                 .h(px(2.0))
                 .rounded(px(1.0))
-                .bg(theme.colors.text_link)
+                .bg(theme.colors.workbench.accent)
                 .debug_selector(|| "status-bar-format-overflow-indicator".to_owned())
         }))
         .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
@@ -145,12 +145,12 @@ fn status_bar_tooltip(
         .items_center()
         .justify_center()
         .rounded(px(5.0))
-        .bg(theme.colors.dialog_surface)
+        .bg(theme.colors.workbench.elevated_surface)
         .border(px(theme.dimensions.dialog_border_width))
-        .border_color(theme.colors.dialog_border)
+        .border_color(theme.colors.workbench.border_subtle)
         .shadow_md()
         .text_size(px(theme.dimensions.status_bar_text_size))
-        .text_color(theme.colors.text_default)
+        .text_color(theme.colors.workbench.text_primary)
         .whitespace_nowrap()
         .child(label);
     match alignment {

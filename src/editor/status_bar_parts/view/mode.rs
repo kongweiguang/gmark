@@ -33,7 +33,7 @@ pub(in crate::editor) fn render_mode_switch(
                     .items_center()
                     .justify_center()
                     .rounded(px(4.0))
-                    .text_color(theme.colors.status_bar_text)
+                    .text_color(theme.colors.workbench.text_secondary)
                     .child(
                         div()
                             .id(ElementId::Name(selector.clone().into()))
@@ -45,7 +45,7 @@ pub(in crate::editor) fn render_mode_switch(
                                 svg()
                                     .path(mode_icon(mode))
                                     .size(px(15.0))
-                                    .text_color(theme.colors.status_bar_text),
+                                    .text_color(theme.colors.workbench.icon),
                             ),
                     ),
             )
@@ -124,18 +124,18 @@ pub(in crate::editor) fn render_mode_switch(
                 .border(px(1.0))
                 .border_color(hsla(0.0, 0.0, 0.0, 0.0))
                 .bg(if open || state.mode_hovered == Some(view_mode) {
-                    theme.colors.status_bar_button_hover
+                    theme.colors.workbench.control_hover
                 } else {
                     hsla(0., 0., 0., 0.)
                 })
                 .cursor_pointer()
-                .focus(|this| this.border_color(theme.colors.text_link))
-                .text_color(theme.colors.status_bar_text)
+                .focus(|this| this.border_color(theme.colors.workbench.focus_ring))
+                .text_color(theme.colors.workbench.text_secondary)
                 .child(
                     svg()
                         .path(current_icon)
                         .size(px(15.0))
-                        .text_color(theme.colors.status_bar_text),
+                        .text_color(theme.colors.workbench.icon),
                 )
                 .children(
                     (!open && state.tooltip_visible == Some(StatusTooltip::Mode(view_mode))).then(
@@ -195,10 +195,10 @@ pub(in crate::editor) fn render_mode_switch(
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .bg(theme.colors.dialog_surface)
+                .bg(theme.colors.workbench.elevated_surface)
                 .border(px(d.dialog_border_width))
-                .border_color(theme.colors.dialog_border)
-                .rounded(px(8.0))
+                .border_color(theme.colors.workbench.border_subtle)
+                .rounded(px(10.0))
                 .shadow_lg()
                 .children(menu_items)
         }))
@@ -236,31 +236,31 @@ fn render_mode_menu_item(
         .border(px(1.0))
         .border_color(hsla(0.0, 0.0, 0.0, 0.0))
         .bg(if active {
-            theme.colors.status_bar_button_hover
+            theme.colors.workbench.control_hover
         } else {
             hsla(0., 0., 0., 0.)
         })
         .cursor_pointer()
-        .focus(|this| this.border_color(theme.colors.text_link))
-        .text_color(theme.colors.status_bar_text)
+        .focus(|this| this.border_color(theme.colors.workbench.focus_ring))
+        .text_color(theme.colors.workbench.text_secondary)
         .child(
             svg()
                 .path(icon)
                 .size(px(15.0))
-                .text_color(theme.colors.status_bar_text),
+                .text_color(theme.colors.workbench.icon),
         )
         .child(
             div()
                 .flex_1()
                 .text_size(px(theme.dimensions.status_bar_text_size))
-                .text_color(theme.colors.text_default)
+                .text_color(theme.colors.workbench.text_primary)
                 .child(label.to_owned()),
         )
         .children(active.then(|| {
             svg()
                 .path("icon/ui/check.svg")
                 .size(px(14.0))
-                .text_color(theme.colors.text_link)
+                .text_color(theme.colors.workbench.accent)
                 .debug_selector(move || format!("status-bar-mode-{mode:?}-indicator"))
         }))
         .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {

@@ -68,15 +68,15 @@ pub(in crate::editor) fn render_line_ending_picker(
                 .border(px(1.0))
                 .border_color(hsla(0.0, 0.0, 0.0, 0.0))
                 .bg(if open {
-                    theme.colors.status_bar_button_hover
+                    theme.colors.workbench.control_hover
                 } else {
                     hsla(0.0, 0.0, 0.0, 0.0)
                 })
-                .hover(|this| this.bg(theme.colors.status_bar_button_hover))
-                .focus(|this| this.border_color(theme.colors.text_link))
+                .hover(|this| this.bg(theme.colors.workbench.control_hover))
+                .focus(|this| this.border_color(theme.colors.workbench.focus_ring))
                 .cursor_pointer()
                 .text_size(px(theme.dimensions.status_bar_text_size))
-                .text_color(theme.colors.status_bar_text)
+                .text_color(theme.colors.workbench.text_secondary)
                 .child(current_label)
                 .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
                     pointer_focus_handle.focus(window);
@@ -123,10 +123,10 @@ pub(in crate::editor) fn render_line_ending_picker(
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .bg(theme.colors.dialog_surface)
+                .bg(theme.colors.workbench.elevated_surface)
                 .border(px(theme.dimensions.dialog_border_width))
-                .border_color(theme.colors.dialog_border)
-                .rounded(px(8.0))
+                .border_color(theme.colors.workbench.border_subtle)
+                .rounded(px(10.0))
                 .shadow_lg()
                 .children(menu_items)
         }))
@@ -162,25 +162,25 @@ fn render_line_ending_menu_item(
         .border(px(1.0))
         .border_color(hsla(0.0, 0.0, 0.0, 0.0))
         .bg(if active {
-            theme.colors.status_bar_button_hover
+            theme.colors.workbench.control_hover
         } else {
             hsla(0.0, 0.0, 0.0, 0.0)
         })
-        .hover(|this| this.bg(theme.colors.status_bar_button_hover))
-        .focus(|this| this.border_color(theme.colors.text_link))
+        .hover(|this| this.bg(theme.colors.workbench.control_hover))
+        .focus(|this| this.border_color(theme.colors.workbench.focus_ring))
         .cursor_pointer()
         .child(
             div()
                 .flex_1()
                 .text_size(px(theme.dimensions.status_bar_text_size))
-                .text_color(theme.colors.text_default)
+                .text_color(theme.colors.workbench.text_primary)
                 .child(label),
         )
         .children(active.then(|| {
             svg()
                 .path("icon/ui/check.svg")
                 .size(px(14.0))
-                .text_color(theme.colors.text_link)
+                .text_color(theme.colors.workbench.accent)
         }))
         .on_click(cx.listener(move |editor, _: &ClickEvent, window, cx| {
             pointer_focus_handle.focus(window);

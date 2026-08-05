@@ -686,7 +686,7 @@ impl Editor {
             || self.context_menu_keyboard_submenu_item.take().is_some();
         let had_dialog = self.table_insert_dialog.take().is_some();
         let had_table_fragment = self.table_fragment_merge.take().is_some();
-        let had_diagram_overlay = self.diagram_overlay.take().is_some();
+        let had_diagram_overlay = self.close_diagram_overlay_after_unmount(cx);
         let had_link_completion = self.workspace_link_completion.take().is_some();
         let had_workspace_dialog = self.dismiss_workspace_operation_dialog();
         let had_command_palette = self.dismiss_command_palette();

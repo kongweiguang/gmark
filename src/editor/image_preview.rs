@@ -605,12 +605,12 @@ fn image_preview_message(
         .justify_center()
         .gap(px(10.0))
         .bg(theme.colors.editor_background)
-        .text_color(theme.colors.dialog_muted)
+        .text_color(theme.colors.workbench.text_secondary)
         .child(
             svg()
                 .path("icon/ui/image.svg")
                 .size(px(28.0))
-                .text_color(theme.colors.dialog_muted),
+                .text_color(theme.colors.workbench.text_secondary),
         )
         .child(message.into())
         .into_any_element()

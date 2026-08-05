@@ -9,40 +9,10 @@ fn transparent_color(mut color: Hsla) -> Hsla {
     color
 }
 
+#[path = "window_state_parts/sync.rs"]
+mod sync;
+
 impl Editor {
-    pub(super) fn sync_window_edited_state(&mut self, window: &mut Window) {
-        if self.pending_window_edited {
-            self.pending_window_edited = false;
-            window.set_window_edited(true);
-        }
-    }
-
-    pub(super) fn sync_scroll_viewport(
-        &mut self,
-        viewport_size: Size<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        match self.last_scroll_viewport_size {
-            Some(previous) if Self::viewport_size_changed(previous, viewport_size) => {
-                self.last_scroll_viewport_size = Some(viewport_size);
-                self.request_active_block_scroll_into_view(cx);
-            }
-            Some(_) => {}
-            None => {
-                self.last_scroll_viewport_size = Some(viewport_size);
-            }
-        }
-    }
-
-    pub(super) fn sync_window_title(&mut self, window: &mut Window, strings: &I18nStrings) {
-        if self.pending_window_title_refresh {
-            self.pending_window_title_refresh = false;
-            let title =
-                Self::window_title(self.file_path.as_deref(), self.is_document_dirty(), strings);
-            window.set_window_title(&title);
-        }
-    }
-
     /// Renders the in-window fallback menu bar backed by the app menus
     /// registered through `App::set_menus`. `menus` and `menu_labels` are
     /// fetched and computed once at the caller and shared with

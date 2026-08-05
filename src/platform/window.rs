@@ -3,9 +3,11 @@
 //! Shared window chrome helpers for themed client-side title bars.
 
 use gmark_config::{WorkspaceSessionWindow, WorkspaceSessionWindowState};
+#[cfg(test)]
+use gpui::Hsla;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Decorations, Hsla, MouseButton, Pixels,
+    AnyElement, App, Bounds, ClickEvent, Context, Decorations, MouseButton, Pixels,
     PlatformDisplay, SharedString, TextAlign, TitlebarOptions, Window, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowDecorations, WindowOptions, div, img, point, px, size,
     svg,
@@ -15,6 +17,7 @@ use super::identity::GMARK_APP_ID;
 use crate::ui::theme::workbench::SurfaceKind;
 use crate::ui::theme::{Theme, ThemeDimensions};
 use crate::ui::visual_preferences::VisualPreferencesManager;
+#[cfg(test)]
 use gmark_config::ResolvedVisualPreferences;
 
 const TITLEBAR_MIN_HEIGHT: f32 = 38.0;
@@ -250,7 +253,7 @@ pub(crate) fn custom_titlebar_height(window: &Window, dimensions: &ThemeDimensio
     )
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn custom_titlebar_background(theme: &Theme) -> Hsla {
     theme
         .colors
@@ -259,7 +262,7 @@ pub(crate) fn custom_titlebar_background(theme: &Theme) -> Hsla {
         .background
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn custom_titlebar_icon_color(theme: &Theme) -> Hsla {
     // The concrete palette owns the chrome foreground. Keeping this lookup
     // semantic means titlebar icons follow Claude/Fleet accents as well as

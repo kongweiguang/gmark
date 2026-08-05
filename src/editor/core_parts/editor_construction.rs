@@ -452,6 +452,7 @@ impl Editor {
             table_cell_drag_anchor: None,
             table_fragment_merge: None,
             diagram_overlay: None,
+            diagram_overlay_restore_focus: None,
             workspace_link_completion: None,
             cross_block_selection: None,
             cross_block_drag: None,

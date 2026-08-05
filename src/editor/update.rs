@@ -287,18 +287,11 @@ impl Editor {
                       primary: bool,
                       focus_handle: &FocusHandle,
                       cx: &mut Context<Self>| {
+            let wb = &c.workbench;
             let (background, hover, text) = if primary {
-                (
-                    c.dialog_primary_button_bg,
-                    c.dialog_primary_button_hover,
-                    c.dialog_primary_button_text,
-                )
+                (wb.accent, wb.accent_hover, wb.text_inverse)
             } else {
-                (
-                    c.dialog_secondary_button_bg,
-                    c.dialog_secondary_button_hover,
-                    c.dialog_secondary_button_text,
-                )
+                (wb.control_surface, wb.control_hover, wb.text_primary)
             };
             div()
                 .id(id)
@@ -315,7 +308,7 @@ impl Editor {
                 .border_color(background)
                 .bg(background)
                 .hover(move |this| this.bg(hover))
-                .focus(move |this| this.border_color(c.text_link))
+                .focus(move |this| this.border_color(c.workbench.focus_ring))
                 .active(|this| this.opacity(0.9))
                 .cursor_pointer()
                 .whitespace_nowrap()
@@ -356,14 +349,14 @@ impl Editor {
             .gap(px(10.0))
             .rounded(px(12.0))
             .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
-            .bg(c.dialog_surface)
+            .border_color(c.workbench.border_subtle)
+            .bg(c.workbench.glass_strong_surface)
             .shadow_lg()
             .child(
                 div()
                     .text_size(px(t.dialog_title_size))
                     .font_weight(t.dialog_title_weight.to_font_weight())
-                    .text_color(c.dialog_title)
+                    .text_color(c.workbench.text_primary)
                     .child(title),
             )
             .child(
@@ -375,7 +368,7 @@ impl Editor {
                     .overflow_y_scroll()
                     .text_size(px(t.dialog_body_size))
                     .line_height(rems(t.text_line_height))
-                    .text_color(c.dialog_body)
+                    .text_color(c.workbench.text_secondary)
                     .children(detail.lines().map(|line| div().child(line.to_owned()))),
             );
         let panel = if let Some(fraction) = progress {
@@ -387,7 +380,7 @@ impl Editor {
                     .h(px(6.0))
                     .overflow_hidden()
                     .rounded(px(999.0))
-                    .bg(c.dialog_secondary_button_bg)
+                    .bg(c.workbench.control_surface)
                     .child(
                         div()
                             .id("update-progress-fill")
@@ -395,7 +388,7 @@ impl Editor {
                             .h_full()
                             .w(relative(fraction))
                             .rounded(px(999.0))
-                            .bg(c.text_link),
+                            .bg(c.workbench.accent),
                     ),
             )
         } else {

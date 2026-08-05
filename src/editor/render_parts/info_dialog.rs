@@ -10,13 +10,7 @@ impl Editor {
     ) -> &'a str {
         match kind {
             InfoDialogKind::About => &strings.help_about_title,
-            InfoDialogKind::Document => {
-                if strings.menu_preferences == "偏好设置" {
-                    "文档信息"
-                } else {
-                    "Document Info"
-                }
-            }
+            InfoDialogKind::Document => &strings.document_sidebar_info,
         }
     }
 
@@ -44,7 +38,7 @@ impl Editor {
             this.text_size(px(t.dialog_body_size))
                 .font_weight(t.dialog_body_weight.to_font_weight())
                 .line_height(rems(t.text_line_height))
-                .text_color(c.dialog_body)
+                .text_color(c.workbench.text_secondary)
         };
 
         match kind {
@@ -64,7 +58,7 @@ impl Editor {
                             div()
                                 .id("about-github-link")
                                 .cursor_pointer()
-                                .text_color(c.text_link)
+                                .text_color(c.workbench.accent)
                                 .underline()
                                 .child(ABOUT_GITHUB_URL)
                                 .on_click(move |_, _, cx| {
@@ -85,7 +79,7 @@ impl Editor {
                             .text_size(px(t.dialog_body_size))
                             .font_weight(t.dialog_body_weight.to_font_weight())
                             .line_height(rems(t.text_line_height))
-                            .text_color(c.dialog_body)
+                            .text_color(c.workbench.text_secondary)
                             .child(line)
                     }))
                     .into_any_element()

@@ -165,6 +165,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let wb = &c.workbench;
         let editor = cx.entity().downgrade();
         let control = |id: &'static str,
                        icon: &'static str,
@@ -186,12 +187,12 @@ impl Editor {
                 .justify_center()
                 .rounded(px(7.0))
                 .border(px(1.0))
-                .border_color(hsla(0.0, 0.0, 0.0, 0.0))
-                .hover(|button| button.bg(c.dialog_secondary_button_hover))
-                .focus(|button| button.border_color(c.text_link))
+                .border_color(wb.control_surface.opacity(0.0))
+                .hover(|button| button.bg(wb.control_hover))
+                .focus(|button| button.border_color(wb.focus_ring))
                 .cursor_pointer()
                 .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
-                .child(svg().path(icon).size(px(14.0)).text_color(c.dialog_body))
+                .child(svg().path(icon).size(px(14.0)).text_color(wb.icon))
                 .on_click(move |_event, window, cx| {
                     pointer_focus.focus(window);
                     let _ = click_editor.update(cx, |editor, cx| {
@@ -228,12 +229,12 @@ impl Editor {
             .justify_center()
             .rounded(px(7.0))
             .border(px(1.0))
-            .border_color(hsla(0.0, 0.0, 0.0, 0.0))
-            .hover(|button| button.bg(c.dialog_secondary_button_hover))
-            .focus(|button| button.border_color(c.text_link))
+            .border_color(wb.control_surface.opacity(0.0))
+            .hover(|button| button.bg(wb.control_hover))
+            .focus(|button| button.border_color(wb.focus_ring))
             .cursor_pointer()
             .text_size(px(12.0))
-            .text_color(c.dialog_body)
+            .text_color(wb.text_primary)
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(actual_tooltip.clone(), cx))
             .child(actual_label)
             .on_click(move |_event, window, cx| {
@@ -272,8 +273,8 @@ impl Editor {
             .gap(px(2.0))
             .rounded(px(10.0))
             .border(px(1.0))
-            .border_color(c.dialog_border)
-            .bg(c.dialog_surface)
+            .border_color(wb.border_subtle)
+            .bg(wb.glass_strong_surface)
             .shadow_md()
             .occlude()
             .child(control(

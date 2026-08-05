@@ -24,6 +24,7 @@ impl Editor {
             preview_key,
             rendered,
             manual_scale: None,
+            scale_focus_handle: cx.focus_handle(),
             close_focus_handle: cx.focus_handle(),
             focus_close_on_render: true,
         });
@@ -35,6 +36,30 @@ impl Editor {
             self.focus_block(state.block_id);
             cx.notify();
         }
+    }
+
+    pub(super) fn close_diagram_overlay_from_keyboard(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_diagram_overlay_after_unmount(cx);
+    }
+
+    pub(super) fn close_diagram_overlay_after_unmount(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = self.diagram_overlay.take() else {
+            return false;
+        };
+        self.focus_block(state.block_id);
+        if let Some(entity_id) = self.pending_focus.take()
+            && let Some(block) = self.focusable_entity_by_id(entity_id)
+        {
+            // The focused overlay node still exists during this event. The next render defers
+            // this handle until reconciliation has removed that stale focus owner.
+            self.diagram_overlay_restore_focus = Some(block.read(cx).focus_handle.clone());
+        }
+        cx.notify();
+        true
     }
 
     fn toggle_diagram_overlay_scale(&mut self, cx: &mut Context<Self>) {
@@ -135,7 +160,9 @@ impl Editor {
         let key_editor = close_editor.clone();
         let backdrop_editor = close_editor.clone();
         let scale_editor = close_editor.clone();
+        let scale_key_editor = close_editor.clone();
         let zoom_editor = close_editor.clone();
+        let wb = &theme.colors.workbench;
         let scale_label = if state.manual_scale.is_some() {
             strings.large_document_text("diagram_fit_window")
         } else {
@@ -151,7 +178,7 @@ impl Editor {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(gpui::black().opacity(0.58))
+                .bg(wb.overlay_scrim)
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     let _ =
                         backdrop_editor.update(cx, |editor, cx| editor.close_diagram_overlay(cx));
@@ -169,9 +196,9 @@ impl Editor {
                         .flex_col()
                         .gap(px(8.0))
                         .rounded(px(theme.dimensions.dialog_radius))
-                        .bg(theme.colors.dialog_surface)
+                        .bg(wb.elevated_surface)
                         .border(px(theme.dimensions.dialog_border_width))
-                        .border_color(theme.colors.dialog_border)
+                        .border_color(wb.border_subtle)
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div()
@@ -183,15 +210,45 @@ impl Editor {
                                     div()
                                         .id("diagram-overlay-scale")
                                         .debug_selector(|| "diagram-overlay-scale".to_owned())
+                                        .tab_index(0)
+                                        .track_focus(&state.scale_focus_handle)
                                         .px(px(10.0))
                                         .h(px(30.0))
                                         .flex()
                                         .items_center()
                                         .rounded(px(6.0))
                                         .cursor_pointer()
-                                        .text_color(theme.colors.dialog_body)
-                                        .hover(|this| this.bg(theme.colors.chrome_hover))
+                                        .border(px(1.0))
+                                        .border_color(wb.control_surface.opacity(0.0))
+                                        .text_color(wb.text_primary)
+                                        .hover(|this| this.bg(wb.control_hover))
+                                        .focus(|this| this.border_color(wb.focus_ring))
                                         .child(scale_label.to_owned())
+                                        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                            match event.keystroke.key.as_str() {
+                                                "enter" | "space" => {
+                                                    let _ = scale_key_editor.update(
+                                                        cx,
+                                                        |editor, cx| {
+                                                            editor.toggle_diagram_overlay_scale(cx)
+                                                        },
+                                                    );
+                                                    cx.stop_propagation();
+                                                }
+                                                "escape" => {
+                                                    let _ = scale_key_editor.update(
+                                                        cx,
+                                                        |editor, cx| {
+                                                            editor.close_diagram_overlay_from_keyboard(
+                                                                window, cx,
+                                                            )
+                                                        },
+                                                    );
+                                                    cx.stop_propagation();
+                                                }
+                                                _ => {}
+                                            }
+                                        })
                                         .on_click(move |_, _, cx| {
                                             let _ = scale_editor.update(cx, |editor, cx| {
                                                 editor.toggle_diagram_overlay_scale(cx)
@@ -210,18 +267,23 @@ impl Editor {
                                         .items_center()
                                         .rounded(px(6.0))
                                         .cursor_pointer()
-                                        .text_color(theme.colors.dialog_body)
-                                        .hover(|this| this.bg(theme.colors.chrome_hover))
+                                        .border(px(1.0))
+                                        .border_color(wb.control_surface.opacity(0.0))
+                                        .text_color(wb.text_primary)
+                                        .hover(|this| this.bg(wb.control_hover))
+                                        .focus(|this| this.border_color(wb.focus_ring))
                                         .child(strings.ui_close.clone())
-                                        .on_action(move |_: &DismissTransientUi, _window, cx| {
+                                        .on_action(move |_: &DismissTransientUi, window, cx| {
                                             let _ = dismiss_editor.update(cx, |editor, cx| {
-                                                editor.close_diagram_overlay(cx)
+                                                editor.close_diagram_overlay_from_keyboard(window, cx)
                                             });
                                         })
-                                        .on_key_down(move |event: &KeyDownEvent, _window, cx| {
+                                        .on_key_down(move |event: &KeyDownEvent, window, cx| {
                                             if event.keystroke.key == "escape" {
                                                 let _ = key_editor.update(cx, |editor, cx| {
-                                                    editor.close_diagram_overlay(cx)
+                                                    editor.close_diagram_overlay_from_keyboard(
+                                                        window, cx,
+                                                    )
                                                 });
                                                 cx.stop_propagation();
                                             }

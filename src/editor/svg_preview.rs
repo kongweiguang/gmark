@@ -216,12 +216,12 @@ fn svg_preview_message(message: impl Into<SharedString>, theme: &Theme) -> AnyEl
         .items_center()
         .justify_center()
         .gap(px(8.0))
-        .text_color(theme.colors.dialog_muted)
+        .text_color(theme.colors.workbench.text_secondary)
         .child(
             svg()
                 .path("icon/ui/image.svg")
                 .size(px(28.0))
-                .text_color(theme.colors.dialog_muted),
+                .text_color(theme.colors.workbench.text_secondary),
         )
         .child(message.into())
         .into_any_element()

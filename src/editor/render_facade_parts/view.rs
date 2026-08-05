@@ -4,6 +4,10 @@ use super::layout::*;
 use super::*;
 use crate::editor::workspace::document_sidebar_panel_width_for_viewport;
 
+#[path = "view_parts/footnote.rs"]
+mod footnote;
+use footnote::footnote_group_shell;
+
 pub(super) fn submenu_panel_top(
     items: &[OwnedMenuItem],
     item_index: usize,
@@ -69,35 +73,6 @@ pub(super) fn submenu_bridge_geometry_from_origin<S: AsRef<str>, T: AsRef<str>>(
         width: dimensions.menu_panel_gap + submenu_width,
         height: menu_item_visual_height(item, dimensions) + vertical_tolerance * 2.0,
     })
-}
-
-pub(super) fn footnote_group_shell(
-    children: Vec<AnyElement>,
-    theme: &Theme,
-    dimensions: &ThemeDimensions,
-) -> AnyElement {
-    div()
-        .w_full()
-        .flex_shrink_0()
-        .px(px(crate::components::rendered_content_inset(dimensions)))
-        .child(
-            div()
-                .debug_selector(|| "footnote-surface".to_owned())
-                .w_full()
-                .min_w(px(0.0))
-                .flex()
-                .flex_col()
-                .gap(px(0.0))
-                .px(px(dimensions.footnote_padding_x))
-                .py(px(dimensions.footnote_padding_y))
-                .rounded(px(dimensions.footnote_radius))
-                // 脚注是正文的补充层，不使用完整卡片描边；细左轨即可表达归属。
-                .border_l(px(2.0))
-                .border_color(theme.colors.footnote_border)
-                .bg(theme.colors.footnote_bg)
-                .children(children),
-        )
-        .into_any_element()
 }
 
 impl Editor {}
@@ -227,6 +202,9 @@ impl Render for Editor {
         self.install_menu_window_activation_observer(window, cx);
         self.sync_split_scroll_handles(cx);
         self.apply_pending_focus(window, cx);
+        if let Some(focus_handle) = self.diagram_overlay_restore_focus.take() {
+            window.defer(cx, move |window, _cx| focus_handle.focus(window));
+        }
         self.apply_pending_scroll_into_view(window, cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.source_document
