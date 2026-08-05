@@ -175,10 +175,16 @@ impl Editor {
     pub(in crate::editor) fn on_dismiss_context_menu_overlay(
         &mut self,
         _event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let restore_focus = self
+            .active_entity_id
+            .and_then(|entity_id| self.focusable_entity_by_id(entity_id));
         self.dismiss_contextual_overlays(cx);
+        if let Some(block) = restore_focus {
+            block.read(cx).focus_handle.focus(window);
+        }
     }
 
     pub(in crate::editor) fn on_dismiss_transient_ui(

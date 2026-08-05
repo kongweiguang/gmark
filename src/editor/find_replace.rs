@@ -13,7 +13,7 @@ use regex::{Regex, RegexBuilder};
 use super::{Block, BlockRecord, Editor, PreparedSplitProjection, UndoSelectionSnapshot, ViewMode};
 use crate::components::{BlockEvent, UndoCaptureKind};
 use crate::i18n::{I18nManager, I18nStrings};
-use crate::theme::Theme;
+use crate::theme::{Theme, workbench::SurfaceKind};
 
 const FIND_DEBOUNCE: Duration = Duration::from_millis(40);
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
@@ -325,7 +325,13 @@ impl Editor {
     }
 }
 
-fn render_find_tooltip(label: String, theme: &Theme) -> AnyElement {
+fn render_find_tooltip(
+    label: String,
+    theme: &Theme,
+    visual_preferences: crate::theme::workbench::ResolvedVisualPreferences,
+) -> AnyElement {
+    let palette = &theme.colors.workbench;
+    let material = palette.material(SurfaceKind::Glass, visual_preferences);
     div()
         .id("document-find-tooltip")
         .debug_selector(|| "document-find-tooltip".to_owned())
@@ -340,12 +346,12 @@ fn render_find_tooltip(label: String, theme: &Theme) -> AnyElement {
         .justify_center()
         .whitespace_nowrap()
         .rounded(px(5.0))
-        .bg(theme.colors.dialog_surface)
+        .bg(material.background)
         .border(px(theme.dimensions.dialog_border_width))
-        .border_color(theme.colors.dialog_border)
+        .border_color(material.border)
         .shadow_md()
         .text_size(px(theme.dimensions.status_bar_text_size))
-        .text_color(theme.colors.text_default)
+        .text_color(palette.text_primary)
         .child(label)
         .into_any_element()
 }

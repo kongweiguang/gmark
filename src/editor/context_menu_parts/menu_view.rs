@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 use gpui::prelude::FluentBuilder;
 
 type ResourceContextHandler = fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>);
@@ -14,6 +16,12 @@ impl Editor {
     ) -> Option<AnyElement> {
         let menu = self.context_menu.as_ref()?;
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         let s = cx.global::<I18nManager>().strings().clone();
@@ -59,10 +67,12 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .gap(px(d.menu_panel_gap))
+                        .max_h(relative(0.82))
+                        .overflow_y_scroll()
                         .occlude()
-                        .bg(c.dialog_surface)
+                        .bg(material.background)
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
+                        .border_color(material.border)
                         .rounded(px(d.menu_panel_radius))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -89,18 +99,18 @@ impl Editor {
                                 .gap(px(6.0))
                                 .rounded(px(d.menu_item_radius))
                                 .bg(if self.context_menu_keyboard_submenu_item == Some(index) {
-                                    c.dialog_secondary_button_hover
+                                    palette.control_hover
                                 } else {
-                                    c.dialog_surface
+                                    material.background
                                 })
-                                .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                .hover(|this| this.bg(palette.control_hover))
                                 .active(|this| this.opacity(0.92))
                                 .cursor_pointer()
                                 .text_size(px(d.menu_text_size))
                                 .font_weight(t.dialog_body_weight.to_font_weight())
-                                .text_color(c.dialog_secondary_button_text)
+                                .text_color(palette.text_primary)
                                 .child(
-                                    menu_icon_slot(Some(descriptor.icon_path), c.dialog_muted)
+                                    menu_icon_slot(Some(descriptor.icon_path), palette.icon)
                                         .debug_selector(move || {
                                             format!(
                                                 "editor-context-menu-insert-{}-icon",
@@ -149,9 +159,11 @@ impl Editor {
                             .flex()
                             .flex_col()
                             .gap(px(d.menu_panel_gap))
-                            .bg(c.dialog_surface)
+                            .max_h(relative(0.82))
+                            .overflow_y_scroll()
+                            .bg(material.background)
                             .border(px(d.dialog_border_width))
-                            .border_color(c.dialog_border)
+                            .border_color(material.border)
                             .rounded(px(d.menu_panel_radius))
                             .shadow_lg()
                             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -171,17 +183,17 @@ impl Editor {
                                         if *submenu_open
                                             || self.context_menu_keyboard_item == Some(0)
                                         {
-                                            c.dialog_secondary_button_hover
+                                            palette.control_hover
                                         } else {
-                                            c.dialog_surface
+                                            material.background
                                         },
                                     )
-                                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                    .hover(|this| this.bg(palette.control_hover))
                                     .text_size(px(d.menu_text_size))
                                     .font_weight(t.dialog_body_weight.to_font_weight())
-                                    .text_color(c.dialog_secondary_button_text)
+                                    .text_color(palette.text_primary)
                                     .child(
-                                        menu_icon_slot(Some(PLUS_ICON), c.dialog_muted)
+                                        menu_icon_slot(Some(PLUS_ICON), palette.icon)
                                             .debug_selector(|| {
                                                 "editor-context-menu-insert-icon".to_owned()
                                             }),
@@ -238,9 +250,9 @@ impl Editor {
                     .track_scroll(&self.context_menu_scroll_handle)
                     .scrollbar_width(px(0.0))
                     .gap(px(d.menu_panel_gap))
-                    .bg(c.dialog_surface)
+                    .bg(material.background)
                     .border(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
+                    .border_color(material.border)
                     .rounded(px(d.menu_panel_radius))
                     .shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -251,7 +263,7 @@ impl Editor {
                             .px(px(d.menu_item_padding_x))
                             .py(px(4.0))
                             .text_size(px((d.menu_text_size - 1.0).max(10.0)))
-                            .text_color(c.dialog_muted)
+                            .text_color(palette.text_secondary)
                             .child(diagnostic.message.clone()),
                     );
                 for (index, replacement) in diagnostic.replacements.iter().enumerate() {
@@ -266,16 +278,16 @@ impl Editor {
                             .gap(px(6.0))
                             .rounded(px(d.menu_item_radius))
                             .bg(if self.context_menu_keyboard_item == Some(index) {
-                                c.dialog_secondary_button_hover
+                                palette.control_hover
                             } else {
-                                c.dialog_surface
+                                material.background
                             })
-                            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            .hover(|this| this.bg(palette.control_hover))
                             .on_hover(cx.listener(Self::on_context_menu_pointer_hover))
                             .cursor_pointer()
                             .text_size(px(d.menu_text_size))
-                            .text_color(c.dialog_secondary_button_text)
-                            .child(menu_icon_slot(Some(CHECK_ICON), c.dialog_muted))
+                            .text_color(palette.text_primary)
+                            .child(menu_icon_slot(Some(CHECK_ICON), palette.icon))
                             .child(
                                 div()
                                     .flex_1()
@@ -410,9 +422,11 @@ impl Editor {
                     .flex()
                     .flex_col()
                     .gap(px(d.menu_panel_gap))
-                    .bg(c.dialog_surface)
+                    .max_h(relative(0.82))
+                    .overflow_y_scroll()
+                    .bg(material.background)
                     .border(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
+                    .border_color(material.border)
                     .rounded(px(d.menu_panel_radius))
                     .shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -435,17 +449,17 @@ impl Editor {
                         .gap(px(6.0))
                         .rounded(px(d.menu_item_radius))
                         .bg(if keyboard_selected {
-                            c.dialog_secondary_button_hover
+                            palette.control_hover
                         } else {
-                            c.dialog_surface
+                            material.background
                         })
                         .text_size(px(d.menu_text_size))
                         .text_color(if enabled[index] {
-                            c.dialog_secondary_button_text
+                            palette.text_primary
                         } else {
-                            c.dialog_muted
+                            palette.text_secondary
                         })
-                        .child(menu_icon_slot(Some(icon), c.dialog_muted))
+                        .child(menu_icon_slot(Some(icon), palette.icon))
                         .child(
                             div()
                                 .flex_1()
@@ -462,7 +476,7 @@ impl Editor {
                         });
                     panel = if enabled[index] {
                         panel.child(
-                            item.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            item.hover(|this| this.bg(palette.control_hover))
                                 .cursor_pointer()
                                 .on_click(cx.listener(handler)),
                         )
@@ -475,7 +489,7 @@ impl Editor {
                                 .mx(px(d.menu_separator_margin_x))
                                 .my(px(d.menu_separator_margin_y))
                                 .h(px(d.menu_separator_height))
-                                .bg(c.dialog_border),
+                                .bg(material.border),
                         );
                     }
                 }
@@ -525,18 +539,18 @@ impl Editor {
                         .gap(px(6.0))
                         .rounded(px(d.menu_item_radius))
                         .bg(if self.context_menu_keyboard_item == Some(keyboard_index) {
-                            c.dialog_secondary_button_hover
+                            palette.control_hover
                         } else {
-                            c.dialog_surface
+                            material.background
                         })
                         .text_size(px(d.menu_text_size))
                         .text_color(if enabled {
-                            c.dialog_secondary_button_text
+                            palette.text_primary
                         } else {
-                            c.dialog_muted
+                            palette.text_secondary
                         })
                         .child(
-                            menu_icon_slot(Some(icon), c.dialog_muted)
+                            menu_icon_slot(Some(icon), palette.icon)
                                 .debug_selector(move || format!("{id}-icon")),
                         )
                         .child(
@@ -549,7 +563,7 @@ impl Editor {
                         )
                         .on_hover(cx.listener(Self::on_context_menu_pointer_hover));
                     if enabled {
-                        row.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                        row.hover(|this| this.bg(palette.control_hover))
                             .cursor_pointer()
                             .on_click(cx.listener(handler))
                             .into_any_element()
@@ -568,9 +582,11 @@ impl Editor {
                     .flex()
                     .flex_col()
                     .gap(px(d.menu_panel_gap))
-                    .bg(c.dialog_surface)
+                    .max_h(relative(0.82))
+                    .overflow_y_scroll()
+                    .bg(material.background)
                     .border(px(d.dialog_border_width))
-                    .border_color(c.dialog_border)
+                    .border_color(material.border)
                     .rounded(px(d.menu_panel_radius))
                     .shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -597,7 +613,7 @@ impl Editor {
                             .mx(px(d.menu_separator_margin_x))
                             .my(px(d.menu_separator_margin_y))
                             .h(px(d.menu_separator_height))
-                            .bg(c.dialog_border),
+                            .bg(material.border),
                     )
                     .child(item(
                         "workspace-context-copy-path",
@@ -620,7 +636,7 @@ impl Editor {
                             .mx(px(d.menu_separator_margin_x))
                             .my(px(d.menu_separator_margin_y))
                             .h(px(d.menu_separator_height))
-                            .bg(c.dialog_border),
+                            .bg(material.border),
                     )
                     .child(item(
                         "workspace-context-new-file",
@@ -643,7 +659,7 @@ impl Editor {
                             .mx(px(d.menu_separator_margin_x))
                             .my(px(d.menu_separator_margin_y))
                             .h(px(d.menu_separator_height))
-                            .bg(c.dialog_border),
+                            .bg(material.border),
                     )
                     .child(item(
                         "workspace-context-rename",
@@ -666,7 +682,7 @@ impl Editor {
                             .mx(px(d.menu_separator_margin_x))
                             .my(px(d.menu_separator_margin_y))
                             .h(px(d.menu_separator_height))
-                            .bg(c.dialog_border),
+                            .bg(material.border),
                     )
                     .child(item(
                         "workspace-context-refresh",
@@ -681,7 +697,7 @@ impl Editor {
                             .mx(px(d.menu_separator_margin_x))
                             .my(px(d.menu_separator_margin_y))
                             .h(px(d.menu_separator_height))
-                            .bg(c.dialog_border),
+                            .bg(material.border),
                     )
                     .child(item(
                         "workspace-context-undo",
@@ -696,14 +712,14 @@ impl Editor {
                             .mx(px(d.menu_separator_margin_x))
                             .my(px(d.menu_separator_margin_y))
                             .h(px(d.menu_separator_height))
-                            .bg(c.dialog_border),
+                            .bg(material.border),
                     )
                     .child({
                         let enabled = !self.workspace_context_target_is_root();
                         let color = if enabled {
-                            c.dialog_danger_button_bg
+                            palette.danger
                         } else {
-                            c.dialog_muted
+                            palette.text_secondary
                         };
                         let row = div()
                             .id("workspace-context-delete")
@@ -715,9 +731,9 @@ impl Editor {
                             .gap(px(6.0))
                             .rounded(px(d.menu_item_radius))
                             .bg(if self.context_menu_keyboard_item == Some(10) {
-                                c.dialog_secondary_button_hover
+                                palette.control_hover
                             } else {
-                                c.dialog_surface
+                                material.background
                             })
                             .text_size(px(d.menu_text_size))
                             .text_color(color)
@@ -735,7 +751,7 @@ impl Editor {
                             )
                             .on_hover(cx.listener(Self::on_context_menu_pointer_hover));
                         if enabled {
-                            row.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            row.hover(|this| this.bg(palette.control_hover))
                                 .cursor_pointer()
                                 .on_click(cx.listener(Self::on_workspace_delete_menu))
                                 .into_any_element()

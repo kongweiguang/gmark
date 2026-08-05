@@ -25,7 +25,8 @@ use crate::components::{
 };
 use crate::i18n::I18nStrings;
 use crate::preferences::localized_shortcut_command_label;
-use crate::theme::Theme;
+use crate::theme::{Theme, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 const FILTER_DEBOUNCE: Duration = Duration::from_millis(20);
 const MAX_RESULTS: usize = 100;
@@ -95,6 +96,7 @@ struct PaletteCommand {
 
 pub(super) struct CommandPaletteState {
     input: Entity<Block>,
+    restore_focus: Option<EntityId>,
     commands: Vec<PaletteCommand>,
     filtered: Vec<usize>,
     selected: usize,
@@ -146,6 +148,7 @@ impl Editor {
         input.read(cx).focus_handle.focus(window);
         self.command_palette = Some(CommandPaletteState {
             input,
+            restore_focus: self.active_entity_id,
             commands,
             filtered: Vec::new(),
             selected: 0,
@@ -228,7 +231,11 @@ impl Editor {
     }
 
     pub(super) fn dismiss_command_palette(&mut self) -> bool {
-        self.command_palette.take().is_some()
+        let Some(state) = self.command_palette.take() else {
+            return false;
+        };
+        self.pending_focus = state.restore_focus;
+        true
     }
 
     pub(super) fn handle_command_palette_key(
@@ -251,12 +258,18 @@ impl Editor {
                     .get(state.selected)
                     .and_then(|index| state.commands.get(*index))
                     .map(|command| command.action.boxed_clone());
+                let restore_focus = state.restore_focus;
                 self.command_palette = None;
+                self.pending_focus = restore_focus;
                 if let Some(action) = action {
                     window.dispatch_action(action, cx);
                 }
             }
-            "escape" => self.command_palette = None,
+            "escape" => {
+                let restore_focus = state.restore_focus;
+                self.command_palette = None;
+                self.pending_focus = restore_focus;
+            }
             _ => return false,
         }
         cx.notify();
@@ -271,6 +284,13 @@ impl Editor {
     ) -> Option<AnyElement> {
         let state = self.command_palette.as_ref()?;
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let overlay_material = palette.material(SurfaceKind::GlassStrong, visual_preferences);
+        let input_material = palette.material(SurfaceKind::Solid, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         let editor = cx.entity().downgrade();
@@ -295,10 +315,10 @@ impl Editor {
                 .justify_center()
                 .items_start()
                 .pt(px(82.0))
-                .bg(c.dialog_backdrop)
+                .bg(palette.overlay_scrim)
                 .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
                     let _ = dismiss_editor.update(cx, |editor, cx| {
-                        editor.command_palette = None;
+                        editor.dismiss_command_palette();
                         cx.notify();
                     });
                 })
@@ -312,10 +332,10 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .overflow_hidden()
-                        .bg(c.dialog_surface)
+                        .bg(overlay_material.background)
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
-                        .rounded(px(d.dialog_radius.min(8.0)))
+                        .border_color(overlay_material.border)
+                        .rounded(px(d.dialog_radius.clamp(22.0, 28.0)))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                             cx.stop_propagation();
@@ -335,7 +355,7 @@ impl Editor {
                                         .truncate()
                                         .text_size(px(t.dialog_title_size))
                                         .font_weight(t.dialog_title_weight.to_font_weight())
-                                        .text_color(c.dialog_title)
+                                        .text_color(palette.text_primary)
                                         .child(strings.command_palette_title.clone()),
                                 )
                                 .child(
@@ -349,14 +369,14 @@ impl Editor {
                                         .justify_center()
                                         .rounded(px(5.0))
                                         .cursor_pointer()
-                                        .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                        .hover(|this| this.bg(palette.control_hover))
                                         .tooltip(move |_window, cx| {
                                             crate::ui::ui_tooltip(close_tooltip.clone(), cx)
                                         })
                                         .child(svg().path(CLOSE_ICON).size(px(15.0)))
                                         .on_click(move |_event, _window, cx| {
                                             let _ = close_editor.update(cx, |editor, cx| {
-                                                editor.command_palette = None;
+                                                editor.dismiss_command_palette();
                                                 cx.notify();
                                             });
                                         }),
@@ -375,14 +395,15 @@ impl Editor {
                                 .gap(px(8.0))
                                 .rounded(px(6.0))
                                 .border(px(d.dialog_border_width))
-                                .border_color(c.dialog_border)
+                                .border_color(input_material.border)
+                                .bg(input_material.background)
                                 .child(
                                     div()
                                         .id("command-palette-search-icon")
                                         .debug_selector(|| "command-palette-search-icon".to_owned())
                                         .size(px(16.0))
                                         .flex_shrink_0()
-                                        .text_color(c.dialog_muted)
+                                        .text_color(palette.text_secondary)
                                         .child(svg().path(SEARCH_ICON).size(px(16.0))),
                                 )
                                 .child(div().flex_1().min_w(px(0.0)).child(state.input.clone())),
@@ -401,7 +422,7 @@ impl Editor {
                                         .px(px(10.0))
                                         .py(px(14.0))
                                         .text_size(px(t.dialog_body_size))
-                                        .text_color(c.dialog_muted)
+                                        .text_color(palette.text_secondary)
                                         .child(empty_message)
                                 }))
                                 .children(state.filtered.iter().enumerate().filter_map(
@@ -423,18 +444,18 @@ impl Editor {
                                                 .gap(px(8.0))
                                                 .rounded(px(5.0))
                                                 .bg(if row == state.selected {
-                                                    c.selection
+                                                    palette.selection
                                                 } else {
                                                     hsla(0.0, 0.0, 0.0, 0.0)
                                                 })
                                                 .hover(|this| {
-                                                    this.bg(c.dialog_secondary_button_hover)
+                                                    this.bg(palette.control_hover)
                                                 })
                                                 .cursor_pointer()
                                                 .child(
                                                     menu_icon_slot(
                                                         Some(command.icon),
-                                                        c.dialog_muted,
+                                                        palette.icon,
                                                     )
                                                         .debug_selector(move || {
                                                             format!(
@@ -459,7 +480,7 @@ impl Editor {
                                                                     )
                                                                 })
                                                                 .text_size(px(t.dialog_body_size))
-                                                                .text_color(c.text_default)
+                                                                .text_color(palette.text_primary)
                                                                 .child(command.label.clone()),
                                                         )
                                                         .child(
@@ -473,7 +494,7 @@ impl Editor {
                                                                 .text_size(px(
                                                                     t.dialog_body_size * 0.82,
                                                                 ))
-                                                                .text_color(c.dialog_muted)
+                                                                .text_color(palette.text_secondary)
                                                                 .child(command.description.clone()),
                                                         ),
                                                 )
@@ -490,13 +511,13 @@ impl Editor {
                                                             )
                                                         })
                                                         .text_size(px(t.dialog_body_size * 0.86))
-                                                        .text_color(c.dialog_muted)
+                                                        .text_color(palette.text_secondary)
                                                         .child(command.shortcut.clone()),
                                                 )
                                                 .on_click(move |_event, window, cx| {
                                                     let action = action.boxed_clone();
                                                     let _ = editor.update(cx, |editor, _cx| {
-                                                        editor.command_palette = None;
+                                                        editor.dismiss_command_palette();
                                                     });
                                                     window.dispatch_action(action, cx);
                                                 }),

@@ -11,7 +11,8 @@ use super::{
     EditingSelectionContext, EditingViewMode, SLASH_COMMANDS, filter_commands,
 };
 use crate::i18n::I18nStrings;
-use crate::theme::Theme;
+use crate::theme::{Theme, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 const MAX_SLASH_QUERY_BYTES: usize = 64;
 const SLASH_MENU_WIDTH: f32 = 292.0;
@@ -26,21 +27,27 @@ struct BlockDragPreview;
 impl Render for BlockDragPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<crate::theme::ThemeManager>().current_arc();
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &theme.colors.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         div()
             .size(px(34.0))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(8.0))
-            .bg(theme.colors.dialog_surface)
+            .bg(material.background)
             .border(px(theme.dimensions.dialog_border_width))
-            .border_color(theme.colors.dialog_border)
+            .border_color(material.border)
             .shadow_md()
             .child(
                 svg()
                     .path("icon/ui/more-horizontal.svg")
                     .size(px(16.0))
-                    .text_color(theme.colors.dialog_muted),
+                    .text_color(palette.icon),
             )
     }
 }

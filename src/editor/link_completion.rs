@@ -7,7 +7,8 @@ use std::path::{Component, Path};
 
 use super::*;
 use crate::i18n::I18nStrings;
-use crate::theme::Theme;
+use crate::theme::{Theme, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 const WORKSPACE_LINK_MAX_RESULTS: usize = 50;
 
@@ -165,6 +166,12 @@ impl Editor {
         if self.source_document.revision() != state.base_revision {
             return None;
         }
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &theme.colors.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         let editor = cx.entity().downgrade();
         let rows = state
             .candidates
@@ -187,15 +194,17 @@ impl Editor {
                     .items_center()
                     .gap(px(8.0))
                     .bg(if selected {
-                        theme.colors.chrome_hover
+                        palette.control_hover
                     } else {
-                        theme.colors.dialog_surface
+                        material.background
                     })
+                    .hover(|this| this.bg(palette.control_hover))
                     .cursor_pointer()
+                    .text_color(palette.text_primary)
                     .child(div().flex_1().min_w(px(0.0)).child(label))
                     .children(detail.map(|detail| {
                         div()
-                            .text_color(theme.colors.dialog_muted)
+                            .text_color(palette.text_secondary)
                             .text_size(px(theme.typography.code_size))
                             .child(detail)
                     }))
@@ -215,14 +224,15 @@ impl Editor {
                 .right(px(18.0))
                 .bottom(px(48.0))
                 .w(px(420.0))
+                .max_w(relative(0.92))
                 .max_h(px(360.0))
                 .overflow_y_scroll()
-                .rounded(px(theme.dimensions.dialog_radius))
+                .rounded(px(theme.dimensions.dialog_radius.clamp(14.0, 18.0)))
                 .border(px(theme.dimensions.dialog_border_width))
-                .border_color(theme.colors.dialog_border)
-                .bg(theme.colors.dialog_surface)
+                .border_color(material.border)
+                .bg(material.background)
                 .shadow_lg()
-                .text_color(theme.colors.dialog_body)
+                .text_color(palette.text_primary)
                 .children(rows)
                 .tooltip({
                     let text: SharedString = strings

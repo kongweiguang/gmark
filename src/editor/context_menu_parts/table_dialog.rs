@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(in crate::editor) fn render_table_insert_dialog_overlay(
@@ -10,6 +12,12 @@ impl Editor {
     ) -> Option<AnyElement> {
         let dialog = self.table_insert_dialog.as_ref()?;
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::GlassStrong, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         let s = cx.global::<I18nManager>().strings().clone();
@@ -51,7 +59,7 @@ impl Editor {
                             .pr(px(d.table_insert_stepper_gap))
                             .text_size(px(t.dialog_body_size))
                             .font_weight(t.dialog_button_weight.to_font_weight())
-                            .text_color(c.dialog_body)
+                            .text_color(palette.text_primary)
                             .child(label),
                     )
                     .child(
@@ -69,18 +77,18 @@ impl Editor {
                                     .justify_center()
                                     .rounded(px(d.table_insert_stepper_radius))
                                     .border(px(d.dialog_border_width))
-                                    .border_color(c.dialog_border)
-                                    .bg(c.dialog_secondary_button_bg)
-                                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                    .border_color(material.border)
+                                    .bg(palette.control_surface)
+                                    .hover(|this| this.bg(palette.control_hover))
                                     .cursor_pointer()
-                                    .text_color(c.dialog_secondary_button_text)
+                                    .text_color(palette.text_primary)
                                     .on_click(cx.listener(on_dec))
                                     // GPUI 的 SVG 不继承父容器文本色，必须直接着色以保证深浅主题可见。
                                     .child(
                                         svg()
                                             .path(MINUS_ICON)
                                             .size(px(14.0))
-                                            .text_color(c.dialog_secondary_button_text),
+                                            .text_color(palette.text_primary),
                                     ),
                             )
                             .child(
@@ -93,10 +101,10 @@ impl Editor {
                                     .justify_center()
                                     .rounded(px(d.table_insert_stepper_radius))
                                     .border(px(d.dialog_border_width))
-                                    .border_color(c.dialog_border)
-                                    .bg(c.dialog_surface)
+                                    .border_color(material.border)
+                                    .bg(material.background)
                                     .text_size(px(t.dialog_body_size))
-                                    .text_color(c.dialog_title)
+                                    .text_color(palette.text_primary)
                                     .child(value.to_string()),
                             )
                             .child(
@@ -108,17 +116,17 @@ impl Editor {
                                     .justify_center()
                                     .rounded(px(d.table_insert_stepper_radius))
                                     .border(px(d.dialog_border_width))
-                                    .border_color(c.dialog_border)
-                                    .bg(c.dialog_secondary_button_bg)
-                                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                    .border_color(material.border)
+                                    .bg(palette.control_surface)
+                                    .hover(|this| this.bg(palette.control_hover))
                                     .cursor_pointer()
-                                    .text_color(c.dialog_secondary_button_text)
+                                    .text_color(palette.text_primary)
                                     .on_click(cx.listener(on_inc))
                                     .child(
                                         svg()
                                             .path(PLUS_ICON)
                                             .size(px(14.0))
-                                            .text_color(c.dialog_secondary_button_text),
+                                            .text_color(palette.text_primary),
                                     ),
                             ),
                     )

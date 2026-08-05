@@ -13,7 +13,8 @@ use super::{
 };
 use crate::components::markdown::inline::StyleFlag;
 use crate::i18n::{I18nManager, I18nStrings};
-use crate::theme::Theme;
+use crate::theme::{Theme, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 // 宽度与按钮、间距和 2px 面板内边距严格对应，避免尾部留下额外空白。
 const TOOLBAR_WITHOUT_BLOCK_TYPE_WIDTH: f32 = 182.0;

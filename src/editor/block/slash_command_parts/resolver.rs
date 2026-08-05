@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 pub(super) fn slash_menu_surface_bounds(
     kind: &BlockKind,
@@ -365,6 +367,7 @@ impl Block {
             return None;
         }
         let c = &theme.colors;
+        let palette = &c.workbench;
         let d = &theme.dimensions;
         // Callout 与脚注的实体会被编辑器级卡片再次缩进。块操作入口抵消这些外层
         // inset，始终锚定到文档内容列左边；嵌套脚注需要同时抵消两层容器。
@@ -389,8 +392,8 @@ impl Block {
                 .items_center()
                 .justify_center()
                 .rounded(px(5.0))
-                .text_color(c.dialog_muted)
-                .hover(|button| button.bg(c.dialog_secondary_button_hover))
+                .text_color(palette.icon)
+                .hover(|button| button.bg(palette.control_hover))
                 .active(|button| button.opacity(0.82))
                 .cursor_pointer()
                 .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
@@ -398,7 +401,7 @@ impl Block {
                     svg()
                         .path(icon)
                         .size(px(14.0))
-                        .text_color(c.dialog_muted)
+                        .text_color(palette.icon)
                         .debug_selector(move || format!("{id}-icon")),
                 )
         };
@@ -583,6 +586,12 @@ impl Block {
             };
         let context = self.editing_command_context();
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         let panel = div()
@@ -601,9 +610,9 @@ impl Block {
             .flex_col()
             .gap(px(d.menu_panel_gap))
             .occlude()
-            .bg(c.dialog_surface)
+            .bg(material.background)
             .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
+            .border_color(material.border)
             .rounded(px(d.menu_panel_radius.min(8.0)))
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -620,7 +629,7 @@ impl Block {
                             .flex()
                             .items_center()
                             .text_size(px(d.menu_text_size))
-                            .text_color(c.dialog_muted)
+                            .text_color(palette.text_secondary)
                             .child(
                                 strings
                                     .slash_commands
@@ -649,7 +658,7 @@ impl Block {
                         .flex()
                         .items_center()
                         .text_size(px((d.menu_text_size - 2.0).max(10.0)))
-                        .text_color(c.dialog_muted)
+                        .text_color(palette.text_secondary)
                         .child(
                             strings
                                 .slash_commands
@@ -675,7 +684,7 @@ impl Block {
                         .flex()
                         .items_center()
                         .text_size(px((d.menu_text_size - 2.0).max(10.0)))
-                        .text_color(c.dialog_muted)
+                        .text_color(palette.text_secondary)
                         .child(
                             strings
                                 .slash_commands
@@ -698,12 +707,12 @@ impl Block {
                 .rounded(px(d.menu_item_radius))
                 .opacity(if available { 1.0 } else { 0.45 })
                 .bg(if selected {
-                    c.dialog_secondary_button_hover
+                    palette.control_hover
                 } else {
-                    c.dialog_surface
+                    material.background
                 })
                 .when(available, |row| {
-                    row.hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    row.hover(|this| this.bg(palette.control_hover))
                         .on_hover(cx.listener(move |block, hovered: &bool, _window, cx| {
                             if *hovered
                                 && let Some(state) = block.slash_menu.as_mut()
@@ -733,7 +742,7 @@ impl Block {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(c.dialog_muted)
+                        .text_color(palette.icon)
                         .child(svg().path(descriptor.icon_path).size(px(16.0))),
                 )
                 .child(
@@ -744,7 +753,7 @@ impl Block {
                         .truncate()
                         .text_size(px(d.menu_text_size))
                         .font_weight(t.dialog_body_weight.to_font_weight())
-                        .text_color(c.dialog_secondary_button_text)
+                        .text_color(palette.text_primary)
                         .child(
                             strings
                                 .slash_commands

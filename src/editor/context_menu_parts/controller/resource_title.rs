@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(in crate::editor) fn open_resource_from_context_menu(
@@ -166,6 +168,12 @@ impl Editor {
             .cloned()
             .unwrap_or_else(|| "Edit Resource Title".to_owned());
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let solid_material = palette.material(SurfaceKind::Solid, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         Some(
@@ -190,7 +198,7 @@ impl Editor {
                             .child(
                                 div()
                                     .text_size(px(t.dialog_body_size))
-                                    .text_color(c.dialog_body)
+                                    .text_color(palette.text_primary)
                                     .child(
                                         strings
                                             .slash_commands
@@ -210,8 +218,8 @@ impl Editor {
                                     .items_center()
                                     .rounded(px(6.0))
                                     .border(px(d.dialog_border_width))
-                                    .border_color(c.dialog_border)
-                                    .bg(c.source_mode_block_bg)
+                                    .border_color(solid_material.border)
+                                    .bg(solid_material.background)
                                     .child(dialog.input.clone()),
                             ),
                         )

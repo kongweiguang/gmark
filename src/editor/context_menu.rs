@@ -500,7 +500,13 @@ impl Editor {
             return false;
         }
         if key == "escape" {
+            let restore_focus = self
+                .active_entity_id
+                .and_then(|entity_id| self.focusable_entity_by_id(entity_id));
             self.dismiss_contextual_overlays(cx);
+            if let Some(block) = restore_focus {
+                block.read(cx).focus_handle.focus(window);
+            }
             return true;
         }
 

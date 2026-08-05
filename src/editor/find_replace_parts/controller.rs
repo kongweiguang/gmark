@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(in crate::editor) fn refresh_find_if_stale(&mut self, cx: &mut Context<Self>) {
@@ -387,6 +389,13 @@ impl Editor {
     ) -> Option<AnyElement> {
         let state = self.find_panel.as_ref()?;
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
+        let solid_material = palette.material(SurfaceKind::Solid, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         let count = if let Some(error) = state.error.as_ref() {
@@ -427,28 +436,32 @@ impl Editor {
                     .rounded(px(4.0))
                     .border(px(1.0))
                     .border_color(if state.keyboard_target == target {
-                        c.text_link
+                        palette.focus_ring
                     } else {
                         hsla(0.0, 0.0, 0.0, 0.0)
                     })
                     .bg(if active {
-                        c.dialog_secondary_button_hover
+                        palette.control_hover
                     } else {
-                        c.dialog_secondary_button_bg
+                        palette.control_surface
                     })
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .hover(|this| this.bg(palette.control_hover))
                     .cursor_pointer()
-                    .text_color(c.dialog_body)
+                    .text_color(palette.text_primary)
                     .child(
                         svg()
                             .path(icon)
                             .size(px(15.0))
-                            .text_color(if active { c.text_link } else { c.dialog_body })
+                            .text_color(if active {
+                                palette.accent
+                            } else {
+                                palette.text_primary
+                            })
                             .debug_selector(move || format!("{id}-icon")),
                     )
                     .children(
                         (state.tooltip_visible == Some(id))
-                            .then(|| render_find_tooltip(label, theme)),
+                            .then(|| render_find_tooltip(label, theme, visual_preferences)),
                     )
                     .on_hover(move |hovered, _window, cx| {
                         let _ = hover_editor.update(cx, |editor, cx| {
@@ -475,11 +488,11 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.0))
-                    .bg(c.dialog_secondary_button_bg)
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .bg(palette.control_surface)
+                    .hover(|this| this.bg(palette.control_hover))
                     .cursor_pointer()
                     .text_size(px(t.dialog_button_size))
-                    .text_color(c.dialog_secondary_button_text)
+                    .text_color(palette.text_primary)
                     .on_click(cx.listener(move |editor, _event, window, cx| {
                         handler(editor, window, cx);
                     }))
@@ -504,11 +517,11 @@ impl Editor {
                     .rounded(px(5.0))
                     .border(px(d.dialog_border_width))
                     .border_color(if state.keyboard_target == FindKeyboardTarget::Query {
-                        c.text_link
+                        palette.focus_ring
                     } else {
-                        c.dialog_border
+                        material.border
                     })
-                    .bg(c.code_language_input_bg)
+                    .bg(solid_material.background)
                     .child(state.query.clone()),
             )
             .child(
@@ -520,9 +533,9 @@ impl Editor {
                     .text_ellipsis()
                     .text_size(px(12.0))
                     .text_color(if state.error.is_some() {
-                        c.dialog_danger_button_bg
+                        palette.danger
                     } else {
-                        c.dialog_muted
+                        palette.text_secondary
                     })
                     .child(count),
             )
@@ -558,15 +571,15 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.0))
-                    .bg(c.dialog_secondary_button_bg)
-                    .text_color(c.dialog_body)
+                    .bg(palette.control_surface)
+                    .text_color(palette.text_primary)
                     .border(px(1.0))
                     .border_color(if state.keyboard_target == FindKeyboardTarget::Previous {
-                        c.text_link
+                        palette.focus_ring
                     } else {
                         hsla(0.0, 0.0, 0.0, 0.0)
                     })
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .hover(|this| this.bg(palette.control_hover))
                     .cursor_pointer()
                     .on_click(cx.listener(|editor, _event, window, cx| {
                         editor.navigate_find_match(-1, window, cx);
@@ -576,7 +589,7 @@ impl Editor {
                         svg()
                             .path(CHEVRON_UP_ICON)
                             .size(px(15.0))
-                            .text_color(c.dialog_body)
+                            .text_color(palette.text_primary)
                             .debug_selector(|| "document-find-previous-icon".to_owned()),
                     ),
             )
@@ -588,15 +601,15 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.0))
-                    .bg(c.dialog_secondary_button_bg)
-                    .text_color(c.dialog_body)
+                    .bg(palette.control_surface)
+                    .text_color(palette.text_primary)
                     .border(px(1.0))
                     .border_color(if state.keyboard_target == FindKeyboardTarget::Next {
-                        c.text_link
+                        palette.focus_ring
                     } else {
                         hsla(0.0, 0.0, 0.0, 0.0)
                     })
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .hover(|this| this.bg(palette.control_hover))
                     .cursor_pointer()
                     .on_click(cx.listener(|editor, _event, window, cx| {
                         editor.navigate_find_match(1, window, cx);
@@ -606,7 +619,7 @@ impl Editor {
                         svg()
                             .path(CHEVRON_DOWN_ICON)
                             .size(px(15.0))
-                            .text_color(c.dialog_body)
+                            .text_color(palette.text_primary)
                             .debug_selector(|| "document-find-next-icon".to_owned()),
                     ),
             )
@@ -618,15 +631,15 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.0))
-                    .bg(c.dialog_secondary_button_bg)
-                    .text_color(c.dialog_body)
+                    .bg(palette.control_surface)
+                    .text_color(palette.text_primary)
                     .border(px(1.0))
                     .border_color(if state.keyboard_target == FindKeyboardTarget::Close {
-                        c.text_link
+                        palette.focus_ring
                     } else {
                         hsla(0.0, 0.0, 0.0, 0.0)
                     })
-                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                    .hover(|this| this.bg(palette.control_hover))
                     .cursor_pointer()
                     .on_click(cx.listener(|editor, _event, window, cx| {
                         editor.focus_find_keyboard_target(FindKeyboardTarget::Close, window, cx);
@@ -636,7 +649,7 @@ impl Editor {
                         svg()
                             .path(CLOSE_ICON)
                             .size(px(15.0))
-                            .text_color(c.dialog_body)
+                            .text_color(palette.text_primary)
                             .debug_selector(|| "document-find-close-icon".to_owned()),
                     ),
             )
@@ -661,12 +674,12 @@ impl Editor {
                         .border(px(d.dialog_border_width))
                         .border_color(
                             if state.keyboard_target == FindKeyboardTarget::Replacement {
-                                c.text_link
+                                palette.focus_ring
                             } else {
-                                c.dialog_border
+                                material.border
                             },
                         )
-                        .bg(c.code_language_input_bg)
+                        .bg(solid_material.background)
                         .child(state.replacement.clone()),
                 )
                 .child(compact_button(
@@ -696,10 +709,10 @@ impl Editor {
                 .flex_col()
                 .gap(px(2.0))
                 .occlude()
-                .bg(c.dialog_surface)
+                .bg(material.background)
                 .border(px(d.dialog_border_width))
-                .border_color(c.dialog_border)
-                .rounded(px(10.0))
+                .border_color(material.border)
+                .rounded(px(14.0))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                     cx.stop_propagation();

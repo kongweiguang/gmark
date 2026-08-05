@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(super) fn render_table_axis_context_menu(
@@ -12,6 +14,12 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         let s = cx.global::<I18nManager>().strings().clone();
@@ -112,7 +120,7 @@ impl Editor {
                     .mx(px(d.menu_separator_margin_x))
                     .my(px(d.menu_separator_margin_y))
                     .h(px(d.menu_separator_height))
-                    .bg(c.dialog_border)
+                    .bg(material.border)
                     .into_any_element(),
                 Self::render_axis_menu_item(
                     theme,
@@ -140,7 +148,7 @@ impl Editor {
                     .mx(px(d.menu_separator_margin_x))
                     .my(px(d.menu_separator_margin_y))
                     .h(px(d.menu_separator_height))
-                    .bg(c.dialog_border)
+                    .bg(material.border)
                     .into_any_element(),
                 Self::render_axis_menu_item(
                     theme,
@@ -226,14 +234,14 @@ impl Editor {
                             .gap(px(6.0))
                             .rounded(px(d.menu_item_radius))
                             .bg(if self.context_menu_keyboard_item == Some(3) {
-                                c.dialog_secondary_button_hover
+                                palette.control_hover
                             } else {
-                                c.dialog_surface
+                                material.background
                             })
                             .text_size(px(d.menu_text_size))
                             .font_weight(t.dialog_body_weight.to_font_weight())
-                            .text_color(c.dialog_secondary_button_text)
-                            .child(menu_icon_slot(Some(TABLE_ICON), c.dialog_muted))
+                            .text_color(palette.text_primary)
+                            .child(menu_icon_slot(Some(TABLE_ICON), palette.icon))
                             .child(
                                 div()
                                     .flex_1()
@@ -254,7 +262,7 @@ impl Editor {
                                             .then(|| svg().path(CHECK_ICON).size(px(14.0))),
                                     ),
                             )
-                            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                            .hover(|this| this.bg(palette.control_hover))
                             .on_hover(cx.listener(Self::on_context_menu_pointer_hover))
                             .cursor_pointer()
                             .on_click(cx.listener(Self::on_toggle_table_headers))
@@ -265,7 +273,7 @@ impl Editor {
                             .mx(px(d.menu_separator_margin_x))
                             .my(px(d.menu_separator_margin_y))
                             .h(px(d.menu_separator_height))
-                            .bg(c.dialog_border)
+                            .bg(material.border)
                             .into_any_element(),
                     );
                 }
@@ -298,7 +306,7 @@ impl Editor {
                         .mx(px(d.menu_separator_margin_x))
                         .my(px(d.menu_separator_margin_y))
                         .h(px(d.menu_separator_height))
-                        .bg(c.dialog_border)
+                        .bg(material.border)
                         .into_any_element(),
                 );
                 // Always enabled: deleting the header promotes the first
@@ -360,9 +368,11 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .gap(px(d.menu_panel_gap))
-                        .bg(c.dialog_surface)
+                        .max_h(relative(0.82))
+                        .overflow_y_scroll()
+                        .bg(material.background)
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
+                        .border_color(material.border)
                         .rounded(px(d.menu_panel_radius))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {

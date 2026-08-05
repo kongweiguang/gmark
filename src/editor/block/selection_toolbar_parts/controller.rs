@@ -239,6 +239,12 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         let strings = cx.global::<I18nManager>().strings();
         let tooltip_label: SharedString = if command == ToolbarCommand::BlockType {
             EditingCommandId::for_block_kind(&self.kind())
@@ -277,7 +283,7 @@ impl Block {
                         svg()
                             .path(descriptor.icon_path)
                             .size(px(15.0))
-                            .text_color(c.dialog_body),
+                            .text_color(palette.text_primary),
                     )
                     .when(show_block_type_label, |content| {
                         content.child(
@@ -287,7 +293,7 @@ impl Block {
                                 .overflow_hidden()
                                 .truncate()
                                 .text_size(px(12.0))
-                                .text_color(c.dialog_body)
+                                .text_color(palette.text_primary)
                                 .child(tooltip_label.clone()),
                         )
                     })
@@ -295,7 +301,7 @@ impl Block {
                         svg()
                             .path("icon/ui/chevron-down.svg")
                             .size(px(11.0))
-                            .text_color(c.dialog_muted),
+                            .text_color(palette.text_secondary),
                     )
                     .into_any_element()
             }
@@ -307,12 +313,20 @@ impl Block {
                     _ => unreachable!(),
                 })
                 .size(px(15.0))
-                .text_color(if active { c.text_link } else { c.dialog_body })
+                .text_color(if active {
+                    palette.accent
+                } else {
+                    palette.text_primary
+                })
                 .into_any_element(),
             _ => {
                 let symbol = div()
                     .text_size(px(13.0))
-                    .text_color(if active { c.text_link } else { c.dialog_body })
+                    .text_color(if active {
+                        palette.accent
+                    } else {
+                        palette.text_primary
+                    })
                     .child(command.symbol());
                 match command {
                     ToolbarCommand::Bold => symbol.font_weight(FontWeight::BOLD),
@@ -353,16 +367,16 @@ impl Block {
             .rounded(px(4.0))
             .border(px(1.0))
             .border_color(if keyboard_focused {
-                c.text_link
+                palette.focus_ring
             } else {
-                c.dialog_surface
+                material.border
             })
             .bg(if active {
-                c.dialog_secondary_button_hover
+                palette.control_hover
             } else {
-                c.dialog_surface
+                material.background
             })
-            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+            .hover(|this| this.bg(palette.control_hover))
             .active(|this| this.opacity(0.86))
             .opacity(if available { 1.0 } else { 0.45 })
             .when(available, |button| button.cursor_pointer())
@@ -409,6 +423,13 @@ impl Block {
         );
         let d = &theme.dimensions;
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
+        let solid_material = palette.material(SurfaceKind::Solid, visual_preferences);
         let toolbar_width =
             selection_toolbar_width(text_bounds, viewport, expanded_block_type_width);
         let show_block_type_label = show_block_type && toolbar_width > TOOLBAR_COMPACT_WIDTH;
@@ -443,10 +464,12 @@ impl Block {
                 .absolute()
                 .right_0()
                 .p(px(2.0))
-                .bg(c.dialog_surface)
+                .max_h(px(OVERFLOW_MENU_HEIGHT))
+                .overflow_y_scroll()
+                .bg(material.background)
                 .border(px(d.dialog_border_width))
-                .border_color(c.dialog_border)
-                .rounded(px(6.0))
+                .border_color(material.border)
+                .rounded(px(12.0))
                 .shadow_md()
                 .occlude()
                 .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
@@ -524,18 +547,18 @@ impl Block {
                         .gap(px(8.0))
                         .rounded(px(d.menu_item_radius))
                         .bg(if selected {
-                            c.dialog_secondary_button_hover
+                            palette.control_hover
                         } else {
-                            c.dialog_surface
+                            material.background
                         })
-                        .hover(|item| item.bg(c.dialog_secondary_button_hover))
+                        .hover(|item| item.bg(palette.control_hover))
                         .cursor_pointer()
                         .child(svg().path(descriptor.icon_path).size(px(15.0)))
                         .child(
                             div()
                                 .min_w(px(0.0))
                                 .text_size(px(d.menu_text_size))
-                                .text_color(c.dialog_body)
+                                .text_color(palette.text_primary)
                                 .child(label),
                         )
                         .on_click(cx.listener(move |block, _event, _window, cx| {
@@ -558,10 +581,10 @@ impl Block {
                 .flex()
                 .flex_col()
                 .gap(px(d.menu_panel_gap))
-                .bg(c.dialog_surface)
+                .bg(material.background)
                 .border(px(d.dialog_border_width))
-                .border_color(c.dialog_border)
-                .rounded(px(d.menu_panel_radius.min(8.0)))
+                .border_color(material.border)
+                .rounded(px(d.menu_panel_radius.clamp(14.0, 18.0)))
                 .shadow_lg()
                 .children(items);
             if type_menu_above {
@@ -603,10 +626,10 @@ impl Block {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .bg(c.dialog_surface)
+                .bg(material.background)
                 .border(px(d.dialog_border_width))
-                .border_color(c.dialog_border)
-                .rounded(px(8.0))
+                .border_color(material.border)
+                .rounded(px(14.0))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                     cx.stop_propagation();
@@ -621,8 +644,8 @@ impl Block {
                         .items_center()
                         .rounded(px(5.0))
                         .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
-                        .bg(c.code_language_input_bg)
+                        .border_color(solid_material.border)
+                        .bg(solid_material.background)
                         .child(input),
                 )
                 .when(self.selection_toolbar_link_had_target, |popover| {
@@ -635,8 +658,8 @@ impl Block {
                             .items_center()
                             .rounded(px(5.0))
                             .text_size(px(d.menu_text_size))
-                            .text_color(c.dialog_muted)
-                            .hover(|button| button.bg(c.dialog_secondary_button_hover))
+                            .text_color(palette.text_secondary)
+                            .hover(|button| button.bg(palette.control_hover))
                             .cursor_pointer()
                             .child(remove_label)
                             .on_click(cx.listener(|block, _event, window, cx| {
@@ -653,9 +676,9 @@ impl Block {
                         .items_center()
                         .rounded(px(5.0))
                         .text_size(px(d.menu_text_size))
-                        .text_color(c.dialog_primary_button_text)
-                        .bg(c.dialog_primary_button_bg)
-                        .hover(|button| button.bg(c.dialog_primary_button_hover))
+                        .text_color(palette.text_inverse)
+                        .bg(palette.accent)
+                        .hover(|button| button.bg(palette.accent_hover))
                         .cursor_pointer()
                         .child(apply_label)
                         .on_click(cx.listener(|block, _event, window, cx| {
@@ -682,9 +705,9 @@ impl Block {
             .gap(px(2.0))
             .rounded(px(6.0))
             .occlude()
-            .bg(c.dialog_surface)
+            .bg(material.background)
             .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
+            .border_color(material.border)
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation();

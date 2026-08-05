@@ -1,6 +1,8 @@
 // @author kongweiguang
 
 use super::*;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(in crate::editor) fn render_axis_menu_item(
@@ -15,14 +17,20 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &c.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         let d = &theme.dimensions;
         let t = &theme.typography;
         let text_color = if danger {
-            c.dialog_danger_button_bg
+            palette.danger
         } else if enabled {
-            c.dialog_secondary_button_text
+            palette.text_primary
         } else {
-            c.dialog_muted
+            palette.text_secondary
         };
         let row = div()
             .id(id)
@@ -34,9 +42,9 @@ impl Editor {
             .gap(px(6.0))
             .rounded(px(d.menu_item_radius))
             .bg(if keyboard_selected {
-                c.dialog_secondary_button_hover
+                palette.control_hover
             } else {
-                c.dialog_surface
+                material.background
             })
             .text_size(px(d.menu_text_size))
             .font_weight(t.dialog_body_weight.to_font_weight())
@@ -54,7 +62,7 @@ impl Editor {
             )
             .on_hover(cx.listener(Self::on_context_menu_pointer_hover));
         if enabled {
-            row.hover(|this| this.bg(c.dialog_secondary_button_hover))
+            row.hover(|this| this.bg(palette.control_hover))
                 .cursor_pointer()
                 .on_click(cx.listener(on_click))
                 .into_any_element()

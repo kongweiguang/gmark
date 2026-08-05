@@ -5,7 +5,8 @@
 use super::*;
 use crate::components::parse_table_fragment_rows;
 use crate::i18n::I18nStrings;
-use crate::theme::Theme;
+use crate::theme::{Theme, workbench::SurfaceKind};
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
     pub(super) fn render_table_fragment_merge_prompt(
@@ -15,6 +16,12 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let state = self.table_fragment_merge.as_ref()?;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let palette = &theme.colors.workbench;
+        let material = palette.material(SurfaceKind::Glass, visual_preferences);
         let editor = cx.entity().downgrade();
         let buttons = state
             .targets
@@ -34,14 +41,15 @@ impl Editor {
                     .id(SharedString::from(format!("table-fragment-merge-{index}")))
                     .debug_selector(move || format!("table-fragment-merge-{index}"))
                     .h(px(theme.dimensions.dialog_button_height))
+                    .flex_shrink_0()
                     .px(px(theme.dimensions.dialog_button_padding_x))
                     .flex()
                     .items_center()
                     .justify_center()
                     .rounded(px(6.0))
-                    .bg(theme.colors.dialog_primary_button_bg)
-                    .text_color(theme.colors.dialog_primary_button_text)
-                    .hover(|this| this.bg(theme.colors.dialog_primary_button_hover))
+                    .bg(palette.accent)
+                    .text_color(palette.text_inverse)
+                    .hover(|this| this.bg(palette.accent_hover))
                     .cursor_pointer()
                     .child(label.to_owned())
                     .on_click(move |_, _window, cx| {
@@ -65,18 +73,23 @@ impl Editor {
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .rounded(px(theme.dimensions.dialog_radius))
+                .rounded(px(theme.dimensions.dialog_radius.clamp(14.0, 18.0)))
                 .border(px(theme.dimensions.dialog_border_width))
-                .border_color(theme.colors.dialog_border)
-                .bg(theme.colors.dialog_surface)
+                .border_color(material.border)
+                .bg(material.background)
                 .shadow_lg()
-                .text_color(theme.colors.dialog_body)
+                .text_color(palette.text_primary)
                 .child(
-                    div().flex_1().min_w(px(120.0)).child(
-                        strings
-                            .large_document_text("table_fragment_prompt")
-                            .to_owned(),
-                    ),
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .truncate()
+                        .child(
+                            strings
+                                .large_document_text("table_fragment_prompt")
+                                .to_owned(),
+                        ),
                 )
                 .children(buttons)
                 .child(
@@ -84,16 +97,17 @@ impl Editor {
                         .id("table-fragment-merge-cancel")
                         .debug_selector(|| "table-fragment-merge-cancel".to_owned())
                         .h(px(theme.dimensions.dialog_button_height))
+                        .flex_shrink_0()
                         .px(px(theme.dimensions.dialog_button_padding_x))
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded(px(6.0))
                         .border(px(theme.dimensions.dialog_border_width))
-                        .border_color(theme.colors.dialog_border)
-                        .bg(theme.colors.dialog_secondary_button_bg)
-                        .text_color(theme.colors.dialog_secondary_button_text)
-                        .hover(|this| this.bg(theme.colors.dialog_secondary_button_hover))
+                        .border_color(material.border)
+                        .bg(palette.control_surface)
+                        .text_color(palette.text_primary)
+                        .hover(|this| this.bg(palette.control_hover))
                         .cursor_pointer()
                         .child(strings.large_document_text("cancel").to_owned())
                         .on_click(move |_, _window, cx| {
