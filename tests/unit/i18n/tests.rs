@@ -34,6 +34,12 @@ fn built_in_chinese_strings_are_utf8() {
         "正在检查 gmark 的最新版本..."
     );
     assert_eq!(strings.update_open_release, "下载并安装");
+    assert_eq!(strings.preferences_reduced_motion, "减少动态效果");
+    assert_eq!(strings.preferences_accessibility_system, "跟随系统");
+    assert_eq!(
+        I18nStrings::en_us().preferences_reduced_transparency,
+        "Reduce Transparency"
+    );
     assert_eq!(strings.help_about_github_label, "GitHub");
     assert_eq!(
         strings.help_about_star_message,

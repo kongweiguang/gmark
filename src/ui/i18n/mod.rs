@@ -269,6 +269,16 @@ pub struct I18nStrings {
     pub preferences_theme_light: String,
     /// Theme option that follows the operating-system appearance.
     pub preferences_follow_system_theme: String,
+    pub preferences_accessibility_title: String,
+    pub preferences_reduced_motion: String,
+    pub preferences_reduced_motion_hint: String,
+    pub preferences_reduced_transparency: String,
+    pub preferences_reduced_transparency_hint: String,
+    pub preferences_high_contrast: String,
+    pub preferences_high_contrast_hint: String,
+    pub preferences_accessibility_system: String,
+    pub preferences_accessibility_enabled: String,
+    pub preferences_accessibility_disabled: String,
     /// Image paste behavior field label.
     pub preferences_image_insert_behavior: String,
     pub preferences_image_paste_none: String,

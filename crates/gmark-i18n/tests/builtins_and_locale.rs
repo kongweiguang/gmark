@@ -7,11 +7,11 @@ use gmark_i18n::{
 use std::sync::Arc;
 
 #[test]
-fn builtins_preserve_the_complete_legacy_key_set() {
+fn builtins_preserve_the_complete_ui_key_set() {
     let english = I18nCatalog::new_with_language_id(BUILTIN_LANGUAGE_EN_US_ID).strings_clone();
     let chinese = I18nCatalog::new_with_language_id(BUILTIN_LANGUAGE_ZH_CN_ID).strings_clone();
 
-    assert_eq!(english.scalars().len(), 395);
+    assert_eq!(english.scalars().len(), 405);
     assert_eq!(
         english.scalars().keys().collect::<Vec<_>>(),
         chinese.scalars().keys().collect::<Vec<_>>()

@@ -1,0 +1,29 @@
+{
+  "author": "kongweiguang",
+  "catalogs": {
+    "en-US": {
+      "preferences_accessibility_title": "Accessibility",
+      "preferences_reduced_motion": "Reduce Motion",
+      "preferences_reduced_motion_hint": "Limits movement while keeping feedback immediate.",
+      "preferences_reduced_transparency": "Reduce Transparency",
+      "preferences_reduced_transparency_hint": "Uses stable solid surfaces instead of translucent materials.",
+      "preferences_high_contrast": "Increase Contrast",
+      "preferences_high_contrast_hint": "Strengthens text, borders, and keyboard focus indicators.",
+      "preferences_accessibility_system": "System",
+      "preferences_accessibility_enabled": "On",
+      "preferences_accessibility_disabled": "Off"
+    },
+    "zh-CN": {
+      "preferences_accessibility_title": "辅助功能",
+      "preferences_reduced_motion": "减少动态效果",
+      "preferences_reduced_motion_hint": "减少位移与缩放，同时保持操作反馈即时。",
+      "preferences_reduced_transparency": "降低透明度",
+      "preferences_reduced_transparency_hint": "使用稳定实色表面替代半透明材质。",
+      "preferences_high_contrast": "增强对比度",
+      "preferences_high_contrast_hint": "增强文字、边界与键盘焦点指示。",
+      "preferences_accessibility_system": "跟随系统",
+      "preferences_accessibility_enabled": "开启",
+      "preferences_accessibility_disabled": "关闭"
+    }
+  }
+}
