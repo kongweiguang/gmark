@@ -178,6 +178,90 @@ impl ThemePalette {
     }
 }
 
+/// 用户对系统视觉无障碍设置的覆盖方式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AccessibilityOverride {
+    /// 跟随操作系统；平台无法可靠读取时使用安全默认值。
+    #[default]
+    System,
+    /// 无论系统值如何都启用该能力。
+    Enabled,
+    /// 无论系统值如何都禁用该能力。
+    Disabled,
+}
+
+impl AccessibilityOverride {
+    /// 返回稳定的 TOML 表示。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    /// 解析稳定的 TOML 表示；非法值由调用方独立回退。
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "system" => Some(Self::System),
+            "enabled" => Some(Self::Enabled),
+            "disabled" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+
+    const fn resolve(self, system_value: bool) -> bool {
+        match self {
+            Self::System => system_value,
+            Self::Enabled => true,
+            Self::Disabled => false,
+        }
+    }
+}
+
+/// 持久化的视觉无障碍偏好。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VisualAccessibilityPreferences {
+    /// 减少非必要位移、缩放和惯性动画。
+    pub reduced_motion: AccessibilityOverride,
+    /// 使用稳定实色替代半透明材质。
+    pub reduced_transparency: AccessibilityOverride,
+    /// 增强文字、边界和焦点环的区分度。
+    pub high_contrast: AccessibilityOverride,
+}
+
+impl VisualAccessibilityPreferences {
+    /// 以显式覆盖优先、系统设置次之的顺序解析最终值。
+    #[must_use]
+    pub const fn resolve(self, system: SystemVisualPreferences) -> ResolvedVisualPreferences {
+        ResolvedVisualPreferences {
+            reduced_motion: self.reduced_motion.resolve(system.reduced_motion),
+            reduced_transparency: self
+                .reduced_transparency
+                .resolve(system.reduced_transparency),
+            high_contrast: self.high_contrast.resolve(system.high_contrast),
+        }
+    }
+}
+
+/// 平台 adapter 读取到的视觉无障碍状态。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemVisualPreferences {
+    pub reduced_motion: bool,
+    pub reduced_transparency: bool,
+    pub high_contrast: bool,
+}
+
+/// 渲染层消费的最终视觉无障碍状态。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResolvedVisualPreferences {
+    pub reduced_motion: bool,
+    pub reduced_transparency: bool,
+    pub high_contrast: bool,
+}
+
 /// 状态栏中的自定义按钮。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusBarButton {
@@ -275,6 +359,8 @@ pub struct AppPreferences {
     pub theme_appearance: ThemeAppearance,
     /// 主题调色板偏好。
     pub theme_palette: ThemePalette,
+    /// 视觉无障碍覆盖偏好。
+    pub visual_accessibility: VisualAccessibilityPreferences,
     /// 是否显示表格标题行。
     pub show_table_headers: bool,
     /// 插入资源时的存储策略。
@@ -322,6 +408,7 @@ impl Default for AppPreferences {
             default_language_id: DEFAULT_LANGUAGE_ID.into(),
             theme_appearance: ThemeAppearance::System,
             theme_palette: ThemePalette::Xcode,
+            visual_accessibility: VisualAccessibilityPreferences::default(),
             show_table_headers: true,
             image_paste_behavior: ImagePasteBehavior::None,
             auto_save: AutoSavePreference::Off,

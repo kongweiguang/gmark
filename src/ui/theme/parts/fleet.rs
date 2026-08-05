@@ -13,6 +13,7 @@ impl Theme {
         let mut theme = Self::xcode_dark();
         theme.name = "Fleet Dark".into();
         let colors = &mut theme.colors;
+        colors.workbench = WorkbenchThemeTokens::fleet_dark();
         colors.editor_background = Hsla::from(rgba(0x18191bff));
         colors.source_mode_block_bg = Hsla::from(rgba(0x101112ff));
         colors.comment_bg = Hsla::from(rgba(0x726cf926));
@@ -110,6 +111,7 @@ impl Theme {
         let mut theme = Self::xcode_light();
         theme.name = "Fleet Light".into();
         let colors = &mut theme.colors;
+        colors.workbench = WorkbenchThemeTokens::fleet_light();
         colors.editor_background = Hsla::from(rgba(0xffffffff));
         colors.source_mode_block_bg = Hsla::from(rgba(0xf2f2f2ff));
         colors.comment_bg = Hsla::from(rgba(0x726cf91f));

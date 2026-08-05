@@ -2,11 +2,15 @@
 
 //! A pill-shaped toggle switch component with slide animation.
 
-use std::time::Duration;
+use std::time::Instant;
 
 use gpui::{prelude::FluentBuilder, *};
 
-use crate::ui::theme::ThemeManager;
+use crate::ui::{
+    motion::{MotionOrigin, MotionTokens, TransitionState},
+    theme::{ThemeManager, workbench::SurfaceKind},
+    visual_preferences::VisualPreferencesManager,
+};
 
 type ClickHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static;
 type KeyHandler = dyn Fn(&KeyDownEvent, &mut Window, &mut App) + 'static;
@@ -77,17 +81,11 @@ impl RenderOnce for Switch {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.global::<ThemeManager>().current().clone();
         let c = &theme.colors;
+        let workbench = &c.workbench;
 
         let checked = self.checked;
         let disabled = self.disabled;
 
-        let track_color = if disabled {
-            c.dialog_secondary_button_bg
-        } else if checked {
-            c.dialog_primary_button_bg
-        } else {
-            c.dialog_secondary_button_bg
-        };
         let thumb_color = if disabled {
             c.dialog_secondary_button_text
         } else if checked {
@@ -96,24 +94,52 @@ impl RenderOnce for Switch {
             c.dialog_secondary_button_text
         };
 
-        // Keep the visual position across renders so we can detect changes.
-        let toggle_state = window.use_keyed_state::<bool>(self.id.clone(), cx, |_, _| checked);
-        let prev_checked = *toggle_state.read(cx);
-        let target: f32 = if checked { 16.0 } else { 0.0 };
-        let origin: f32 = if prev_checked { 16.0 } else { 0.0 };
-        let needs_animation = prev_checked != checked;
-        let duration = Duration::from_secs_f64(0.18);
-
-        if needs_animation {
-            cx.spawn({
-                let toggle_state = toggle_state.clone();
-                async move |cx| {
-                    cx.background_executor().timer(duration).await;
-                    _ = toggle_state.update(cx, |state, _| *state = checked);
+        let target = if checked { 1.0 } else { 0.0 };
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let duration = MotionTokens::default()
+            .resolved(visual_preferences.reduced_motion)
+            .switch;
+        let solid_material = workbench.material(SurfaceKind::Solid, visual_preferences);
+        let track_color = if disabled {
+            solid_material.background
+        } else if checked {
+            workbench.accent
+        } else {
+            workbench.control_surface
+        };
+        let track_hover = if checked {
+            workbench.accent_hover
+        } else {
+            workbench.control_hover
+        };
+        let track_pressed = if checked {
+            workbench.accent_pressed
+        } else {
+            workbench.control_pressed
+        };
+        let now = Instant::now();
+        let toggle_state =
+            window.use_keyed_state::<TransitionState>(self.id.clone(), cx, |_, _| {
+                if checked {
+                    TransitionState::visible()
+                } else {
+                    TransitionState::hidden()
                 }
-            })
-            .detach();
-        }
+            });
+        toggle_state.update(cx, |state, _| {
+            state.sample(now);
+            if (state.target() - target).abs() >= f32::EPSILON {
+                state.retarget(target, now, duration, MotionOrigin::Programmatic);
+            }
+        });
+        let transition = toggle_state.read(cx).clone();
+        let origin = transition.value() * 16.0;
+        let target_margin = target * 16.0;
+        let needs_animation = transition.is_active() && !duration.is_zero();
+        let generation = transition.generation();
 
         let thumb = div()
             .w(px(16.0))
@@ -123,10 +149,10 @@ impl RenderOnce for Switch {
             .map(|mut this| {
                 if needs_animation {
                     this.with_animation(
-                        ElementId::NamedInteger("switch-move".into(), checked as u64),
-                        Animation::new(duration),
+                        ElementId::NamedInteger("switch-move".into(), generation),
+                        Animation::new(duration).with_easing(ease_out_quint()),
                         move |mut this, delta| {
-                            let margin = origin + (target - origin) * delta;
+                            let margin = origin + (target_margin - origin) * delta;
                             this.style().margin.left =
                                 Some(Length::Definite(DefiniteLength::from(px(margin))));
                             this
@@ -135,7 +161,7 @@ impl RenderOnce for Switch {
                     .into_any_element()
                 } else {
                     this.style().margin.left =
-                        Some(Length::Definite(DefiniteLength::from(px(target))));
+                        Some(Length::Definite(DefiniteLength::from(px(target_margin))));
                     this.into_any_element()
                 }
             });
@@ -154,11 +180,15 @@ impl RenderOnce for Switch {
             .border(px(1.0))
             .border_color(hsla(0.0, 0.0, 0.0, 0.0))
             .bg(track_color)
-            .when(!disabled, |this| this.cursor_pointer())
+            .when(!disabled, |this| {
+                this.cursor_pointer()
+                    .hover(move |style| style.bg(track_hover))
+                    .active(move |style| style.bg(track_pressed))
+            })
             .when_some(self.focus_handle, |this, focus_handle| {
                 this.tab_index(0)
                     .track_focus(&focus_handle)
-                    .focus(|this| this.border_color(c.text_link))
+                    .focus(|this| this.border_color(workbench.focus_ring))
             })
             .child(thumb)
             .when_some(self.on_click, |this, on_click| this.on_click(on_click))

@@ -222,6 +222,29 @@ fn authors_require_header_but_ignore_non_maintainable_data() {
 }
 
 #[test]
+fn ui_colors_allow_theme_and_transparent_geometry_but_reject_runtime_literals() {
+    let accepted = Fixture::new();
+    accepted.write(
+        "src/ui/theme/palette.rs",
+        &with_author("pub fn color() { let _ = rgba(0x007affff); }\n"),
+    );
+    accepted.write(
+        "src/editor.rs",
+        &with_author("pub fn hit_target() { let _ = hsla(0.0, 0.0, 0.0, 0.0); }\n"),
+    );
+    xtask::run_at(accepted.path(), "ui-colors").unwrap();
+
+    let rejected = Fixture::new();
+    rejected.write(
+        "src/editor.rs",
+        &with_author("pub fn panel() { let _ = rgba(0x007affff); }\n"),
+    );
+    let error = xtask::run_at(rejected.path(), "ui-colors").unwrap_err();
+    assert!(error.contains("ThemeColors.workbench/material tokens"));
+    assert!(error.contains("src/editor.rs"));
+}
+
+#[test]
 fn domain_crates_accept_clean_dependencies() {
     let fixture = Fixture::new();
     fixture.add_domain_packages();

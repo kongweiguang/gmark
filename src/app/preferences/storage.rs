@@ -54,6 +54,19 @@ pub(crate) fn save_app_preferences_with_dirs(
     gmark_config::save_app_preferences_with_dirs(preferences, dirs)
 }
 
+/// Persists only the visual accessibility section while preserving every
+/// existing preference field. The preferences window calls this after its
+/// legacy all-fields save adapter until that adapter is replaced by a value object.
+// Reason: TASK-008 consumes this focused persistence adapter; remove after that wiring lands.
+#[allow(dead_code)]
+pub(crate) fn save_visual_accessibility_preferences(
+    visual_accessibility: VisualAccessibilityPreferences,
+) -> anyhow::Result<AppPreferences> {
+    update_app_preferences(|preferences| {
+        preferences.visual_accessibility = visual_accessibility;
+    })
+}
+
 pub(crate) fn first_existing_recent_markdown_file() -> Option<PathBuf> {
     gmark_config::read_recent_files()
         .ok()?

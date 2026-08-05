@@ -6,6 +6,7 @@ mod architecture;
 mod metadata;
 mod quality;
 mod source;
+mod ui_colors;
 
 use std::path::{Path, PathBuf};
 
@@ -24,9 +25,10 @@ pub fn run_at(root: &Path, command: &str) -> Result<(), String> {
         "architecture" => architecture::check(root),
         "test-layout" => quality::check_test_layout(root),
         "authors" => quality::check_authors(root),
+        "ui-colors" => ui_colors::check(root),
         "quality" => check_all(root),
         _ => Err(format!(
-            "unknown xtask command '{command}'; expected source-size, architecture, test-layout, authors, or quality"
+            "unknown xtask command '{command}'; expected source-size, architecture, test-layout, authors, ui-colors, or quality"
         )),
     }
 }
@@ -41,6 +43,7 @@ fn check_all(root: &Path) -> Result<(), String> {
         ("architecture", architecture::check),
         ("test-layout", quality::check_test_layout),
         ("authors", quality::check_authors),
+        ("ui-colors", ui_colors::check),
     ] {
         if let Err(error) = check(root) {
             failures.push(format!("{name}:\n{error}"));

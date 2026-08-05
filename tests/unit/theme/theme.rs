@@ -54,6 +54,71 @@ fn built_in_themes_have_stable_names_and_distinct_surfaces() {
         obsidian_light.colors.editor_background,
         claude_light.colors.editor_background
     );
+    assert_ne!(
+        xcode_dark.colors.workbench.accent,
+        fleet_dark.colors.workbench.accent
+    );
+    assert_ne!(
+        fleet_light.colors.workbench.accent,
+        obsidian_light.colors.workbench.accent
+    );
+    assert_ne!(
+        obsidian_dark.colors.workbench.accent,
+        claude_dark.colors.workbench.accent
+    );
+}
+
+#[test]
+fn workbench_materials_respect_transparency_and_contrast_preferences() {
+    use super::workbench::{ResolvedVisualPreferences, SurfaceKind};
+
+    let theme = Theme::xcode_dark();
+    let normal = theme
+        .colors
+        .workbench
+        .material(SurfaceKind::Glass, ResolvedVisualPreferences::default());
+    assert!(normal.is_translucent);
+
+    let accessible = theme.colors.workbench.material(
+        SurfaceKind::Glass,
+        ResolvedVisualPreferences {
+            reduced_transparency: true,
+            high_contrast: true,
+            ..ResolvedVisualPreferences::default()
+        },
+    );
+    assert!(!accessible.is_translucent);
+    assert_eq!(
+        accessible.background,
+        theme.colors.workbench.elevated_surface
+    );
+    assert_eq!(accessible.border, theme.colors.workbench.border_strong);
+}
+
+#[test]
+fn legacy_serialized_theme_derives_workbench_tokens_without_a_new_required_field() {
+    let theme = Theme::xcode_dark();
+    let mut value = serde_json::to_value(&theme).expect("built-in theme should serialize");
+    value
+        .get_mut("colors")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("serialized theme colors should be an object")
+        .remove("workbench");
+
+    let restored: Theme =
+        serde_json::from_value(value).expect("legacy theme without workbench should deserialize");
+    assert_eq!(
+        restored.colors.workbench.editor_surface,
+        restored.colors.editor_background
+    );
+    assert_eq!(
+        restored.colors.workbench.accent,
+        restored.colors.dialog_primary_button_bg
+    );
+    assert_eq!(
+        restored.colors.workbench.overlay_scrim,
+        restored.colors.dialog_backdrop
+    );
 }
 
 #[test]

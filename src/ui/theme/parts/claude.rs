@@ -10,6 +10,7 @@ impl Theme {
         let mut theme = Self::xcode_dark();
         theme.name = "Claude Dark".into();
         let colors = &mut theme.colors;
+        colors.workbench = WorkbenchThemeTokens::claude_dark();
         // 直接映射 claude.com 的 theme-dark 与品牌色变量，锚点为 gray-950/050 和 clay-dark。
         colors.editor_background = Hsla::from(rgba(0x141413ff));
         colors.source_mode_block_bg = Hsla::from(rgba(0x1a1918ff));
@@ -112,6 +113,7 @@ impl Theme {
         let mut theme = Self::xcode_light();
         theme.name = "Claude Light".into();
         let colors = &mut theme.colors;
+        colors.workbench = WorkbenchThemeTokens::claude_light();
         colors.editor_background = Hsla::from(rgba(0xfaf9f5ff));
         colors.source_mode_block_bg = Hsla::from(rgba(0xf5f4edff));
         colors.comment_bg = Hsla::from(rgba(0xd9775726));

@@ -9,9 +9,10 @@ use crate::{
     ConfigDirs,
     persistence::atomic_write,
     preferences::{
-        AppPreferences, AutoSavePreference, DEFAULT_LANGUAGE_ID, DocumentLoadingPreferences,
-        ImagePasteBehavior, ResourceInsertBehavior, ShortcutConfig, StartupOpenPreference,
-        StatusBarButton, StatusBarPreferences, ThemeAppearance, ThemePalette,
+        AccessibilityOverride, AppPreferences, AutoSavePreference, DEFAULT_LANGUAGE_ID,
+        DocumentLoadingPreferences, ImagePasteBehavior, ResourceInsertBehavior, ShortcutConfig,
+        StartupOpenPreference, StatusBarButton, StatusBarPreferences, ThemeAppearance,
+        ThemePalette, VisualAccessibilityPreferences,
     },
 };
 
@@ -34,6 +35,7 @@ struct PreferencesFile {
     updates: UpdatesPreferencesFile,
     language: LanguagePreferencesFile,
     theme: ThemePreferencesFile,
+    accessibility: AccessibilityPreferencesFile,
     editor: EditorPreferencesFile,
     status_bar: StatusBarPreferencesFile,
     documents: DocumentsPreferencesFile,
@@ -59,6 +61,13 @@ struct LanguagePreferencesFile {
 struct ThemePreferencesFile {
     appearance: String,
     palette: String,
+}
+
+#[derive(Serialize)]
+struct AccessibilityPreferencesFile {
+    reduced_motion: String,
+    reduced_transparency: String,
+    high_contrast: String,
 }
 
 #[derive(Serialize)]
@@ -119,6 +128,15 @@ impl From<&AppPreferences> for PreferencesFile {
             theme: ThemePreferencesFile {
                 appearance: value.theme_appearance.as_str().into(),
                 palette: value.theme_palette.as_str().into(),
+            },
+            accessibility: AccessibilityPreferencesFile {
+                reduced_motion: value.visual_accessibility.reduced_motion.as_str().into(),
+                reduced_transparency: value
+                    .visual_accessibility
+                    .reduced_transparency
+                    .as_str()
+                    .into(),
+                high_contrast: value.visual_accessibility.high_contrast.as_str().into(),
             },
             editor: EditorPreferencesFile {
                 show_table_headers: value.show_table_headers,
@@ -281,6 +299,11 @@ fn preferences_from_toml(value: &toml::Value, fallback_language_id: &str) -> App
                 .collect()
         })
         .unwrap_or_default();
+    let visual_accessibility = VisualAccessibilityPreferences {
+        reduced_motion: accessibility_override(value, "reduced_motion"),
+        reduced_transparency: accessibility_override(value, "reduced_transparency"),
+        high_contrast: accessibility_override(value, "high_contrast"),
+    };
     let legacy_image_paste_behavior = string_value(value, "editor", "image_paste_behavior")
         .map(ImagePasteBehavior::parse)
         .unwrap_or_default();
@@ -294,6 +317,7 @@ fn preferences_from_toml(value: &toml::Value, fallback_language_id: &str) -> App
         default_language_id,
         theme_appearance,
         theme_palette,
+        visual_accessibility,
         show_table_headers: bool_value(value, "editor", "show_table_headers").unwrap_or(true),
         image_paste_behavior,
         auto_save: string_value(value, "editor", "auto_save")
@@ -345,6 +369,12 @@ fn preferences_from_toml(value: &toml::Value, fallback_language_id: &str) -> App
                 .and_then(|number| u64::try_from(number).ok()),
         },
     }
+}
+
+fn accessibility_override(value: &toml::Value, key: &str) -> AccessibilityOverride {
+    string_value(value, "accessibility", key)
+        .and_then(AccessibilityOverride::parse)
+        .unwrap_or_default()
 }
 
 fn bool_value(value: &toml::Value, section: &str, key: &str) -> Option<bool> {

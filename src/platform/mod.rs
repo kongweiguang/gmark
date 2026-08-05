@@ -11,4 +11,5 @@ pub(crate) mod identity;
 pub(crate) mod single_instance;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod url;
+pub(crate) mod visual_preferences;
 pub(crate) mod window;

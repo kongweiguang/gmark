@@ -11,6 +11,7 @@ fn saving_preferences_window_persists_selected_language() {
         default_language_id: "zh-CN".into(),
         theme_appearance: ThemeAppearance::System,
         theme_palette: ThemePalette::Xcode,
+        visual_accessibility: Default::default(),
         show_table_headers: true,
         image_paste_behavior: ImagePasteBehavior::None,
         auto_save: AutoSavePreference::Off,

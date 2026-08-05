@@ -322,6 +322,7 @@ fn saves_and_reads_preferences() {
         default_language_id: "zh-CN".into(),
         theme_appearance: ThemeAppearance::Light,
         theme_palette: ThemePalette::Xcode,
+        visual_accessibility: Default::default(),
         show_table_headers: false,
         image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
         auto_save: AutoSavePreference::AfterDelay,

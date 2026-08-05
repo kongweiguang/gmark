@@ -50,6 +50,8 @@ impl FontWeightDef {
 /// All configurable colors for the editor UI.
 #[derive(Debug, Clone, Serialize)]
 pub struct ThemeColors {
+    /// Shared semantic roles for window chrome, navigation, controls and overlays.
+    pub workbench: WorkbenchThemeTokens,
     /// Background of the editor scroll area (behind all blocks).
     pub editor_background: Hsla,
     /// Background of the focused raw block in source-editing mode.
@@ -239,6 +241,9 @@ pub struct ThemeColors {
 }
 #[path = "parts/colors.rs"]
 mod colors;
+#[path = "parts/workbench.rs"]
+pub(crate) mod workbench;
+pub use workbench::WorkbenchThemeTokens;
 #[path = "parts/dimensions.rs"]
 mod dimensions;
 pub use dimensions::{Placeholders, ThemeDimensions, ThemeTypography};

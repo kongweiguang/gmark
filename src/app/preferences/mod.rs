@@ -18,6 +18,7 @@ use crate::window_chrome::{custom_titlebar_height, gmark_window_options, render_
 pub(crate) use gmark_config::{
     AppPreferences, AutoSavePreference, DocumentLoadingPreferences, ImagePasteBehavior,
     ResourceInsertBehavior, StartupOpenPreference, StatusBarButton, StatusBarPreferences,
+    VisualAccessibilityPreferences,
 };
 
 const DEFAULT_LANGUAGE_ID: &str = gmark_config::DEFAULT_LANGUAGE_ID;

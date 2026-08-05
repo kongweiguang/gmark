@@ -8,9 +8,10 @@ use std::{
 
 use anyhow::Result;
 use gmark_config::{
-    AppPreferences, AutoSavePreference, ConfigDirs, DocumentLoadingPreferences,
-    ResourceInsertBehavior, StartupOpenPreference, StatusBarButton, StatusBarPreferences,
-    ThemeAppearance, ThemePalette, load_or_create_app_preferences_with_dirs,
+    AccessibilityOverride, AppPreferences, AutoSavePreference, ConfigDirs,
+    DocumentLoadingPreferences, ResourceInsertBehavior, StartupOpenPreference, StatusBarButton,
+    StatusBarPreferences, SystemVisualPreferences, ThemeAppearance, ThemePalette,
+    VisualAccessibilityPreferences, load_or_create_app_preferences_with_dirs,
     load_or_create_installation_id_with_dirs, read_app_preferences_with_dirs,
     read_recent_files_with_dirs, record_recent_file_with_dirs, remove_recent_file_with_dirs,
     save_app_preferences_with_dirs,
@@ -52,6 +53,11 @@ fn preferences_round_trip_with_stable_toml_keys() -> Result<()> {
         default_language_id: "zh-CN".into(),
         theme_appearance: ThemeAppearance::Dark,
         theme_palette: ThemePalette::Obsidian,
+        visual_accessibility: VisualAccessibilityPreferences {
+            reduced_motion: AccessibilityOverride::Enabled,
+            reduced_transparency: AccessibilityOverride::Disabled,
+            high_contrast: AccessibilityOverride::System,
+        },
         show_table_headers: false,
         image_paste_behavior: ResourceInsertBehavior::CopyToNamedAssetsFolder,
         auto_save: AutoSavePreference::AfterDelay,
@@ -91,7 +97,53 @@ fn preferences_round_trip_with_stable_toml_keys() -> Result<()> {
     assert!(toml.contains("image_paste_behavior = \"copy_to_named_assets_folder\""));
     assert!(toml.contains("[keybindings]"));
     assert!(toml.contains("[documents.loading]"));
+    assert!(toml.contains("[accessibility]"));
+    assert!(toml.contains("reduced_motion = \"enabled\""));
     Ok(())
+}
+
+#[test]
+fn visual_accessibility_invalid_values_fall_back_independently() -> Result<()> {
+    let (_temporary, dirs) = temporary_dirs()?;
+    fs::create_dir_all(dirs.root())?;
+    fs::write(
+        dirs.app_config_file(),
+        r#"
+[accessibility]
+reduced_motion = "enabled"
+reduced_transparency = "invalid"
+high_contrast = "disabled"
+"#,
+    )?;
+
+    let preferences = read_app_preferences_with_dirs(&dirs)?;
+    assert_eq!(
+        preferences.visual_accessibility,
+        VisualAccessibilityPreferences {
+            reduced_motion: AccessibilityOverride::Enabled,
+            reduced_transparency: AccessibilityOverride::System,
+            high_contrast: AccessibilityOverride::Disabled,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn explicit_visual_accessibility_overrides_win_over_system_values() {
+    let preferences = VisualAccessibilityPreferences {
+        reduced_motion: AccessibilityOverride::Disabled,
+        reduced_transparency: AccessibilityOverride::Enabled,
+        high_contrast: AccessibilityOverride::System,
+    };
+    let resolved = preferences.resolve(SystemVisualPreferences {
+        reduced_motion: true,
+        reduced_transparency: false,
+        high_contrast: true,
+    });
+
+    assert!(!resolved.reduced_motion);
+    assert!(resolved.reduced_transparency);
+    assert!(resolved.high_contrast);
 }
 
 #[test]

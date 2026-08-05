@@ -18,9 +18,11 @@ pub use installation_id::{
     load_or_create_installation_id, load_or_create_installation_id_with_dirs,
 };
 pub use preferences::{
-    AppPreferences, AutoSavePreference, DEFAULT_LANGUAGE_ID, DocumentLoadingPreferences,
-    ImagePasteBehavior, Preferences, ResourceInsertBehavior, ShortcutConfig, StartupOpenPreference,
-    StatusBarButton, StatusBarPreferences, ThemeAppearance, ThemePalette,
+    AccessibilityOverride, AppPreferences, AutoSavePreference, DEFAULT_LANGUAGE_ID,
+    DocumentLoadingPreferences, ImagePasteBehavior, Preferences, ResolvedVisualPreferences,
+    ResourceInsertBehavior, ShortcutConfig, StartupOpenPreference, StatusBarButton,
+    StatusBarPreferences, SystemVisualPreferences, ThemeAppearance, ThemePalette,
+    VisualAccessibilityPreferences,
 };
 pub use preferences_storage::{
     load_or_create_app_preferences, load_or_create_app_preferences_with_dirs, read_app_preferences,

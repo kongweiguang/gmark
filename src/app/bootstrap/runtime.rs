@@ -38,6 +38,7 @@ use crate::{
     i18n::I18nManager,
     net, recovery,
     theme::ThemeManager,
+    ui::visual_preferences::VisualPreferencesManager,
     updater,
 };
 
@@ -54,6 +55,9 @@ fn install_system_theme_observer(cx: &mut App) {
         let Some(window) = window else {
             return;
         };
+        cx.update_global::<VisualPreferencesManager, _>(|manager, _cx| {
+            manager.refresh_system();
+        });
         cx.observe_window_appearance(window, |_, window, cx| {
             let changed = cx.update_global::<ThemeManager, _>(|manager, _cx| {
                 manager.update_system_appearance(window.appearance())
@@ -242,6 +246,7 @@ pub(crate) fn run_app() {
             preferences.theme_appearance,
             preferences.theme_palette,
         );
+        VisualPreferencesManager::init(cx, preferences.visual_accessibility);
         config::EditorSettings::init_with_typography(
             cx,
             preferences.show_table_headers,

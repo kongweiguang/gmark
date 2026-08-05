@@ -10,6 +10,7 @@ impl Theme {
         let mut theme = Self::xcode_dark();
         theme.name = "Obsidian Dark".into();
         let colors = &mut theme.colors;
+        colors.workbench = WorkbenchThemeTokens::obsidian_dark();
         // 直接映射官方 app.css 的 base、accent 与 code token，避免混入第三方主题色。
         colors.editor_background = Hsla::from(rgba(0x1e1e1eff));
         colors.source_mode_block_bg = Hsla::from(rgba(0x242424ff));
@@ -105,6 +106,7 @@ impl Theme {
         let mut theme = Self::xcode_light();
         theme.name = "Obsidian Light".into();
         let colors = &mut theme.colors;
+        colors.workbench = WorkbenchThemeTokens::obsidian_light();
         colors.editor_background = Hsla::from(rgba(0xffffffff));
         colors.source_mode_block_bg = Hsla::from(rgba(0xfafafaff));
         colors.comment_bg = Hsla::from(rgba(0x8a5cf533));

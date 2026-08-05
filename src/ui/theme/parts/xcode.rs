@@ -10,6 +10,7 @@ impl Theme {
         Self {
             name: "Xcode Dark".into(),
             colors: ThemeColors {
+                workbench: WorkbenchThemeTokens::xcode_dark(),
                 // Xcode 27 官方产品图中源码编辑器、导航区和工具区使用稳定实色分层。
                 editor_background: Hsla::from(rgba(0x292a30ff)),
                 source_mode_block_bg: Hsla::from(rgba(0x21222eff)),
@@ -263,6 +264,7 @@ impl Theme {
         Self {
             name: "Xcode Light".into(),
             colors: ThemeColors {
+                workbench: WorkbenchThemeTokens::xcode_light(),
                 editor_background: Hsla::from(rgba(0xffffffff)),
                 source_mode_block_bg: Hsla::from(rgba(0xf5f5f5ff)),
                 comment_bg: Hsla::from(rgba(0xfff4cc66)),

@@ -7,6 +7,7 @@ use super::*;
 /// Deserialization adapter for `ThemeColors` with backward-compatible defaults.
 #[derive(Deserialize)]
 struct ThemeColorsDe {
+    workbench: Option<WorkbenchThemeTokens>,
     editor_background: Hsla,
     source_mode_block_bg: Option<Hsla>,
     block_focused_bg: Option<Hsla>,
@@ -117,7 +118,47 @@ impl<'de> Deserialize<'de> for ThemeColors {
         let sidebar_background = raw.sidebar_background.unwrap_or(chrome_background);
         let tab_strip_background = raw.tab_strip_background.unwrap_or(chrome_background);
         let tab_active_background = raw.tab_active_background.unwrap_or(raw.editor_background);
+        let workbench = raw.workbench.unwrap_or_else(|| WorkbenchThemeTokens {
+            app_background: chrome_background,
+            editor_surface: raw.editor_background,
+            solid_surface: raw.editor_background,
+            navigation_surface: sidebar_background,
+            elevated_surface: raw.dialog_surface,
+            glass_surface: raw.dialog_surface,
+            glass_strong_surface: raw.dialog_surface,
+            overlay_scrim: raw.dialog_backdrop,
+            text_primary: raw.dialog_title,
+            text_secondary: raw.dialog_body,
+            text_tertiary: raw.dialog_muted,
+            text_inverse: raw.dialog_primary_button_text,
+            icon: raw.dialog_body,
+            accent: raw.dialog_primary_button_bg,
+            accent_hover: raw.dialog_primary_button_hover,
+            accent_pressed: raw.dialog_primary_button_hover,
+            accent_soft: raw.selection,
+            focus_ring: raw.text_link.unwrap_or(raw.dialog_primary_button_bg),
+            selection: raw.selection,
+            caret: raw.cursor,
+            control_surface: raw.dialog_secondary_button_bg,
+            control_hover: raw.dialog_secondary_button_hover,
+            control_pressed: raw.dialog_secondary_button_hover,
+            input_surface: raw.editor_background,
+            border_subtle: raw.dialog_border,
+            border_strong: raw.dialog_border,
+            danger: raw.dialog_danger_button_bg,
+            warning: raw
+                .callout_warning_border
+                .unwrap_or(raw.dialog_danger_button_bg),
+            success: raw
+                .callout_tip_border
+                .unwrap_or(raw.dialog_primary_button_bg),
+            info: raw
+                .callout_note_border
+                .unwrap_or(raw.dialog_primary_button_bg),
+            shadow: raw.dialog_backdrop,
+        });
         Ok(Self {
+            workbench,
             editor_background: raw.editor_background,
             source_mode_block_bg: raw
                 .source_mode_block_bg
