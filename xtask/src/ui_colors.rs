@@ -7,8 +7,6 @@ use std::path::Path;
 use crate::source;
 
 const LEGACY_UI_COLOR_LINES: &[(&str, &str)] = &[
-    ("src/platform/window.rs", "Hsla::from(rgba(0xf4f4f5ff))"),
-    ("src/platform/window.rs", "Hsla::from(rgba(0x18181bff))"),
     (
         "src/editor/diagram_overlay.rs",
         ".bg(gpui::black().opacity(0.58))",
