@@ -164,6 +164,11 @@ async fn visual_accessibility_drafts_preview_and_restore_with_keyboard_focus(
             gmark_config::VisualAccessibilityPreferences::default(),
         );
     });
+    let initial_reduced_motion = cx.update(|cx| {
+        cx.global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+            .current()
+            .reduced_motion
+    });
     let handle = cx.update(|cx| {
         open_preferences_window_with_state(cx, AppPreferences::default(), "Preferences".into())
     });
@@ -195,10 +200,12 @@ async fn visual_accessibility_drafts_preview_and_restore_with_keyboard_focus(
                 gmark_config::VisualAccessibilityPreferences::default()
             );
             assert!(!preferences.has_unsaved_changes());
-            assert!(!cx
-                .global::<crate::ui::visual_preferences::VisualPreferencesManager>()
-                .current()
-                .reduced_motion);
+            assert_eq!(
+                cx.global::<crate::ui::visual_preferences::VisualPreferencesManager>()
+                    .current()
+                    .reduced_motion,
+                initial_reduced_motion
+            );
         })
         .expect("preferences window should remain updateable");
 }
