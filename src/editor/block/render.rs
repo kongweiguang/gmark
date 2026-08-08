@@ -6,8 +6,6 @@
 //! list items render a marker column (bullet / ordinal), and raw Markdown
 //! fallback renders as plain text.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
@@ -340,12 +338,13 @@ fn render_image_placeholder(
     height: Pixels,
     theme: &Theme,
     strings: &I18nStrings,
-) -> AnyElement {
+) -> Stateful<Div> {
     let c = &theme.colors;
     let wb = &c.workbench;
     let d = &theme.dimensions;
     let t = &theme.typography;
     div()
+        .id("image-load-placeholder")
         .w(width)
         .h(height)
         .flex()
@@ -360,6 +359,20 @@ fn render_image_placeholder(
         .text_size(px(t.text_size))
         .text_color(wb.text_secondary)
         .child(fallback_image_label(&runtime.alt, strings))
+}
+
+fn render_image_placeholder_with_retry(
+    runtime: &ImageRuntime,
+    width: Length,
+    height: Pixels,
+    theme: &Theme,
+    strings: &I18nStrings,
+    block: WeakEntity<Block>,
+) -> AnyElement {
+    render_image_placeholder(runtime, width, height, theme, strings)
+        .on_click(move |_event, _window, cx| {
+            let _ = block.update(cx, |block, cx| block.request_image_retry(cx));
+        })
         .into_any_element()
 }
 
@@ -675,7 +688,7 @@ fn html_node_visual_style(
             computed.color = c.image_caption_text;
             computed.font_size = t.code_size;
         }
-        "small" | "sup" | "sub" => computed.font_size = (computed.font_size * 0.8).max(6.0),
+        "small" | "sup" | "sub" => computed.font_size = (computed.font_size * 0.8).max(8.0),
         "th" => background = Some(c.table_header_bg),
         "td" => background = Some(c.table_cell_bg),
         _ => {}
@@ -702,8 +715,18 @@ impl Block {}
 
 #[path = "render_parts/html.rs"]
 mod html;
+#[path = "render_parts/html_surface.rs"]
+mod html_surface;
+#[path = "render_parts/html_text_flow.rs"]
+mod html_text_flow;
 #[path = "render_parts/inline_media.rs"]
 mod inline_media;
+#[path = "render_parts/math.rs"]
+mod math;
+#[path = "render_parts/math_source.rs"]
+mod math_source;
+#[path = "render_parts/math_visual.rs"]
+mod math_visual;
 #[path = "render_parts/mermaid.rs"]
 mod mermaid;
 

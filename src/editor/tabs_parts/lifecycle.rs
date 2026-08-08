@@ -480,7 +480,10 @@ impl Editor {
         }
         if self.tabs.records.len() == 1 {
             self.checkpoint_recovery_journal();
+            let closed_id = self.tabs.records[0].id;
+            self.release_render_assets_for_active_document(cx);
             let closed = self.capture_active_tab(cx);
+            let _ = self.view_state.close_tab(closed_id);
             if keep_for_restore {
                 self.push_closed_tab(closed, cx);
             }
@@ -496,6 +499,7 @@ impl Editor {
 
         if index != self.tabs.active {
             let record = self.tabs.records.remove(index);
+            let _ = self.view_state.close_tab(record.id);
             if index < self.tabs.active {
                 self.tabs.active -= 1;
             }
@@ -508,7 +512,10 @@ impl Editor {
         }
 
         self.checkpoint_recovery_journal();
+        let closed_id = self.tabs.records[index].id;
+        self.release_render_assets_for_active_document(cx);
         let closed = self.capture_active_tab(cx);
+        let _ = self.view_state.close_tab(closed_id);
         self.tabs.records.remove(index);
         self.tabs.active = index.min(self.tabs.records.len() - 1);
         let target = self.tabs.records[self.tabs.active]

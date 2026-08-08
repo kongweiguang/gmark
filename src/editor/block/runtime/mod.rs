@@ -1,7 +1,7 @@
 // @author kongweiguang
-
 //! Editable block runtime and block-local state transitions.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -14,10 +14,14 @@ use unicode_segmentation::*;
 mod auto_pair;
 mod code;
 mod image;
+pub(crate) use image::{ImageResizeSession, ImageRuntime};
 mod mermaid;
 mod projection;
 mod resource;
+mod source_layout;
 mod table;
+
+pub(crate) use source_layout::{SourceLayoutCacheKey, SourceLayoutIdentity};
 
 use self::projection::{
     ExpandedInlineProjection, ExpandedInlineSegment, ExpandedInlineSegmentKind, ExpandedLinkRun,
@@ -46,7 +50,7 @@ use crate::components::markdown::inline::{
 use crate::components::markdown::inline::{InlineLinkHit, InlineStyle};
 use crate::components::{
     ResourceLocation, ResourceRecord, ResourceStatus, TableAxisHighlight, TableAxisMarker,
-    TableCellPosition, TableColumnAlignment, TableRuntime,
+    TableCellPosition, TableColumnAlignment, TableColumnLayout, TableRuntime,
 };
 
 /// Inline formatting command issued by editor actions.
@@ -95,33 +99,6 @@ pub(crate) enum MermaidViewMode {
 
 pub(crate) type HostActionHandler = Rc<dyn Fn(BlockHostAction, &mut Window, &mut App)>;
 
-/// 大文件 Source 行的稳定布局身份。动态字体、主题、缩放与换行宽度在实际 shape
-/// 时补入缓存键；这里保留文档侧不变量，避免 revision 重置或横向窗口变化时复用旧行。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SourceLayoutIdentity {
-    pub(crate) document_epoch: u64,
-    pub(crate) document_revision: u64,
-    pub(crate) source_range: Range<u64>,
-    pub(crate) column_window_start: u64,
-    pub(crate) show_line_endings: bool,
-}
-
-/// 单个已挂载 Source 行只保留最近一次 shaped layout。整个 Source surface 最多挂载
-/// 512 行，因此该缓存天然受 512 行 / 32 MiB 的更严格上限约束。
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct SourceLayoutCacheKey {
-    pub(crate) identity: SourceLayoutIdentity,
-    pub(crate) text: SharedString,
-    pub(crate) marked_range: Option<Range<usize>>,
-    pub(crate) theme_identity: usize,
-    pub(crate) font: Font,
-    pub(crate) font_size_bits: u32,
-    pub(crate) line_height_bits: u32,
-    pub(crate) scale_bits: u32,
-    pub(crate) wrap_width_bits: Option<u32>,
-    pub(crate) soft_wrap: bool,
-}
-
 impl EditMode {
     fn for_kind(kind: &BlockKind) -> Self {
         if kind.is_code_block() {
@@ -153,10 +130,21 @@ impl EditMode {
 mod editing;
 #[path = "implementation/inline_projection.rs"]
 mod inline_projection;
+#[path = "implementation/math_edit.rs"]
+pub(super) mod math_edit;
+#[path = "implementation/math_source.rs"]
+pub(super) mod math_source;
 #[path = "implementation/range_mapping.rs"]
 mod range_mapping;
 
 impl EventEmitter<BlockEvent> for Block {}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum MathPalettePage {
+    #[default]
+    Symbols,
+    Structures,
+}
 
 /// A single editable block in the document tree.
 ///
@@ -200,6 +188,9 @@ pub struct Block {
     pub(crate) code_language_is_selecting: bool,
     pub(crate) code_language_menu_open: bool,
     pub(crate) code_language_menu_selected: usize,
+    /// Dedicated keyboard focus target for the copy action so activating it
+    /// never steals the code or language editor's input focus semantics.
+    pub(crate) code_copy_focus_handle: FocusHandle,
     pub(crate) code_copy_feedback: bool,
     pub(crate) code_copy_feedback_task: Option<Task<()>>,
     pub selected_range: Range<usize>,
@@ -278,6 +269,51 @@ pub struct Block {
     pub(crate) table_append_row_zone_hovered: bool,
     pub(crate) table_append_row_button_hovered: bool,
     pub(crate) table_append_row_close_task: Option<Task<()>>,
+    /// Render-only fold metadata. Refreshed by Editor from process-local view
+    /// state and never serialized into Markdown.
+    pub(crate) presentation_hidden: bool,
+    pub(crate) presentation_collapsed: bool,
+    pub(crate) presentation_fold_key: Option<SharedString>,
+    pub(crate) presentation_fold_heading: bool,
+    pub(crate) fold_focus_handle: FocusHandle,
+    /// Table width fractions are view state and are deliberately separate
+    /// from the editable table model and its undo history.
+    pub(crate) table_column_layout: Option<TableColumnLayout>,
+    pub(crate) table_view_key: Option<SharedString>,
+    pub(crate) table_column_resize_session: Option<TableColumnResizeSession>,
+    pub(crate) table_column_resize_focus_handle: FocusHandle,
+    pub(crate) table_column_resize_boundary: Option<usize>,
+    /// Visible-text range of an inline `$...$` fragment while it is being
+    /// edited structurally. Display-math blocks leave this unset.
+    pub(crate) math_edit_inline_range: Option<Range<usize>>,
+    /// Revision-checked structured editing session. The block may update its
+    /// source through normal local transactions, but an external revision is
+    /// never silently overwritten on commit.
+    pub(crate) math_edit_session: Option<crate::editor::math_edit::MathEditSession>,
+    /// UTF-8 range of the active IME composition inside the current math slot.
+    /// This is deliberately separate from `marked_range`, whose coordinates
+    /// belong to the Markdown-visible block projection.
+    pub(crate) math_marked_range: Option<Range<usize>>,
+    /// Structured formula focus remains separate from the raw Markdown input.
+    pub(crate) math_structure_focus_handle: FocusHandle,
+    /// Compact LaTeX source surface focus. This is intentionally distinct from
+    /// the two-dimensional structure focus so source edits can use the normal
+    /// GPUI EntityInputHandler/IME path without stealing the visual caret.
+    pub(crate) math_source_focus_handle: FocusHandle,
+    pub(crate) math_source_selected_range: Range<usize>,
+    pub(crate) math_source_selection_reversed: bool,
+    pub(crate) math_source_marked_range: Option<Range<usize>>,
+    pub(crate) math_source_last_layout: Option<ShapedLine>,
+    pub(crate) math_source_last_bounds: Option<Bounds<Pixels>>,
+    pub(crate) math_source_is_selecting: bool,
+    pub(crate) math_visual_scroll_handle: ScrollHandle,
+    /// Visible command page in the compact floating formula palette.
+    pub(crate) math_palette_page: MathPalettePage,
+    /// User-positioned palette translation and active pointer anchor.
+    pub(crate) math_palette_offset: Point<Pixels>,
+    pub(crate) math_palette_drag_anchor: Option<Point<Pixels>>,
+    pub(crate) math_palette_anchor_y: Option<Pixels>,
+    pub(crate) document_revision: gmark_document::Revision,
     image_runtime: Option<ImageRuntime>,
     resource_runtime: Option<ResourceRuntime>,
     resource_probe_key: Option<String>,
@@ -285,10 +321,26 @@ pub struct Block {
     pub(crate) resource_selected: bool,
     image_edit_expanded: bool,
     image_expand_requested: bool,
+    /// Set by a failed-image placeholder's Retry action and consumed by the
+    /// editor-level asset scheduler on the next render pass.
+    pub(crate) image_retry_requested: bool,
     pub(crate) image_selected: bool,
     pub(crate) image_resize_session: Option<ImageResizeSession>,
     pub(crate) image_preview_width_percent: Option<u8>,
-    pub(crate) html_details_open: bool,
+    /// Per-`<details>` disclosure state. The source `open` attribute is only
+    /// the initial value; edits never collapse unrelated disclosures.
+    pub(crate) html_details_state: HashMap<gmark_markdown::HtmlNodeId, bool>,
+    pub(crate) html_details_source_hash: Option<u64>,
+    /// Generation-safe local image state for semantic HTML nodes.  Kept
+    /// separate from standalone image runtime because HTML images are keyed by
+    /// their stable domain node id rather than by block title text.
+    pub(crate) html_image_asset_states: HashMap<
+        gmark_markdown::HtmlNodeId,
+        (
+            crate::editor::render_asset_manager::AssetKey,
+            crate::editor::render_asset_manager::AssetState,
+        ),
+    >,
     image_base_dir: Option<PathBuf>,
     image_reference_definitions: Arc<ImageReferenceDefinitions>,
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
@@ -320,21 +372,12 @@ pub(crate) struct TocRuntimeEntry {
     pub(crate) target: EntityId,
 }
 
-/// Cached standalone image presentation state for a block.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ImageRuntime {
-    pub(crate) alt: String,
-    pub(crate) src: String,
-    pub(crate) title: Option<String>,
-    pub(crate) width_percent: u8,
-    pub(crate) resolved_source: ImageResolvedSource,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ImageResizeSession {
+#[derive(Clone, Debug)]
+pub(crate) struct TableColumnResizeSession {
+    pub(crate) boundary: usize,
     pub(crate) start_x: Pixels,
-    pub(crate) start_percent: u8,
-    pub(crate) available_width: f32,
+    pub(crate) start_layout: TableColumnLayout,
+    pub(crate) table_width: f32,
 }
 
 /// How a collapsed caret at an inline projection boundary inherits style.
@@ -384,6 +427,7 @@ impl Block {
             code_language_is_selecting: false,
             code_language_menu_open: false,
             code_language_menu_selected: 0,
+            code_copy_focus_handle: cx.focus_handle(),
             code_copy_feedback: false,
             code_copy_feedback_task: None,
             selected_range: 0..0,
@@ -445,6 +489,33 @@ impl Block {
             table_append_row_zone_hovered: false,
             table_append_row_button_hovered: false,
             table_append_row_close_task: None,
+            presentation_hidden: false,
+            presentation_collapsed: false,
+            presentation_fold_key: None,
+            presentation_fold_heading: false,
+            fold_focus_handle: cx.focus_handle(),
+            table_column_layout: None,
+            table_view_key: None,
+            table_column_resize_session: None,
+            table_column_resize_focus_handle: cx.focus_handle(),
+            table_column_resize_boundary: None,
+            math_edit_inline_range: None,
+            math_edit_session: None,
+            math_marked_range: None,
+            math_structure_focus_handle: cx.focus_handle(),
+            math_source_focus_handle: cx.focus_handle(),
+            math_source_selected_range: 0..0,
+            math_source_selection_reversed: false,
+            math_source_marked_range: None,
+            math_source_last_layout: None,
+            math_source_last_bounds: None,
+            math_source_is_selecting: false,
+            math_visual_scroll_handle: ScrollHandle::new(),
+            math_palette_page: MathPalettePage::Symbols,
+            math_palette_offset: point(px(0.0), px(0.0)),
+            math_palette_drag_anchor: None,
+            math_palette_anchor_y: None,
+            document_revision: gmark_document::Revision::INITIAL,
             image_runtime: None,
             resource_runtime: None,
             resource_probe_key: None,
@@ -452,10 +523,13 @@ impl Block {
             resource_selected: false,
             image_edit_expanded: false,
             image_expand_requested: false,
+            image_retry_requested: false,
             image_selected: false,
             image_resize_session: None,
             image_preview_width_percent: None,
-            html_details_open: false,
+            html_details_state: HashMap::new(),
+            html_details_source_hash: None,
+            html_image_asset_states: HashMap::new(),
             image_base_dir: None,
             image_reference_definitions: Arc::default(),
             link_reference_definitions: Arc::default(),
@@ -503,6 +577,7 @@ impl Block {
         self.code_language_is_selecting = false;
         self.marked_range = None;
         self.code_language_marked_range = None;
+        self.math_marked_range = None;
         if read_only {
             if self.kind() == BlockKind::MermaidBlock {
                 self.mermaid_view_mode = MermaidViewMode::Preview;
@@ -546,6 +621,10 @@ impl Block {
         self.sync_footnote_registry(footnote_registry);
         self.sync_image_runtime();
         self.sync_resource_runtime_without_probe(base_dir);
+    }
+
+    pub(crate) fn set_document_revision(&mut self, revision: gmark_document::Revision) {
+        self.document_revision = revision;
     }
 
     /// Updates the same context as the legacy/test-friendly setter and starts

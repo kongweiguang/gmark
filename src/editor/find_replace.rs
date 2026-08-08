@@ -7,9 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gmark_document::{Revision, TextEdit, Transaction};
+use gmark_markdown::{Replaceability, parse_markdown};
 use gpui::*;
 use regex::{Regex, RegexBuilder};
 
+use super::markdown_view_state;
 use super::{Block, BlockRecord, Editor, PreparedSplitProjection, UndoSelectionSnapshot, ViewMode};
 use crate::components::{BlockEvent, UndoCaptureKind};
 use crate::i18n::{I18nManager, I18nStrings};
@@ -38,6 +40,7 @@ pub(super) struct FindPanelState {
     pub(super) show_replace: bool,
     pub(super) options: FindOptions,
     pub(super) matches: Vec<Range<usize>>,
+    pub(super) match_metadata: Vec<FindMatchMetadata>,
     pub(super) selected: usize,
     pub(super) error: Option<String>,
     pub(super) truncated: bool,
@@ -50,6 +53,9 @@ pub(super) struct FindPanelState {
     keyboard_target: FindKeyboardTarget,
     focus_handle: FocusHandle,
     restore_focus: Option<EntityId>,
+    /// Original rendered fold choices restored when find closes. Finding may
+    /// temporarily reveal a match inside a collapsed region.
+    pub(super) view_state_before_expand: Option<markdown_view_state::MarkdownViewState>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,12 +79,24 @@ impl FindKeyboardTarget {
 
 #[path = "find_replace_parts/controller.rs"]
 mod controller;
+#[path = "find_replace_parts/transactions.rs"]
+mod transactions;
 
 pub(super) struct FindResult {
     pub(super) revision: Revision,
     pub(super) matches: Vec<Range<usize>>,
+    pub(super) match_metadata: Vec<FindMatchMetadata>,
     pub(super) error: Option<String>,
     pub(super) truncated: bool,
+}
+
+/// Rendered find metadata kept parallel to the source ranges used by the
+/// existing selection/navigation machinery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct FindMatchMetadata {
+    pub(super) visible: Range<usize>,
+    pub(super) source: Option<Range<usize>>,
+    pub(super) replaceability: Replaceability,
 }
 
 impl Editor {
@@ -201,6 +219,7 @@ impl Editor {
             show_replace,
             options: FindOptions::default(),
             matches: Vec::new(),
+            match_metadata: Vec::new(),
             selected: 0,
             error: None,
             truncated: false,
@@ -213,6 +232,7 @@ impl Editor {
             keyboard_target: FindKeyboardTarget::Query,
             focus_handle: find_focus_handle,
             restore_focus: self.active_entity_id,
+            view_state_before_expand: None,
         });
         self.schedule_find(cx);
         cx.notify();
@@ -275,18 +295,29 @@ impl Editor {
         let query = state.query.read(cx).display_text().to_owned();
         if query.is_empty() {
             state.matches.clear();
+            state.match_metadata.clear();
             state.selected = 0;
             state.truncated = false;
             cx.notify();
             return;
         }
         let options = state.options;
+        let rendered = matches!(
+            self.view_mode,
+            super::ViewMode::Rendered | super::ViewMode::Preview | super::ViewMode::Split
+        );
         let snapshot = self.source_document.snapshot();
         state.task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
             cx.background_executor().timer(FIND_DEBOUNCE).await;
             let result = cx
                 .background_spawn(async move {
-                    find_matches(&snapshot.text(), &query, options, snapshot.revision())
+                    find_matches_for_view(
+                        &snapshot.text(),
+                        &query,
+                        options,
+                        snapshot.revision(),
+                        rendered,
+                    )
                 })
                 .await;
             let _ = this.update(cx, |editor, cx| {
@@ -306,6 +337,7 @@ impl Editor {
                         state.error = result.error;
                         state.truncated = result.truncated;
                         state.matches = result.matches;
+                        state.match_metadata = result.match_metadata;
                         state.selected = state
                             .matches
                             .iter()
@@ -368,22 +400,90 @@ pub(super) fn compile_find_regex(query: &str, options: FindOptions) -> Result<Re
         .build()
 }
 
+// Reason: this facade preserves the editor search contract. Remove when all callers use the view-aware entry point.
+#[allow(dead_code)]
 pub(super) fn find_matches(
     source: &str,
     query: &str,
     options: FindOptions,
     revision: Revision,
 ) -> FindResult {
+    find_matches_for_view(source, query, options, revision, false)
+}
+
+pub(super) fn find_matches_for_view(
+    source: &str,
+    query: &str,
+    options: FindOptions,
+    revision: Revision,
+    rendered: bool,
+) -> FindResult {
+    if rendered {
+        let document = parse_markdown(source);
+        let projection = document.visible_text_projection();
+        let result = find_text_ranges(&projection.text, query, options);
+        let (visible_matches, error, truncated) = match result {
+            Ok(value) => (value.0, None, value.1),
+            Err(error) => (Vec::new(), Some(error), false),
+        };
+        let mut matches = Vec::with_capacity(visible_matches.len());
+        let mut match_metadata = Vec::with_capacity(visible_matches.len());
+        for visible in visible_matches {
+            let direct = projection.source_range_for_visible(visible.clone());
+            let Some(source_range) =
+                direct.or_else(|| projection.source_bounds_for_visible(visible.clone()))
+            else {
+                continue;
+            };
+            matches.push(source_range.start..source_range.end);
+            match_metadata.push(FindMatchMetadata {
+                visible,
+                source: Some(source_range.start..source_range.end),
+                replaceability: direct
+                    .map(|_| Replaceability::Direct)
+                    .unwrap_or(Replaceability::Derived),
+            });
+        }
+        return FindResult {
+            revision,
+            matches,
+            match_metadata,
+            error,
+            truncated,
+        };
+    }
+
+    let result = find_text_ranges(source, query, options);
+    let (matches, error, truncated) = match result {
+        Ok(value) => (value.0, None, value.1),
+        Err(error) => (Vec::new(), Some(error), false),
+    };
+    let match_metadata = matches
+        .iter()
+        .cloned()
+        .map(|range| FindMatchMetadata {
+            visible: range.clone(),
+            source: Some(range),
+            replaceability: Replaceability::Direct,
+        })
+        .collect();
+    FindResult {
+        revision,
+        matches,
+        match_metadata,
+        error,
+        truncated,
+    }
+}
+
+fn find_text_ranges(
+    source: &str,
+    query: &str,
+    options: FindOptions,
+) -> Result<(Vec<Range<usize>>, bool), String> {
     let regex = match compile_find_regex(query, options) {
         Ok(regex) => regex,
-        Err(error) => {
-            return FindResult {
-                revision,
-                matches: Vec::new(),
-                error: Some(error.to_string()),
-                truncated: false,
-            };
-        }
+        Err(error) => return Err(error.to_string()),
     };
     let mut matches = Vec::new();
     let mut truncated = false;
@@ -398,12 +498,7 @@ pub(super) fn find_matches(
         }
         matches.push(range);
     }
-    FindResult {
-        revision,
-        matches,
-        error: None,
-        truncated,
-    }
+    Ok((matches, truncated))
 }
 
 fn has_word_boundaries(source: &str, range: &Range<usize>) -> bool {

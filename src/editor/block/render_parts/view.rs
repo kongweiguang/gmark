@@ -1,7 +1,5 @@
 // @author kongweiguang
-
 use super::*;
-
 /// The render method builds the full element tree for a block:
 /// - Common wrapper: key_context, track_focus, action handlers, mouse events.
 /// - Kind-specific styling: headings get size/weight/border, list items get
@@ -9,7 +7,14 @@ use super::*;
 /// - The [`BlockTextElement`] handles text layout, selection, and cursor.
 impl Render for Block {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let focused = !self.is_read_only() && self.focus_handle.is_focused(window);
+        let math_structure_focused =
+            !self.is_read_only() && self.math_structure_focus_handle.is_focused(window);
+        let math_source_focused =
+            !self.is_read_only() && self.math_source_focus_handle.is_focused(window);
+        let focused = !self.is_read_only()
+            && (self.focus_handle.is_focused(window)
+                || math_structure_focused
+                || math_source_focused);
         let code_language_focused =
             !self.is_read_only() && self.code_language_focus_handle.is_focused(window);
         let window_active = window.is_window_active();
@@ -18,6 +23,11 @@ impl Render for Block {
             .as_ref()
             .is_some_and(|input| input.read(cx).focus_handle.is_focused(window));
         let contextual_editing_focused = focused || selection_link_focused;
+        if self.sync_math_edit_focus(focused, window, cx) {
+            // Cancellation emits Changed so the editor-level source projection
+            // is brought back to the exact pre-edit formula bytes.
+            cx.notify();
+        }
         if !code_language_focused {
             self.code_language_menu_open = false;
         }
@@ -150,6 +160,7 @@ impl Render for Block {
                         px(d.image_cell_max_height),
                         px(d.image_cell_placeholder_height),
                         f32::from(window.viewport_size().width.max(px(1.0))),
+                        true,
                         &theme,
                         &strings,
                         cx,
@@ -190,7 +201,6 @@ impl Render for Block {
                 ))
                 .into_any_element();
         }
-
         // Frontmatter 在 Live/Preview 投影里虽沿用 RawMarkdown 的保真编辑能力，
         // 但失焦时仍需走专用元数据视觉；Source/Split 左栏是单一 Paragraph，不受影响。
         let rendered_frontmatter = self.record.is_yaml_frontmatter();
@@ -255,24 +265,7 @@ impl Render for Block {
             };
             let source_editor = source_base.child(text);
             if focused && self.kind() == BlockKind::MathBlock {
-                let preview = self.render_math_content(&theme, cx);
-                return div()
-                    .debug_selector(|| "complex-source-live-preview".to_owned())
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(source_editor)
-                    .child(
-                        div()
-                            .debug_selector(|| "complex-source-live-preview-result".to_owned())
-                            .w_full()
-                            .border_t_1()
-                            .border_color(wb.border_subtle)
-                            .pt(px(8.0))
-                            .child(preview),
-                    )
-                    .into_any_element();
+                return self.render_math_visual_editor(&theme, window.viewport_size(), cx);
             }
             return source_editor.into_any_element();
         }
@@ -346,6 +339,7 @@ impl Render for Block {
                         px(d.image_root_max_height),
                         px(d.image_root_placeholder_height),
                         resize_basis_width,
+                        true,
                         &theme,
                         &strings,
                         cx,
@@ -353,7 +347,6 @@ impl Render for Block {
                     .into_any_element();
             }
         }
-
         // A card owns focus after a single click so it can expose selection,
         // Enter/Space and double-click actions. Keep the card rendered while
         // selected; the context-menu "编辑标题" action clears this flag to
@@ -366,7 +359,6 @@ impl Render for Block {
                 .child(self.render_resource_content(&theme, cx))
                 .into_any_element();
         }
-
         let content = match self.kind() {
             BlockKind::Separator => focused_base
                 .debug_selector(|| "separator-shell".to_owned())
@@ -441,6 +433,7 @@ impl Render for Block {
                                         px(d.image_root_max_height),
                                         px(d.image_root_placeholder_height),
                                         resize_basis_width,
+                                        true,
                                         &theme,
                                         &strings,
                                         cx,
@@ -529,6 +522,7 @@ impl Render for Block {
                                     px(d.image_root_max_height),
                                     px(d.image_root_placeholder_height),
                                     resize_basis_width,
+                                    true,
                                     &theme,
                                     &strings,
                                     cx,
@@ -605,9 +599,14 @@ impl Render for Block {
                 &strings,
                 cx,
             ),
-            BlockKind::CodeBlock { .. } => {
-                self.render_code_block_content(focused_base, is_placeholder, &theme, &strings, cx)
-            }
+            BlockKind::CodeBlock { .. } => self.render_code_block_content(
+                focused_base.w_full().min_w(px(0.0)),
+                is_placeholder,
+                &theme,
+                &strings,
+                window,
+                cx,
+            ),
             BlockKind::Table => self.render_table_content(
                 focused_base,
                 focused,
@@ -618,23 +617,7 @@ impl Render for Block {
                 cx,
             ),
             BlockKind::HtmlBlock => {
-                let html = self.record.html.as_ref().cloned().unwrap_or_else(|| {
-                    crate::components::parse_html_document(
-                        self.record
-                            .raw_fallback
-                            .as_deref()
-                            .unwrap_or_else(|| self.display_text()),
-                    )
-                });
-                let html_surface = div()
-                    .debug_selector(|| "rendered-html-surface".to_owned())
-                    .w_full()
-                    .min_w(px(0.0))
-                    .text_size(px(t.text_size))
-                    .text_color(c.text_default)
-                    .line_height(rems(t.text_line_height))
-                    .child(self.render_html_document(&html, &theme, cx));
-                focused_base.child(html_surface).into_any_element()
+                self.render_html_block(focused_base, t.text_size, is_placeholder, &theme, cx)
             }
             BlockKind::MathBlock => {
                 if !focused {
@@ -725,7 +708,11 @@ impl Render for Block {
                     .into_any_element()
             }
         };
-
+        let content = if focused && self.math_edit_inline_range.is_some() {
+            self.render_active_inline_math_editor(content, &theme, window.viewport_size(), cx)
+        } else {
+            content
+        };
         let content = wrap_with_quote_guides(content, visible_quote_guides(self), &theme);
         let viewport = window.viewport_size();
         let selection_toolbar = contextual_editing_focused

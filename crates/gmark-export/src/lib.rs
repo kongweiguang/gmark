@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod chromium;
+mod clipboard;
 mod html;
 mod images;
 mod markup;
@@ -24,9 +25,10 @@ pub use chromium::{
     chromium_pdf_params, file_url_from_path, png_screenshot_params, render_pdf,
     render_pdf_cancellable, render_png, render_png_cancellable,
 };
+pub use clipboard::{ClipboardFragment, ClipboardSelection, export_clipboard_fragment};
 pub use html::{
     contains_tibetan_text, render_chromium_pdf_html_with_base_dir, render_html,
-    render_html_with_base_dir,
+    render_html_fragment_with_base_dir, render_html_with_base_dir,
 };
 pub use resources::{
     PreparedHtmlResources, copy_export_asset_cancellable, count_local_resource_cards,

@@ -132,6 +132,36 @@ fn writes_current_version_after_loading_a_legacy_registry() -> Result<()> {
 }
 
 #[test]
+fn migrates_transitional_v9_without_board_data_and_rejects_board_markers() -> Result<()> {
+    let (_temporary, store) = temporary_store()?;
+    let id = Uuid::new_v4();
+    write_registry(
+        &store,
+        format!(
+            r#"{{"version":9,"windows":[{{"id":"{id}","tabs":[{{"path":"ordinary.md","pinned":false,"view_mode":"live"}}],"active_index":0}}]}}"#
+        ),
+    )?;
+    let restored = store.read()?;
+    assert_eq!(restored[0].tabs[0].path, PathBuf::from("ordinary.md"));
+    store.upsert(&restored[0])?;
+    let written: serde_json::Value =
+        serde_json::from_slice(&fs::read(store.dirs().workspace_session_file())?)?;
+    assert_eq!(
+        written.get("version").and_then(serde_json::Value::as_u64),
+        Some(u64::from(WORKSPACE_SESSION_VERSION))
+    );
+
+    write_registry(
+        &store,
+        format!(
+            r#"{{"version":9,"windows":[{{"id":"{id}","tabs":[{{"path":"board.gboard","pinned":false,"view_mode":"board","board":{{}}}}],"active_index":0}}]}}"#
+        ),
+    )?;
+    assert!(store.read().is_err());
+    Ok(())
+}
+
+#[test]
 fn normalizes_session_state_and_uses_neutral_selection_types() -> Result<()> {
     let (_temporary, store) = temporary_store()?;
     let id = Uuid::new_v4();

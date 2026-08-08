@@ -302,8 +302,9 @@ pub fn init(cx: &mut App) {
 }
 
 pub(crate) use shortcuts::{
-    init_with_keybindings, install_keybindings, normalize_shortcut_config, normalize_shortcut_keys,
-    resolved_shortcut_keys, shortcut_conflict_for, shortcut_definitions,
+    format_shortcut_for_display, init_with_keybindings, install_keybindings,
+    normalize_shortcut_config, normalize_shortcut_keys, resolved_shortcut_keys,
+    shortcut_conflict_for, shortcut_definitions,
 };
 
 #[cfg(test)]

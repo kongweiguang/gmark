@@ -435,6 +435,7 @@ pub(super) struct RenderedRowSpacingInfo {
     pub(super) is_footnote_header: bool,
     pub(super) is_empty_paragraph: bool,
     pub(super) is_source_blank: bool,
+    pub(super) hidden: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,6 +486,7 @@ impl RenderedRowSpacingInfo {
             is_footnote_header: block.kind().is_footnote_definition(),
             is_empty_paragraph,
             is_source_blank: block.record.is_source_blank(),
+            hidden: block.presentation_hidden,
         }
     }
 }

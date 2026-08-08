@@ -31,6 +31,8 @@ impl Editor {
         let viewport_bounds = self.scroll_handle.bounds();
         let viewport_size = viewport_bounds.size;
         self.sync_scroll_viewport(viewport_size, cx);
+        self.sync_rendered_view_state(window, cx);
+        self.sync_render_asset_lifecycle(window, cx);
 
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings_arc();
@@ -120,6 +122,16 @@ impl Editor {
             let mut index = 0usize;
             while index < visible_blocks.len() {
                 let first_spacing = spacing_for(index);
+                if first_spacing.hidden {
+                    rows.push(RenderedRowDescriptor {
+                        start: index,
+                        end: index + 1,
+                        top_gap: 0.0,
+                        kind: RenderedRowKind::Blank,
+                    });
+                    index += 1;
+                    continue;
+                }
                 if first_spacing.is_empty_paragraph {
                     let _ = gap_state.root_gap(first_spacing, d.block_gap);
                     rows.push(RenderedRowDescriptor {
@@ -278,6 +290,9 @@ impl Editor {
             }
             let entity = &visible_blocks[rows[row].start].entity;
             let spacing = spacing_for(rows[row].start);
+            if spacing.hidden {
+                return true;
+            }
             self.view_mode == super::ViewMode::Preview
                 || (spacing.is_source_blank && focused_entity_id != Some(entity.entity_id()))
         };
@@ -291,7 +306,11 @@ impl Editor {
             .enumerate()
             .map(|(row, id)| {
                 if collapsed_blank(row) {
-                    1.0
+                    if spacing_for(rows[row].start).hidden {
+                        0.0
+                    } else {
+                        1.0
+                    }
                 } else {
                     self.row_stride_cache.get(id).copied().unwrap_or(estimate)
                 }
@@ -351,6 +370,14 @@ impl Editor {
             let render_entity_row = |entity: Entity<Block>, top_gap: f32| {
                 let spacing =
                     entity.read_with(cx, |block, _cx| RenderedRowSpacingInfo::from_block(block));
+                if spacing.hidden {
+                    return div()
+                        .w_full()
+                        .h(px(0.0))
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .into_any_element();
+                }
                 let collapse_empty = spacing.is_empty_paragraph
                     && (self.view_mode == super::ViewMode::Preview
                         || (spacing.is_source_blank
@@ -409,6 +436,9 @@ impl Editor {
                     let mut footnote_gaps = RenderedRowGapState::default();
                     for row_index in descriptor.start..descriptor.end {
                         let spacing = spacing_for(row_index);
+                        if spacing.hidden {
+                            continue;
+                        }
                         let gap = footnote_gaps.footnote_gap(spacing, d.block_gap);
                         let entity = visible_blocks[row_index].entity.clone();
                         let editable_blank = self.view_mode == super::ViewMode::Rendered
@@ -434,6 +464,10 @@ impl Editor {
                     let mut row_index = descriptor.start;
                     while row_index < descriptor.end {
                         let spacing = spacing_for(row_index);
+                        if spacing.hidden {
+                            row_index += 1;
+                            continue;
+                        }
                         if let Some(footnote_anchor) = spacing.footnote_anchor {
                             let mut footnote_children = Vec::new();
                             let mut footnote_gaps = RenderedRowGapState::default();

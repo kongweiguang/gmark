@@ -450,6 +450,37 @@ impl InlineTextTree {
         tree
     }
 
+    /// Replaces one complete inline-math fragment while retaining every other
+    /// fragment's style/link/footnote metadata. The replacement is parsed
+    /// through the same inline recognizer so its delimiter and body metadata
+    /// stay synchronized with the source text.
+    pub(crate) fn replace_inline_math_source(
+        &mut self,
+        range: Range<usize>,
+        replacement: &str,
+    ) -> bool {
+        let parsed = Self::from_markdown(replacement);
+        let math = parsed
+            .fragments
+            .iter()
+            .find_map(|fragment| fragment.math.clone());
+        let mut offset = 0usize;
+        for fragment in &mut self.fragments {
+            let fragment_range = offset..offset + fragment.text.len();
+            offset = fragment_range.end;
+            if fragment_range != range || fragment.math.is_none() {
+                continue;
+            }
+            let Some(math) = math else {
+                return false;
+            };
+            fragment.text = replacement.to_owned();
+            fragment.math = Some(math);
+            return true;
+        }
+        false
+    }
+
     /// Code-span content normalization:
     /// - CRLF/CR line endings are normalized to LF so inline code can render
     ///   across hard lines in the editor.

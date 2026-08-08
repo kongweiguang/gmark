@@ -54,7 +54,7 @@ impl Theme {
         colors.code_language_input_border = Hsla::from(rgba(0x3d3d3aff));
         colors.code_language_input_text = Hsla::from(rgba(0xfaf9f5ff));
         colors.code_language_input_placeholder = Hsla::from(rgba(0x87867fcc));
-        colors.code_syntax_comment = Hsla::from(rgba(0x87867fff));
+        colors.code_syntax_comment = Hsla::from(rgba(0x918f87ff));
         colors.code_syntax_keyword = Hsla::from(rgba(0xc46686ff));
         colors.code_syntax_string = Hsla::from(rgba(0xbcd1caff));
         colors.code_syntax_number = Hsla::from(rgba(0xd97757ff));
@@ -63,7 +63,7 @@ impl Theme {
         colors.code_syntax_constant = Hsla::from(rgba(0xebceceff));
         colors.code_syntax_variable = Hsla::from(rgba(0xfaf9f5ff));
         colors.code_syntax_property = Hsla::from(rgba(0x6a9bccff));
-        colors.code_syntax_operator = Hsla::from(rgba(0xc46849ff));
+        colors.code_syntax_operator = Hsla::from(rgba(0xb0aea5ff));
         colors.code_syntax_punctuation = Hsla::from(rgba(0xb0aea5ff));
         colors.table_border = Hsla::from(rgba(0x3d3d3aff));
         colors.table_header_bg = Hsla::from(rgba(0x1a1918ff));
@@ -165,7 +165,7 @@ impl Theme {
         colors.code_syntax_constant = Hsla::from(rgba(0xc46686ff));
         colors.code_syntax_variable = Hsla::from(rgba(0x141413ff));
         colors.code_syntax_property = Hsla::from(rgba(0x476f98ff));
-        colors.code_syntax_operator = Hsla::from(rgba(0xc46849ff));
+        colors.code_syntax_operator = Hsla::from(rgba(0x30302eff));
         colors.code_syntax_punctuation = Hsla::from(rgba(0x30302eff));
         colors.table_border = Hsla::from(rgba(0xd1cfc5ff));
         colors.table_header_bg = Hsla::from(rgba(0xf5f4edff));

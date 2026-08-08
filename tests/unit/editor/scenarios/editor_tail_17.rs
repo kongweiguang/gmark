@@ -123,7 +123,7 @@ async fn workspace_link_completion_writes_standard_relative_markdown_and_undoes_
 }
 
 #[gpui::test]
-async fn focused_complex_source_block_shows_read_only_live_preview(cx: &mut TestAppContext) {
+async fn focused_math_block_shows_source_and_visual_editors(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let (editor, visual) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "$$\nx^2\n$$".to_owned(), None));
@@ -132,12 +132,8 @@ async fn focused_complex_source_block_shows_read_only_live_preview(cx: &mut Test
         editor.focus_block(math.entity_id());
     });
     redraw(visual);
-    assert!(visual.debug_bounds("complex-source-live-preview").is_some());
-    assert!(
-        visual
-            .debug_bounds("complex-source-live-preview-result")
-            .is_some()
-    );
+    assert!(visual.debug_bounds("math-source-editor").is_some());
+    assert!(visual.debug_bounds("math-visual-editor-surface").is_some());
     editor.read_with(visual, |editor, _cx| assert!(!editor.document_dirty));
 }
 

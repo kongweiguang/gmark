@@ -1,9 +1,44 @@
 // @author kongweiguang
 
 use super::{
-    ShortcutCommand, normalize_shortcut_config, resolved_shortcut_keys, shortcut_conflict_for,
+    ShortcutCommand, format_shortcut_for_display, normalize_shortcut_config,
+    resolved_shortcut_keys, shortcut_conflict_for,
 };
 use std::collections::BTreeMap;
+
+#[test]
+fn shortcut_display_formatting_uses_ui_labels() {
+    assert_eq!(format_shortcut_for_display("ctrl-alt-i"), "Ctrl+Alt+I");
+    #[cfg(target_os = "macos")]
+    assert_eq!(format_shortcut_for_display("cmd-shift-s"), "Cmd+Shift+S");
+    #[cfg(target_os = "windows")]
+    assert_eq!(format_shortcut_for_display("cmd-shift-s"), "Shift+Win+S");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    assert_eq!(format_shortcut_for_display("cmd-shift-s"), "Shift+Super+S");
+    assert_eq!(format_shortcut_for_display("escape"), "Esc");
+}
+
+#[test]
+fn shortcut_display_formatting_supports_space_separated_candidates() {
+    #[cfg(target_os = "macos")]
+    assert_eq!(format_shortcut_for_display("ctrl-a cmd-a"), "Ctrl+A Cmd+A");
+    #[cfg(target_os = "windows")]
+    assert_eq!(format_shortcut_for_display("ctrl-a cmd-a"), "Ctrl+A Win+A");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    assert_eq!(
+        format_shortcut_for_display("ctrl-a cmd-a"),
+        "Ctrl+A Super+A"
+    );
+}
+
+#[test]
+fn shortcut_display_formatting_preserves_unreadable_fallbacks() {
+    assert_eq!(format_shortcut_for_display(""), "");
+    assert_eq!(
+        format_shortcut_for_display("ctrl--shortcut"),
+        "ctrl--shortcut"
+    );
+}
 
 #[test]
 fn custom_shortcut_replaces_command_defaults() {

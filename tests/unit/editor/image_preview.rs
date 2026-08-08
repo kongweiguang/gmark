@@ -6,9 +6,10 @@ use image::{ImageBuffer, Rgba};
 use super::{
     IMAGE_PREVIEW_MAX_PIXELS, IMAGE_PREVIEW_MAX_TILED_PIXELS, IMAGE_PREVIEW_MAX_ZOOM,
     IMAGE_PREVIEW_MIN_ZOOM, IMAGE_PREVIEW_TILE_EDGE, ImagePreviewContent, ImagePreviewZoomAction,
-    image_preview_offset_after_anchored_zoom, image_preview_zoom_after_wheel,
-    image_preview_zoom_for_action, load_image_preview_asset, validate_image_preview_dimensions,
-    validate_image_preview_tiled_dimensions, visible_tile_row_window,
+    bounded_tile_band_height, image_preview_offset_after_anchored_zoom,
+    image_preview_zoom_after_wheel, image_preview_zoom_for_action, load_image_preview_asset,
+    validate_image_preview_dimensions, validate_image_preview_tiled_dimensions,
+    visible_tile_row_window,
 };
 
 #[test]
@@ -93,9 +94,7 @@ fn oversized_png_is_tiled_without_losing_dimensions() {
 
     let asset = load_image_preview_asset(&path).expect("load oversized PNG preview");
     assert_eq!((asset.width, asset.height), (width, height));
-    let ImagePreviewContent::Tiled(rows) = asset.content else {
-        panic!("oversized PNG must use tiled rendering");
-    };
+    let ImagePreviewContent::Tiled(rows) = asset.content;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].height, IMAGE_PREVIEW_TILE_EDGE);
     assert_eq!(rows[1].height, 3);
@@ -109,6 +108,22 @@ fn oversized_png_is_tiled_without_losing_dimensions() {
 }
 
 #[test]
+fn small_png_uses_the_bounded_tile_decoder_too() {
+    let dir = tempfile::tempdir().expect("image preview tempdir");
+    let path = dir.path().join("small.png");
+    ImageBuffer::from_pixel(8, 4, Rgba([12u8, 34, 56, 255]))
+        .save(&path)
+        .expect("write png fixture");
+
+    let asset = load_image_preview_asset(&path).expect("load small PNG preview");
+    let ImagePreviewContent::Tiled(rows) = asset.content;
+    assert_eq!((asset.width, asset.height), (8, 4));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].tiles.len(), 1);
+    assert!(!rows[0].tiles[0].source.png.is_empty());
+}
+
+#[test]
 fn hostile_image_dimensions_are_rejected_before_allocating_pixels() {
     assert!(validate_image_preview_dimensions(8_192, 4_096).is_ok());
     let error = validate_image_preview_dimensions(u32::MAX, u32::MAX)
@@ -117,4 +132,14 @@ fn hostile_image_dimensions_are_rejected_before_allocating_pixels() {
     assert_eq!(IMAGE_PREVIEW_MAX_PIXELS, 32 * 1024 * 1024);
     assert!(validate_image_preview_tiled_dimensions(1_537, 63_671).is_ok());
     assert_eq!(IMAGE_PREVIEW_MAX_TILED_PIXELS, 256 * 1024 * 1024);
+}
+
+#[test]
+fn wide_png_tile_bands_keep_temporary_buffers_bounded() {
+    assert_eq!(
+        bounded_tile_band_height(1_537, 63_671),
+        IMAGE_PREVIEW_TILE_EDGE
+    );
+    assert_eq!(bounded_tile_band_height(4_194_304, 4_096), 4);
+    assert_eq!(bounded_tile_band_height(u32::MAX, 4_096), 1);
 }

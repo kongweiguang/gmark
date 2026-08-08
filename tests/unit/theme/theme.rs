@@ -69,6 +69,31 @@ fn built_in_themes_have_stable_names_and_distinct_surfaces() {
 }
 
 #[test]
+fn built_in_code_themes_keep_operators_and_punctuation_quiet() {
+    let themes = [
+        Theme::xcode_dark(),
+        Theme::xcode_light(),
+        Theme::fleet_dark(),
+        Theme::fleet_light(),
+        Theme::obsidian_dark(),
+        Theme::obsidian_light(),
+        Theme::claude_dark(),
+        Theme::claude_light(),
+    ];
+
+    for theme in themes {
+        assert_eq!(
+            theme.colors.code_syntax_operator, theme.colors.code_syntax_punctuation,
+            "operators and punctuation should share a quiet neutral role"
+        );
+        assert_ne!(
+            theme.colors.code_syntax_comment, theme.colors.code_syntax_variable,
+            "comments should remain visually secondary to ordinary code"
+        );
+    }
+}
+
+#[test]
 fn workbench_materials_respect_transparency_and_contrast_preferences() {
     use super::workbench::{ResolvedVisualPreferences, SurfaceKind};
 

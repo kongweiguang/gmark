@@ -1,16 +1,84 @@
 // @author kongweiguang
 
 use super::super::MermaidViewMode;
+use super::math::{math_caret_scroll_offset, math_palette_placement};
 use super::{
     HtmlComputedStyle, block_content_insets, column_axis_gutter_visible, html_node_visual_style,
     inline_word_chunks, mermaid_preview_canvas_height, mermaid_workbench_body_height,
     yaml_frontmatter_body,
 };
 use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
-use crate::components::{CalloutVariant, TableAxisKind, TableAxisMarker};
+use crate::components::{CalloutVariant, MathPalettePage, TableAxisKind, TableAxisMarker};
 use crate::i18n::I18nManager;
 use crate::theme::{Theme, ThemeManager};
-use gpui::{Hsla, Rgba, TestAppContext, px};
+use gpui::{Bounds, Hsla, Pixels, Rgba, TestAppContext, point, px, size};
+
+fn math_anchor(left: f32, top: f32, width: f32, height: f32) -> Bounds<Pixels> {
+    Bounds::new(point(px(left), px(top)), size(px(width), px(height)))
+}
+
+#[test]
+fn math_palette_flips_above_when_the_tall_page_does_not_fit_below() {
+    let placement = math_palette_placement(
+        math_anchor(300.0, 500.0, 400.0, 40.0),
+        None,
+        size(px(1000.0), px(700.0)),
+        MathPalettePage::Symbols,
+        point(px(0.0), px(0.0)),
+    );
+    assert!(placement.above);
+    assert!(placement.top < 500.0);
+}
+
+#[test]
+fn math_palette_side_stays_stable_when_switching_pages() {
+    let bounds = math_anchor(300.0, 500.0, 400.0, 40.0);
+    let viewport = size(px(1000.0), px(700.0));
+    let symbols = math_palette_placement(
+        bounds,
+        None,
+        viewport,
+        MathPalettePage::Symbols,
+        point(px(0.0), px(0.0)),
+    );
+    let structures = math_palette_placement(
+        bounds,
+        None,
+        viewport,
+        MathPalettePage::Structures,
+        point(px(0.0), px(0.0)),
+    );
+    assert_eq!(symbols.above, structures.above);
+    assert!(structures.top > symbols.top);
+}
+
+#[test]
+fn math_palette_horizontal_drag_is_clamped_inside_the_viewport() {
+    let placement = math_palette_placement(
+        math_anchor(0.0, 100.0, 40.0, 40.0),
+        None,
+        size(px(320.0), px(700.0)),
+        MathPalettePage::Symbols,
+        point(px(-500.0), px(0.0)),
+    );
+    assert_eq!(placement.left, 8.0);
+}
+
+#[test]
+fn math_caret_scroll_reveals_both_edges_and_respects_extent() {
+    assert_eq!(
+        math_caret_scroll_offset(0.0, 500.0, 200.0, 260.0, 262.0),
+        -74.0
+    );
+    assert_eq!(
+        math_caret_scroll_offset(-300.0, 500.0, 200.0, 20.0, 22.0),
+        -8.0
+    );
+    assert_eq!(
+        math_caret_scroll_offset(-600.0, 500.0, 200.0, 900.0, 902.0),
+        -500.0
+    );
+}
 
 #[test]
 fn tall_mermaid_preview_preserves_readable_height_for_internal_scrolling() {
@@ -305,22 +373,28 @@ async fn code_language_input_docks_in_top_toolbar(cx: &mut TestAppContext) {
     let surface_bounds = cx
         .debug_bounds("code-block-surface")
         .expect("code surface should render");
+    let toolbar_bounds = cx
+        .debug_bounds("code-block-toolbar")
+        .expect("code toolbar should render");
+    let copy_bounds = cx
+        .debug_bounds("code-block-copy")
+        .expect("code copy button should render");
     let text_inset = f32::from(text_bounds.left() - surface_bounds.left());
     let text_end_inset = f32::from(surface_bounds.right() - text_bounds.right());
     assert!(
-        (text_inset - 12.0).abs() <= 0.5,
-        "code surface should start at the shared rendered-content edge; text_inset={text_inset}, text_bounds={text_bounds:?}, surface_bounds={surface_bounds:?}"
+        (32.0..48.0).contains(&text_inset),
+        "code surface should reserve content padding plus a line-number gutter; text_inset={text_inset}, text_bounds={text_bounds:?}, surface_bounds={surface_bounds:?}"
     );
     assert!(
-        (text_end_inset - 12.0).abs() <= 0.5,
+        (text_end_inset - 13.0).abs() <= 0.5,
         "code surface should preserve the same right content edge; text_end_inset={text_end_inset}, text_bounds={text_bounds:?}, surface_bounds={surface_bounds:?}"
     );
     assert!(language_bounds.top() < text_bounds.top());
-    let left_gap = f32::from(language_bounds.left() - text_bounds.left());
     assert!(
-        left_gap.abs() <= 12.0,
-        "expected language input to align with code content; left_gap={left_gap}, text_bounds={text_bounds:?}, language_bounds={language_bounds:?}"
+        language_bounds.right() <= copy_bounds.left(),
+        "language control should sit before copy; toolbar={toolbar_bounds:?}, copy={copy_bounds:?}, language={language_bounds:?}"
     );
+    assert!(copy_bounds.right() <= toolbar_bounds.right());
     assert!(language_bounds.size.width <= px(156.0));
 }
 

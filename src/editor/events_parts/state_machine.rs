@@ -1,7 +1,6 @@
 // @author kongweiguang
 
 use super::*;
-
 impl Editor {
     /// Handles all block-originated editor events against the current cached
     /// visible-order snapshot.
@@ -67,6 +66,9 @@ impl Editor {
                 } else {
                     self.mark_block_dirty(block.entity_id(), cx);
                 }
+                block.update(cx, |block, _cx| {
+                    block.rebase_math_edit_after_local_revision(self.source_document.revision());
+                });
                 if self
                     .diagram_overlay
                     .as_ref()
@@ -775,6 +777,15 @@ impl Editor {
                     visible.entity.update(cx, |_, cx| cx.notify());
                 }
                 cx.notify();
+            }
+            BlockEvent::RequestToggleCollapse { key, heading } => {
+                self.toggle_rendered_collapse(key, *heading, cx);
+            }
+            BlockEvent::TableColumnLayoutChanged { key, fractions } => {
+                self.persist_table_column_layout(key, fractions.clone(), cx);
+            }
+            BlockEvent::ResetTableColumnLayout { key } => {
+                self.reset_table_column_layout(key, cx);
             }
             BlockEvent::SelectionChanged => {
                 self.workspace_link_completion = None;

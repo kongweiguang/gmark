@@ -15,6 +15,7 @@ mod serializer;
 mod source;
 mod table;
 mod toc;
+mod visible_text;
 
 pub use block::{
     Block, BlockKind, CalloutKind, CodeBlock, CodeFence, Heading, HeadingAttribute, List,
@@ -22,7 +23,10 @@ pub use block::{
 };
 pub use event::{MarkdownEvent, MarkdownEventKind, MarkdownTag, MarkdownTagEnd};
 pub use html::{
-    HtmlDocument, HtmlFragment, HtmlParserKind, HtmlSafety, escape_html, sanitize_html_for_export,
+    HtmlDiagnostic, HtmlDiagnosticKind, HtmlDocument, HtmlFallbackReason, HtmlFragment, HtmlNodeId,
+    HtmlParserKind, HtmlRenderAttribute, HtmlRenderLimits, HtmlRenderNode, HtmlRenderNodeKind,
+    HtmlRenderStatus, HtmlRenderTree, HtmlSafety, escape_html, escape_raw_html,
+    sanitize_html_for_export,
 };
 pub use inline::{Inline, InlineKind, LinkKind, LinkTarget};
 pub use parser::{MarkdownDocument, MarkdownParser, parse_markdown};
@@ -40,3 +44,6 @@ pub use source::{
 };
 pub use table::{Table, TableAlignment, TableCell};
 pub use toc::{TableOfContents, TocEntry, slugify};
+pub use visible_text::{
+    Replaceability, VisibleFoldRegion, VisibleTextKind, VisibleTextProjection, VisibleTextSegment,
+};

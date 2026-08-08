@@ -14,7 +14,6 @@ pub(super) fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
             kind: TagKind::CommentLike,
             name: "#comment".into(),
             attrs: Vec::new(),
-            self_closing: true,
             source_range: start..end,
         });
     }
@@ -25,7 +24,6 @@ pub(super) fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
             kind: TagKind::CommentLike,
             name: "#raw".into(),
             attrs: Vec::new(),
-            self_closing: true,
             source_range: start..end,
         });
     }
@@ -72,7 +70,6 @@ pub(super) fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
         if ch == '>' {
             let source_range = start..index + 1;
             let attrs_source = &raw[attrs_start..index];
-            let self_closing = attrs_source.trim_end().ends_with('/');
             return Some(TagToken {
                 kind: if closing {
                     TagKind::Close
@@ -85,7 +82,6 @@ pub(super) fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
                 } else {
                     parse_html_attrs(attrs_source)
                 },
-                self_closing,
                 source_range,
             });
         }
@@ -187,45 +183,9 @@ pub(crate) fn parse_html_attrs(source: &str) -> Vec<HtmlAttr> {
     attrs
 }
 
-pub(super) fn classify_open_tag(token: &TagToken) -> HtmlSafetyClass {
-    if !is_safe_tag(&token.name) || has_dangerous_attrs(&token.attrs) {
-        HtmlSafetyClass::RawTextBlock
-    } else {
-        HtmlSafetyClass::Semantic
-    }
-}
-
-pub(super) fn semantic_node(raw: &str, token: TagToken, children: Vec<HtmlNode>) -> HtmlNode {
-    HtmlNode {
-        kind: if is_inline_tag(&token.name) {
-            HtmlNodeKind::InlineSemantic
-        } else {
-            HtmlNodeKind::BlockSemantic
-        },
-        tag_name: token.name,
-        attrs: token.attrs,
-        children,
-        raw_source: raw[token.source_range.clone()].to_string(),
-        source_range: token.source_range,
-    }
-}
-
-pub(super) fn push_text_node(raw: &str, range: Range<usize>, nodes: &mut Vec<HtmlNode>) {
-    if range.is_empty() {
-        return;
-    }
-    nodes.push(HtmlNode {
-        kind: HtmlNodeKind::InlineSemantic,
-        tag_name: "#text".into(),
-        attrs: Vec::new(),
-        children: Vec::new(),
-        raw_source: raw[range.clone()].to_string(),
-        source_range: range,
-    });
-}
-
 pub(super) fn raw_node(raw: &str, range: Range<usize>) -> HtmlNode {
     HtmlNode {
+        id: None,
         kind: HtmlNodeKind::RawTextBlock,
         tag_name: "#raw".into(),
         attrs: Vec::new(),
@@ -233,23 +193,6 @@ pub(super) fn raw_node(raw: &str, range: Range<usize>) -> HtmlNode {
         raw_source: raw[range.clone()].to_string(),
         source_range: range,
     }
-}
-
-pub(super) fn raw_region_end(raw: &str, token: &TagToken) -> Option<usize> {
-    if token.self_closing || is_void_tag(&token.name) {
-        return Some(token.source_range.end);
-    }
-
-    let close = format!("</{}>", token.name);
-    let close_upper = close.to_ascii_uppercase();
-    let rest = &raw[token.source_range.end..];
-    let lower = rest.to_ascii_lowercase();
-    let upper = rest.to_ascii_uppercase();
-    lower
-        .find(&close)
-        .or_else(|| upper.find(&close_upper))
-        .map(|offset| token.source_range.end + offset + close.len())
-        .or(Some(raw.len()))
 }
 
 pub(crate) fn has_dangerous_attrs(attrs: &[HtmlAttr]) -> bool {
@@ -305,8 +248,11 @@ pub(crate) fn parse_html_image_block(raw_source: &str) -> Option<HtmlImageBlock>
     let zoom = attr_value_in_attrs(&token.attrs, "style")
         .and_then(parse_html_zoom)
         .unwrap_or(1.0);
-    let width_percent =
-        attr_value_in_attrs(&token.attrs, "style").and_then(parse_html_width_percent);
+    let width_percent = attr_value_in_attrs(&token.attrs, "style")
+        .and_then(parse_html_width_percent)
+        .or_else(|| {
+            attr_value_in_attrs(&token.attrs, "width").and_then(parse_html_width_attribute)
+        });
 
     Some(HtmlImageBlock {
         src,
@@ -356,6 +302,11 @@ fn parse_html_width_percent(style: &str) -> Option<u8> {
         return (10..=100).contains(&percent).then_some(percent);
     }
     None
+}
+
+fn parse_html_width_attribute(value: &str) -> Option<u8> {
+    let percent = value.trim().strip_suffix('%')?.parse::<u8>().ok()?;
+    (10..=100).contains(&percent).then_some(percent)
 }
 
 pub(super) fn parse_inline_style(style: &str) -> HtmlInlineStyle {
@@ -611,10 +562,6 @@ pub(super) fn css_number(value: f32) -> String {
     formatted
 }
 
-fn is_safe_tag(name: &str) -> bool {
-    is_inline_tag(name) || is_block_tag(name)
-}
-
 pub(crate) fn is_inline_tag(name: &str) -> bool {
     matches!(
         name,
@@ -637,51 +584,4 @@ pub(crate) fn is_inline_tag(name: &str) -> bool {
             | "q"
             | "span"
     )
-}
-
-fn is_block_tag(name: &str) -> bool {
-    matches!(
-        name,
-        "div"
-            | "p"
-            | "blockquote"
-            | "hr"
-            | "br"
-            | "details"
-            | "summary"
-            | "figure"
-            | "figcaption"
-            | "table"
-            | "thead"
-            | "tbody"
-            | "tfoot"
-            | "tr"
-            | "th"
-            | "td"
-            | "img"
-            | "pre"
-    )
-}
-
-pub(super) fn is_void_tag(name: &str) -> bool {
-    matches!(name, "br" | "hr" | "img")
-}
-
-#[cfg(feature = "html-native")]
-pub(super) fn tree_sitter_reports_error(raw_source: &str) -> bool {
-    let mut parser = Parser::new();
-    if parser
-        .set_language(&tree_sitter_html::LANGUAGE.into())
-        .is_err()
-    {
-        return true;
-    }
-    parser
-        .parse(raw_source, None)
-        .is_none_or(|tree| tree.root_node().has_error())
-}
-
-#[cfg(not(feature = "html-native"))]
-pub(super) fn tree_sitter_reports_error(_: &str) -> bool {
-    true
 }

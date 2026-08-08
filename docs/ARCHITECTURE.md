@@ -17,6 +17,7 @@ dependencies of the root `gmark` package.
 | Configuration | `crates/gmark-config/src/` | Configuration directories, preferences, recent files, and workspace-session codecs. |
 | Internationalization | `crates/gmark-i18n/src/` | Locale metadata, catalogs, JSONC packs, built-ins, and translation fallback. |
 | Markdown | `crates/gmark-markdown/src/` | Markdown blocks, inline content, parsing, serialization, resources, HTML, tables, and TOC. |
+| Math edit | `crates/gmark-math-edit/src/` | GPUI-independent lossless LaTeX structure model, cursor operations, and opaque fallback. |
 | Source tools | `crates/gmark-source-tools/src/` | Folding, formatting, highlighting, language selection, incremental work, and ranges. |
 | Export | `crates/gmark-export/src/` | Export HTML, resources, images, Chromium integration, math, markup, and export theme handling. |
 | Update core | `crates/gmark-update-core/src/` | Update envelopes, manifests, policy, protocol, staging, and update errors. |
@@ -25,6 +26,19 @@ The root package remains at `src/`. It is the composition boundary for the
 application shell, GPUI, accessibility, window/platform integration, editor,
 and app-level adapters. Domain crates expose reusable functionality to that
 shell; they do not import the shell back.
+
+## Markdown HTML boundary
+
+`crates/gmark-markdown/src/html.rs` owns the HTML safety boundary. It parses
+fragments with html5ever, sanitizes through Ammonia, and exposes a compact
+`Send + Sync` render IR (`HtmlRenderTree`). The GPUI editor and HTML/PDF export
+consume that same policy; neither layer maintains a second HTML tag or URL
+allowlist. `native-html-render` enables the native GPUI projection, while
+disabling it preserves the raw-source fallback for release rollback.
+
+HTML images share the editor HTTP transport limits: HTTP(S)-only URLs without
+credentials, no ambient request credentials, bounded redirect and timeout
+policy, an incremental 20 MiB response cap, and six concurrent requests.
 
 The main package is organized around these composition roots:
 
@@ -57,6 +71,19 @@ Markdown UI-adapter, LaTeX, and Mermaid sources once so `editor` and
 `document_host` consume identical GPUI entity types without depending on each
 other. Application actions and controls themselves are owned by `ui`.
 
+Rendered Markdown search and rich clipboard use the source-ranged
+`VisibleTextProjection` from `gmark-markdown`; a visible segment is replaceable
+only when its bytes map one-to-one to a continuous source range. The root
+application registers process-local shared `MarkdownViewStateManager` and
+bounded `RenderAssetManager` globals; editor windows keep handles to those
+stores and scope their asset keys per editor/document generation. Fold/column
+state is never serialized into Markdown, and asynchronous asset completions
+are accepted only for their current generation. The AccessKit bridge exposes
+the active Source/Live/
+Preview/Split projection in both its document label and mode node, and folds
+or view changes advance the accessibility revision so assistive technology
+does not retain a stale source-only announcement.
+
 ## Dependency direction
 
 Cargo metadata currently establishes these workspace edges:
@@ -64,6 +91,7 @@ Cargo metadata currently establishes these workspace edges:
 ```text
 gmark
   -> gmark-config, gmark-i18n, gmark-markdown, gmark-source-tools
+  -> gmark-math-edit
   -> gmark-export, gmark-update-core
   -> gmark-document-core, gmark-document, gmark-document-runtime
   -> gmark-json-graph, gmark-paged-document, gmark-recovery-codec

@@ -144,6 +144,8 @@ pub(crate) fn render_image_html(
     output
 }
 
+/// Preserves the legacy Markdown image projection's bounded zoom and width
+/// controls when a sanitized raw HTML image is emitted by the exporter.
 pub(crate) fn sanitize_image_style(style: &str) -> (f32, Option<u8>) {
     let mut zoom = 1.0;
     let mut width = None;

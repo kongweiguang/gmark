@@ -225,6 +225,17 @@ fn moderate_single_cell_growth_stays_equal_when_share_is_sufficient() {
 }
 
 #[test]
+fn resizing_a_table_divider_preserves_total_width_and_minimums() {
+    let mut layout = TableColumnLayout::equal(3);
+    assert!(layout.resize_boundary(0, 80.0, 300.0, 70.0));
+    let fractions = layout.fractions();
+    assert_close(fractions.iter().sum::<f32>(), 1.0);
+    assert!(fractions[0] * 300.0 >= 70.0);
+    assert!(fractions[1] * 300.0 >= 70.0);
+    assert!(!layout.resize_boundary(3, 10.0, 300.0, 70.0));
+}
+
+#[test]
 fn append_row_preserves_column_count_and_creates_empty_cells() {
     let mut table = TableData::new_empty(1, 3);
     table.append_row();

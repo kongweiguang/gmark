@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(in crate::editor) fn workspace_panel_width_for_viewport(
+pub(crate) fn workspace_panel_width_for_viewport(
     viewport_width: f32,
     preferred_width: Option<f32>,
 ) -> f32 {
@@ -16,7 +16,7 @@ pub(in crate::editor) fn workspace_panel_width_for_viewport(
     target.clamp(WORKSPACE_PANEL_AUTO_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH)
 }
 
-pub(in crate::editor) fn document_sidebar_panel_width_for_viewport(
+pub(crate) fn document_sidebar_panel_width_for_viewport(
     viewport_width: f32,
     preferred_width: Option<f32>,
 ) -> f32 {
@@ -35,7 +35,7 @@ pub(in crate::editor) fn document_sidebar_panel_width_for_viewport(
     )
 }
 
-pub(in crate::editor) fn workspace_uses_overlay(viewport_width: f32) -> bool {
+pub(crate) fn workspace_uses_overlay(viewport_width: f32) -> bool {
     viewport_width < WORKSPACE_COMPACT_BREAKPOINT
 }
 

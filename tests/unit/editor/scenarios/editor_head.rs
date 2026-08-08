@@ -200,6 +200,24 @@ async fn block_handle_drag_tracks_pointer_half_and_drops_after_document_tail(
     assert_eq!(icon.size, size(px(14.0), px(14.0)));
     assert!(icon.left() >= gutter.left());
     assert!(icon.right() <= gutter.right());
+    for selector in [
+        "block-context-actions-dot-0-0",
+        "block-context-actions-dot-0-1",
+        "block-context-actions-dot-0-2",
+        "block-context-actions-dot-1-0",
+        "block-context-actions-dot-1-1",
+        "block-context-actions-dot-1-2",
+        "block-context-actions-dot-2-0",
+        "block-context-actions-dot-2-1",
+        "block-context-actions-dot-2-2",
+    ] {
+        let dot = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing block grip dot: {selector}"));
+        assert_eq!(dot.size, size(px(2.0), px(2.0)));
+        assert!(dot.left() >= icon.left() && dot.right() <= icon.right());
+        assert!(dot.top() >= icon.top() && dot.bottom() <= icon.bottom());
+    }
     let target = third_entity
         .read_with(visual, |block, _cx| block.last_bounds)
         .expect("third block bounds");
@@ -253,9 +271,7 @@ async fn clicking_canvas_below_trailing_code_block_adds_focused_paragraph(cx: &m
 }
 
 #[gpui::test]
-async fn clicking_canvas_below_trailing_separator_adds_focused_paragraph(
-    cx: &mut TestAppContext,
-) {
+async fn clicking_canvas_below_trailing_separator_adds_focused_paragraph(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let (editor, visual) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "---".to_owned(), None));
@@ -429,10 +445,14 @@ async fn specialized_rendered_surfaces_share_the_paragraph_content_edges(cx: &mu
             .and_then(|visible| visible.entity.read(cx).last_bounds)
             .expect("baseline paragraph bounds")
     });
+    #[cfg(feature = "native-html-render")]
+    let html_selector = "rendered-html-surface";
+    #[cfg(not(feature = "native-html-render"))]
+    let html_selector = "html-raw-text";
     for selector in [
         "yaml-frontmatter",
         "document-toc",
-        "rendered-html-surface",
+        html_selector,
         "math-rendered-content",
         // Mermaid 的 SVG 内容位于 1px 工作台边框内；对齐契约属于外框而非内层画布。
         "mermaid-workbench-frame",
@@ -448,6 +468,10 @@ async fn specialized_rendered_surfaces_share_the_paragraph_content_edges(cx: &mu
             "{selector} must share paragraph edges; baseline={baseline:?}, surface={surface:?}"
         );
     }
+    #[cfg(feature = "native-html-render")]
+    assert!(visual.debug_bounds("rendered-html-surface").is_some());
+    #[cfg(not(feature = "native-html-render"))]
+    assert!(visual.debug_bounds("rendered-html-surface").is_none());
 }
 
 fn assert_dialog_title_icon(

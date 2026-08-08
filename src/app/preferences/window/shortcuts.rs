@@ -3,6 +3,7 @@
 //! Shortcut labels, capture, and editing controls.
 
 use super::*;
+use crate::ui::actions::format_shortcut_for_display;
 
 impl PreferencesWindow {
     pub(super) fn shortcut_category_label(
@@ -368,7 +369,8 @@ impl PreferencesWindow {
             ));
         } else {
             for key in keys {
-                chips = chips.child(Self::shortcut_chip(&key, theme));
+                let display_key = format_shortcut_for_display(&key);
+                chips = chips.child(Self::shortcut_chip(&display_key, theme));
             }
         }
 

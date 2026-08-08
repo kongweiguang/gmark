@@ -21,6 +21,35 @@ const SLASH_MENU_GAP: f32 = 4.0;
 const SLASH_MENU_VIEWPORT_INSET: f32 = 8.0;
 // 单一块入口固定占用内容列内部的左侧预留区，因此普通块、引用和窄窗口共享同一 X 轴。
 pub(super) const BLOCK_GUTTER_TEXT_RESERVE: f32 = 20.0;
+// 块操作移到内容列外侧，给标题折叠箭头留下独立槽位，二者都不改变正文 X 轴。
+pub(super) const BLOCK_GUTTER_ACTION_OUTSET: f32 = 24.0;
+const BLOCK_GUTTER_HEIGHT: f32 = 28.0;
+const BLOCK_GRIP_ICON_SIZE: f32 = 14.0;
+const BLOCK_GRIP_DOT_SIZE: f32 = 2.0;
+const BLOCK_GRIP_DOT_GAP: f32 = 2.0;
+
+fn block_grip_icon(color: Hsla) -> Div {
+    div()
+        .debug_selector(|| "block-context-actions-icon".to_owned())
+        .size(px(BLOCK_GRIP_ICON_SIZE))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(BLOCK_GRIP_DOT_GAP))
+        .children((0..3).map(move |row| {
+            div()
+                .flex()
+                .gap(px(BLOCK_GRIP_DOT_GAP))
+                .children((0..3).map(move |column| {
+                    div()
+                        .debug_selector(move || format!("block-context-actions-dot-{row}-{column}"))
+                        .size(px(BLOCK_GRIP_DOT_SIZE))
+                        .rounded_full()
+                        .bg(color)
+                }))
+        }))
+}
 
 struct BlockDragPreview;
 
@@ -43,12 +72,7 @@ impl Render for BlockDragPreview {
             .border(px(theme.dimensions.dialog_border_width))
             .border_color(material.border)
             .shadow_md()
-            .child(
-                svg()
-                    .path("icon/ui/more-horizontal.svg")
-                    .size(px(16.0))
-                    .text_color(palette.icon),
-            )
+            .child(block_grip_icon(palette.icon))
     }
 }
 

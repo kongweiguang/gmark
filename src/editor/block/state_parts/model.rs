@@ -631,6 +631,14 @@ pub enum BlockEvent {
     /// The user clicked this block; notify siblings so they re-render
     /// in display mode.
     RequestFocus,
+    /// Toggle a rendered-only heading or callout fold state. The key is
+    /// derived from semantic Markdown content and is never written to source.
+    RequestToggleCollapse { key: String, heading: bool },
+    /// Persist a rendered-only table column layout in the process-local view
+    /// state manager. Fractions are normalized by the receiver.
+    TableColumnLayoutChanged { key: String, fractions: Vec<f32> },
+    /// Restore a table's measured automatic column widths.
+    ResetTableColumnLayout { key: String },
 }
 
 /// Undo coalescing category captured before a mutation.

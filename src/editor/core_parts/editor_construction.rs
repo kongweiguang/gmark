@@ -2,6 +2,9 @@
 
 use super::*;
 use crate::i18n::I18nManager;
+#[path = "math_accessibility.rs"]
+mod math_accessibility;
+use math_accessibility::*;
 
 impl Editor {
     pub(in crate::editor) const HISTORY_LIMIT: usize = 200;
@@ -139,7 +142,7 @@ impl Editor {
             .and_then(|name| name.to_str())
             .map(str::to_owned)
             .unwrap_or_else(|| strings.large_document_text("untitled"));
-        let lines = self
+        let lines: Vec<(u64, String)> = self
             .source_document
             .text()
             .lines()
@@ -147,9 +150,16 @@ impl Editor {
             .enumerate()
             .map(|(line, text)| (line as u64, text.to_owned()))
             .collect();
+        let folds = self.accessibility_folds(&lines, cx);
         let update_status = crate::updater::UpdateCoordinator::accessibility_status(cx);
         crate::accessibility::EditorAccessibilitySnapshot {
             title,
+            mode: match self.view_mode {
+                ViewMode::Rendered => crate::accessibility::AccessibilityMode::Live,
+                ViewMode::Source => crate::accessibility::AccessibilityMode::Source,
+                ViewMode::Preview => crate::accessibility::AccessibilityMode::Preview,
+                ViewMode::Split => crate::accessibility::AccessibilityMode::Split,
+            },
             dirty: self.is_document_dirty(),
             status: update_status.clone().unwrap_or_else(|| {
                 if self.is_document_dirty() {
@@ -166,25 +176,154 @@ impl Editor {
             navigation_visible: false,
             caret: None,
             lines,
-            folds: Vec::new(),
+            folds,
+            math: self.active_math_accessibility(cx, strings),
         }
+    }
+
+    fn active_math_accessibility(
+        &self,
+        cx: &App,
+        strings: &crate::i18n::I18nStrings,
+    ) -> Option<crate::accessibility::AccessibilityMath> {
+        let entity_id = self.active_entity_id.or(self.pending_focus)?;
+        let block = self.focusable_entity_by_id(entity_id)?;
+        let block = block.read(cx);
+        let session = block.math_edit_session.as_ref()?;
+        let page = match block.math_palette_page {
+            crate::components::MathPalettePage::Symbols => {
+                crate::accessibility::AccessibilityMathPage::Symbols
+            }
+            crate::components::MathPalettePage::Structures => {
+                crate::accessibility::AccessibilityMathPage::Structures
+            }
+        };
+        let editor = session.editor();
+        let document = session.document();
+        let cursor = editor.cursor();
+        let slot_value = math_slot_source(document, cursor.slot())?;
+        let slot_label = format!(
+            "{} ({:?})",
+            strings.math_palette_text("formula_editor"),
+            cursor.slot().role()
+        );
+        let controls = math_accessibility_controls(strings);
+        let grid = math_accessibility_grid(document, cursor.slot());
+        Some(crate::accessibility::AccessibilityMath {
+            source: document.to_latex(),
+            slot_value,
+            slot_cursor: cursor.offset(),
+            slot_label,
+            symbols_label: strings.math_palette_text("symbols_tab"),
+            structures_label: strings.math_palette_text("structures_tab"),
+            page,
+            controls,
+            grid,
+        })
+    }
+
+    fn accessibility_folds(
+        &self,
+        lines: &[(u64, String)],
+        cx: &App,
+    ) -> Vec<crate::accessibility::AccessibilityFold> {
+        if self.view_mode == ViewMode::Source {
+            return Vec::new();
+        }
+        let mut cursor = 0usize;
+        let mut folds = Vec::new();
+        for visible in self.document.flatten_visible_blocks() {
+            let (kind, key, collapsed, heading) = visible.entity.read_with(cx, |block, _cx| {
+                (
+                    block.kind(),
+                    block
+                        .presentation_fold_key
+                        .as_ref()
+                        .map(ToString::to_string),
+                    block.presentation_collapsed,
+                    block.presentation_fold_heading,
+                )
+            });
+            let Some(key) = key else { continue };
+            let Some(start_line) = next_accessibility_fold_line(lines, &mut cursor, &kind) else {
+                continue;
+            };
+            folds.push(crate::accessibility::AccessibilityFold {
+                start_line,
+                end_line: start_line,
+                collapsed,
+                target: Some(crate::accessibility::AccessibilityFoldTarget::Rendered {
+                    key,
+                    heading,
+                }),
+            });
+        }
+        for index in 0..folds.len() {
+            folds[index].end_line = folds
+                .get(index + 1)
+                .map(|fold| fold.start_line.saturating_sub(1))
+                .or_else(|| lines.last().map(|(line, _)| *line))
+                .unwrap_or(folds[index].start_line);
+        }
+        folds
     }
 
     pub(in crate::editor) fn current_accessibility_revision(&self, cx: &App) -> u64 {
         if let Some(document_host) = self.document_host.as_ref() {
             return document_host.read(cx).accessibility_revision();
         }
+        let math_signature = self.accessibility_math_signature(cx);
         let flags = u64::from(self.is_document_dirty())
             | (u64::from(self.find_panel.is_some()) << 1)
             | (u64::from(self.external_file_conflict) << 2)
             | (u64::from(self.save_task.is_some()) << 3)
             | (u64::from(self.export_in_progress) << 4)
-            | (update_accessibility_revision(cx) << 5);
+            | (update_accessibility_revision(cx) << 5)
+            | (match self.view_mode {
+                ViewMode::Source => 0,
+                ViewMode::Rendered => 1,
+                ViewMode::Preview => 2,
+                ViewMode::Split => 3,
+            } << 10);
+        let fold_signature =
+            self.document
+                .flatten_visible_blocks()
+                .iter()
+                .fold(0_u64, |signature, visible| {
+                    let (has_key, collapsed) = visible.entity.read_with(cx, |block, _cx| {
+                        (
+                            block.presentation_fold_key.is_some(),
+                            block.presentation_collapsed,
+                        )
+                    });
+                    u64::from(has_key) | (u64::from(collapsed) << 1) | signature.rotate_left(5)
+                });
+        let flags = flags | ((fold_signature & 0x000f_ffff) << 20);
         self.source_document
             .revision()
             .get()
             .wrapping_mul(4_096)
             .wrapping_add(flags)
+            .wrapping_add(math_signature.rotate_left(17))
+    }
+
+    fn accessibility_math_signature(&self, cx: &App) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let Some(math) = self.active_math_accessibility(cx, cx.global::<I18nManager>().strings())
+        else {
+            return 0;
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        math.source.hash(&mut hasher);
+        math.slot_value.hash(&mut hasher);
+        math.slot_cursor.hash(&mut hasher);
+        math.page.hash(&mut hasher);
+        if let Some(grid) = math.grid {
+            grid.active_row.hash(&mut hasher);
+            grid.active_column.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     pub(crate) fn subscribe_document_host(
@@ -193,7 +332,12 @@ impl Editor {
     ) {
         cx.subscribe(view, |editor, _, event, cx| match event {
             crate::document_host::DocumentHostEvent::SavedAs(path) => {
+                let tab_id = editor.tabs.active_id();
+                let _ = editor.view_state.close_tab(tab_id);
                 editor.file_path = Some(path.clone());
+                let _ = editor.view_state.open_tab(
+                    crate::editor::markdown_view_state::MarkdownTabIdentity::saved(path, tab_id),
+                );
                 editor.saved_file_fingerprint = crate::recovery::fingerprint_file(path).ok();
                 editor.document_dirty = false;
                 editor.pending_window_edited = false;
@@ -359,6 +503,23 @@ impl Editor {
             .or_else(|| document.first_root())
             .map(|block| block.entity_id());
         let last_stable_source = HistorySource::capture(source_document.snapshot(), normalized);
+        let render_assets = cx
+            .try_global::<crate::editor::render_asset_manager::SharedRenderAssetManager>()
+            .cloned()
+            .unwrap_or_else(|| {
+                let shared =
+                    crate::editor::render_asset_manager::SharedRenderAssetManager::default();
+                cx.set_global(shared.clone());
+                shared
+            });
+        let view_state = cx
+            .try_global::<crate::editor::markdown_view_state::SharedMarkdownViewState>()
+            .cloned()
+            .unwrap_or_else(|| {
+                let shared = crate::editor::markdown_view_state::SharedMarkdownViewState::default();
+                cx.set_global(shared.clone());
+                shared
+            });
 
         let mut editor = Self {
             accessibility_bridge: None,
@@ -369,6 +530,7 @@ impl Editor {
             source_encoding: crate::document_io::DocumentEncoding::Utf8,
             document_kind,
             document_epoch: 0,
+            render_asset_scope: uuid::Uuid::new_v4(),
             projection_cache: Some(projection),
             document,
             split_preview: None,
@@ -377,10 +539,14 @@ impl Editor {
             split_divider_focus_handle: cx.focus_handle(),
             document_toolbar_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             image_preview_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
+            image_preview_tile_ids: Vec::new(),
             file_open_failure_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             update_primary_focus_handle: cx.focus_handle(),
             update_secondary_focus_handle: cx.focus_handle(),
             table_cells: HashMap::new(),
+            render_assets,
+            render_asset_tasks: HashMap::new(),
+            view_state,
             view_mode: ViewMode::Rendered,
             pending_focus,
             active_entity_id: pending_focus,
@@ -531,6 +697,29 @@ impl Editor {
         }
         editor
     }
+}
+
+fn next_accessibility_fold_line(
+    lines: &[(u64, String)],
+    cursor: &mut usize,
+    kind: &BlockKind,
+) -> Option<u64> {
+    let matches = |text: &str| match kind {
+        BlockKind::Heading { level } => {
+            let trimmed = text.trim_start();
+            let hashes = trimmed.bytes().take_while(|byte| *byte == b'#').count();
+            hashes == usize::from(*level) && trimmed.as_bytes().get(hashes) == Some(&b' ')
+        }
+        BlockKind::Callout(_) => text.trim_start().starts_with("> [!"),
+        _ => false,
+    };
+    for (index, (line, text)) in lines.iter().enumerate().skip(*cursor) {
+        if matches(text) {
+            *cursor = index + 1;
+            return Some(*line);
+        }
+    }
+    None
 }
 
 fn update_accessibility_revision(cx: &App) -> u64 {

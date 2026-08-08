@@ -7,6 +7,8 @@ use crate::editor::workspace::document_sidebar_panel_width_for_viewport;
 #[path = "view_parts/footnote.rs"]
 mod footnote;
 use footnote::footnote_group_shell;
+#[path = "view_parts/accessibility.rs"]
+mod accessibility;
 
 pub(super) fn submenu_panel_top(
     items: &[OwnedMenuItem],
@@ -120,71 +122,17 @@ impl Editor {
     }
 }
 
-impl Editor {
-    pub(super) fn sync_accessibility_bridge(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let actions = self
-            .accessibility_bridge
-            .as_ref()
-            .map(crate::accessibility::AccessibilityBridge::take_actions)
-            .unwrap_or_default();
-        for request in actions {
-            if request.action != accesskit::Action::Click {
-                continue;
-            }
-            match request.target_node {
-                crate::accessibility::SAVE_ID => {
-                    self.on_save_document(&crate::components::SaveDocument, window, cx)
-                }
-                crate::accessibility::FIND_ID => {
-                    self.on_find_in_document_action(&crate::components::FindInDocument, window, cx)
-                }
-                crate::accessibility::GO_TO_LINE_ID => {
-                    self.on_go_to_line_action(&crate::components::GoToLine, window, cx)
-                }
-                crate::accessibility::ERROR_ID => {
-                    if let Some(document_host) = self.document_host.clone() {
-                        document_host.update(cx, |view, cx| view.activate_accessibility_error(cx));
-                    }
-                }
-                target => {
-                    if let Some(line) = crate::accessibility::source_line_for_fold_node(target)
-                        && let Some(document_host) = self.document_host.clone()
-                    {
-                        document_host
-                            .update(cx, |view, cx| view.toggle_fold_at_source_line(line, cx));
-                    }
-                }
-            }
-        }
-        if let Some(bridge) = self.accessibility_bridge.as_mut() {
-            bridge.update_focus(window.is_window_active());
-        }
-        let revision = self.current_accessibility_revision(cx);
-        if self.accessibility_revision != Some(revision) {
-            let snapshot = self.accessibility_snapshot(cx);
-            if let Some(bridge) = self.accessibility_bridge.as_mut() {
-                bridge.update(snapshot);
-            }
-            self.accessibility_revision = Some(revision);
-        }
-    }
-}
-
 #[path = "../render_parts/document_view.rs"]
 mod document_view;
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_markdown_view_state();
         if let Some(document_host) = self.document_host.as_ref() {
             let dirty = document_host.read(cx).is_dirty();
             self.document_dirty = dirty;
             self.pending_window_edited = dirty;
         }
-        self.sync_accessibility_bridge(window, cx);
         let source_bytes = self.source_document.len();
         if let Some(started) = self.first_render_started.take() {
             super::perf::emit(
@@ -217,6 +165,11 @@ impl Render for Editor {
         self.sync_window_edited_state(window);
 
         let content_area = self.render_document_content(window, cx);
+        // Rendered Markdown presentation state (fold keys, collapsed flags,
+        // and table layout) is synchronized while building the content tree.
+        // Publish the accessibility snapshot afterwards so the first frame
+        // exposes the same fold semantics as the pixels on screen.
+        self.sync_accessibility_bridge(window, cx);
         let theme = cx.global::<ThemeManager>().current_arc();
         let visual_preferences = cx
             .try_global::<VisualPreferencesManager>()

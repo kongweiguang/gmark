@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use super::*;
+use crate::components::TableData;
 
 impl Block {
     /// 渲染原生表格及其行列选择、追加控制和轴向菜单交互。
@@ -37,14 +38,43 @@ impl Block {
                 .into_any_element();
         };
 
-        let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
-        let table_width = effective_table_width(self, viewport_width, d);
-        let column_layout = self
+        // The window viewport also includes docked workspace/sidebar panels;
+        // prefer the block's measured content width so a wide table cannot
+        // place append controls outside the actual document column.
+        let window_width = f32::from(window.viewport_size().width.max(px(1.0)));
+        let docked_workspace = if crate::editor::workspace::workspace_uses_overlay(window_width) {
+            0.0
+        } else {
+            crate::editor::workspace::workspace_panel_width_for_viewport(window_width, None)
+        };
+        let viewport_width = self
+            .last_bounds
+            .map(|bounds| f32::from(bounds.size.width))
+            .unwrap_or((window_width - docked_workspace).max(1.0));
+        let base_table_width = effective_table_width(self, viewport_width, d);
+        let table_width = self
+            .record
+            .table
+            .as_ref()
+            .filter(|table| table_has_unbreakable_content(table))
+            .map(|table| {
+                base_table_width.max(TableColumnLayout::intrinsic_width(table, window, theme))
+            })
+            .unwrap_or(base_table_width);
+        let measured_layout = self
             .record
             .table
             .as_ref()
             .map(|table| TableColumnLayout::measure(table, table_width, window, theme))
             .unwrap_or_else(|| TableColumnLayout::equal(runtime.header.len()));
+        let column_layout = self
+            .table_column_layout
+            .clone()
+            .filter(|layout| layout.fractions().len() == runtime.header.len())
+            .unwrap_or_else(|| measured_layout.clone());
+        if self.table_column_layout.is_none() {
+            self.table_column_layout = Some(measured_layout);
+        }
         let preview_marker = self.table_axis_preview;
         let selected_marker = self.table_axis_selection;
         let body_row_count = runtime.rows.len();
@@ -74,6 +104,9 @@ impl Block {
             px(0.0)
         };
         let weak_table_block = cx.entity().downgrade();
+        let table_entity_id = self.record.id;
+        let column_count = runtime.header.len();
+        let divider_hover = wb.control_hover;
 
         let header_cells = runtime.header;
         let column_axis_row = (top_gutter > px(0.0)).then(|| {
@@ -485,22 +518,114 @@ impl Block {
                 }
             };
 
+            let mut divider_offset = 0.0f32;
+            let divider_focus_handle = self.table_column_resize_focus_handle.clone();
+            let divider_block = weak_table_block.clone();
+            let dividers = column_layout
+                .fractions()
+                .into_iter()
+                .enumerate()
+                .take(column_count.saturating_sub(1))
+                .map(move |(boundary, fraction)| {
+                    divider_offset += fraction;
+                    let offset = divider_offset;
+                    let focus_handle = divider_focus_handle.clone();
+                    let block = divider_block.clone();
+                    let key_block = divider_block.clone();
+                    div()
+                        .id(ElementId::Name(
+                            format!("table-column-divider-{}-{}", table_entity_id, boundary).into(),
+                        ))
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(relative(offset))
+                        .w(px(6.0))
+                        .cursor_col_resize()
+                        .tab_index(0)
+                        .track_focus(&focus_handle)
+                        .hover(move |this| this.bg(divider_hover.opacity(0.5)))
+                        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                            let _ = block.update(cx, |block, cx| {
+                                if event.click_count >= 2 {
+                                    block.reset_table_column_layout(cx);
+                                } else {
+                                    block.start_table_column_resize(
+                                        boundary,
+                                        event.position.x,
+                                        table_width,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            });
+                            cx.stop_propagation();
+                        })
+                        .on_key_down(move |event, window, cx| {
+                            let _ = key_block.update(cx, |block, cx| {
+                                block.table_column_resize_boundary = Some(boundary);
+                                block.on_table_column_resize_key(event, window, cx);
+                            });
+                        })
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
+
             let table_surface = div()
                 .debug_selector(|| "table-surface".to_owned())
                 .w_full()
-                .min_w(px(0.0))
+                // Keep the table's measured content width stable when a
+                // narrow viewport cannot fit all columns.  The parent scroll
+                // container below owns horizontal movement; the Markdown
+                // source and column semantics remain unchanged.
+                // The right append gutter is inside this surface; adding it to
+                // min-width would move controls outside the document column.
+                .min_w(px(table_width))
                 .relative()
                 .flex()
                 .flex_col()
-                .pr(right_gutter)
-                .pb(bottom_gutter)
+                // Append controls are overlays inside the table surface. Keep
+                // their gutters out of the CSS box so controls cannot extend
+                // beyond the document column on narrow windows.
+                .pr(px(0.0))
+                .pb(px(0.0))
                 .gap(px(0.0))
                 .children(rows)
+                .children(dividers)
+                .on_mouse_move(cx.listener(Self::on_table_column_resize_mouse_move))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(Self::on_table_column_resize_mouse_up),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(Self::on_table_column_resize_mouse_up),
+                )
                 .child(column_edge_band)
                 .child(row_edge_band)
                 .child(column_control)
                 .child(row_control);
-            focused_base.child(table_surface).into_any_element()
+            let mut horizontal_scroll = div()
+                .id(SharedString::from(format!(
+                    "table-horizontal-scroll-{}",
+                    self.record.id
+                )))
+                .debug_selector(|| "table-horizontal-scroll".to_owned())
+                .w_full()
+                .min_w(px(0.0))
+                .overflow_x_scroll()
+                .child(table_surface);
+            horizontal_scroll.style().restrict_scroll_to_axis = Some(true);
+            focused_base.child(horizontal_scroll).into_any_element()
         }
     }
+}
+
+fn table_has_unbreakable_content(table: &TableData) -> bool {
+    table
+        .header
+        .iter()
+        .chain(table.rows.iter().flat_map(|row| row.iter()))
+        .map(|cell| cell.visible_text())
+        .any(|text| text.split_whitespace().any(|token| token.len() > 32))
 }

@@ -174,6 +174,14 @@ impl I18nStrings {
             .unwrap_or_else(|| key.to_owned())
     }
 
+    /// Returns an owned formula-palette translation, preserving missing-key behavior.
+    pub fn math_palette_text(&self, key: &str) -> String {
+        self.math_palette
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| key.to_owned())
+    }
+
     /// Localizes a paged-document error for the current UI language.
     pub fn large_document_error(&self, error: &gmark_paged_document::PagedDocumentError) -> String {
         use gmark_paged_document::PagedDocumentError;

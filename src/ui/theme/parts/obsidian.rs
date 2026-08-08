@@ -52,7 +52,7 @@ impl Theme {
         colors.code_language_input_border = Hsla::from(rgba(0x363636ff));
         colors.code_language_input_text = Hsla::from(rgba(0xdadadaff));
         colors.code_language_input_placeholder = Hsla::from(rgba(0x999999cc));
-        colors.code_syntax_comment = Hsla::from(rgba(0x666666ff));
+        colors.code_syntax_comment = Hsla::from(rgba(0x909090ff));
         colors.code_syntax_keyword = Hsla::from(rgba(0xfa99cdff));
         colors.code_syntax_string = Hsla::from(rgba(0x44cf6eff));
         colors.code_syntax_number = Hsla::from(rgba(0xa882ffff));
@@ -61,7 +61,7 @@ impl Theme {
         colors.code_syntax_constant = Hsla::from(rgba(0xe9973fff));
         colors.code_syntax_variable = Hsla::from(rgba(0xdadadaff));
         colors.code_syntax_property = Hsla::from(rgba(0x53dfddff));
-        colors.code_syntax_operator = Hsla::from(rgba(0xfb464cff));
+        colors.code_syntax_operator = Hsla::from(rgba(0xb3b3b3ff));
         colors.code_syntax_punctuation = Hsla::from(rgba(0xb3b3b3ff));
         colors.table_border = Hsla::from(rgba(0x363636ff));
         colors.table_header_bg = Hsla::from(rgba(0x242424ff));
@@ -147,7 +147,7 @@ impl Theme {
         colors.code_language_input_border = Hsla::from(rgba(0xe0e0e0ff));
         colors.code_language_input_text = Hsla::from(rgba(0x222222ff));
         colors.code_language_input_placeholder = Hsla::from(rgba(0x707070cc));
-        colors.code_syntax_comment = Hsla::from(rgba(0xabababff));
+        colors.code_syntax_comment = Hsla::from(rgba(0x6e6e6eff));
         colors.code_syntax_keyword = Hsla::from(rgba(0xd53984ff));
         colors.code_syntax_string = Hsla::from(rgba(0x08b94eff));
         colors.code_syntax_number = Hsla::from(rgba(0x7852eeff));
@@ -156,7 +156,7 @@ impl Theme {
         colors.code_syntax_constant = Hsla::from(rgba(0xec7500ff));
         colors.code_syntax_variable = Hsla::from(rgba(0x222222ff));
         colors.code_syntax_property = Hsla::from(rgba(0x00bfbcff));
-        colors.code_syntax_operator = Hsla::from(rgba(0xe93147ff));
+        colors.code_syntax_operator = Hsla::from(rgba(0x5c5c5cff));
         colors.code_syntax_punctuation = Hsla::from(rgba(0x5c5c5cff));
         colors.table_border = Hsla::from(rgba(0xe0e0e0ff));
         colors.table_header_bg = Hsla::from(rgba(0xfafafaff));

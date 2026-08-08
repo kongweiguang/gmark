@@ -129,6 +129,7 @@ pub(super) fn inline_html_semantic_style(name: &str, style: InlineStyle) -> Inli
 
 pub(super) fn inline_html_style(tag: &InlineHtmlTag) -> Option<HtmlInlineStyle> {
     let node = HtmlNode {
+        id: None,
         kind: HtmlNodeKind::InlineSemantic,
         tag_name: tag.name.clone(),
         attrs: tag.attrs.clone(),

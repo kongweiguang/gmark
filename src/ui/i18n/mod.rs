@@ -456,6 +456,8 @@ pub struct I18nStrings {
     pub command_palette_no_results: String,
     /// Stable slash-command item keys mapped to localized labels.
     pub slash_commands: BTreeMap<String, String>,
+    /// Stable formula-palette UI and command keys mapped to localized labels.
+    pub math_palette: BTreeMap<String, String>,
     /// Title of the link-opening confirmation prompt.
     pub open_link_title: String,
     /// Confirm button for the link-opening prompt.

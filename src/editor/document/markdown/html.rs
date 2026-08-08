@@ -10,9 +10,6 @@ use std::ops::Range;
 
 use cssparser::color::{parse_hash_color, parse_named_color};
 
-#[cfg(feature = "html-native")]
-use tree_sitter::Parser;
-
 /// Safety classification for an HTML fragment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HtmlSafetyClass {
@@ -115,6 +112,8 @@ impl HtmlImageBlock {
 /// A classified HTML node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HtmlNode {
+    /// Domain node identity; inline compatibility nodes have no identity.
+    pub(crate) id: Option<gmark_markdown::HtmlNodeId>,
     /// Rendering category selected by the safety policy.
     pub(crate) kind: HtmlNodeKind,
     /// Lowercase tag name, or `#text` for text nodes.
@@ -142,16 +141,21 @@ pub(crate) struct HtmlDocument {
     pub(crate) nodes: Vec<HtmlNode>,
     /// Overall fragment safety.
     pub(crate) safety: HtmlSafetyClass,
+    /// Diagnostics from the shared domain sanitizer.  The renderer uses this
+    /// to show a compact warning without exposing dangerous source as markup.
+    pub(crate) diagnostics: Vec<gmark_markdown::HtmlDiagnostic>,
 }
 
 impl HtmlDocument {
     fn raw_with_markdown_value(domain: gmark_markdown::HtmlDocument) -> Self {
         let raw_source = domain.raw_source.clone();
+        let diagnostics = domain.diagnostics().to_vec();
         Self {
             domain,
             nodes: vec![raw_node(&raw_source, 0..raw_source.len())],
             safety: HtmlSafetyClass::RawTextBlock,
             raw_source,
+            diagnostics,
         }
     }
 
@@ -203,7 +207,7 @@ impl HtmlCssFontSize {
         };
 
         if resolved.is_finite() {
-            resolved.clamp(6.0, 96.0)
+            resolved.clamp(8.0, 48.0)
         } else {
             parent_px
         }
@@ -256,42 +260,38 @@ impl HtmlInlineStyle {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum TagKind {
+pub(super) enum TagKind {
     Open,
     Close,
     CommentLike,
 }
 
 #[derive(Clone, Debug)]
-struct TagToken {
-    kind: TagKind,
-    name: String,
-    attrs: Vec<HtmlAttr>,
-    self_closing: bool,
-    source_range: Range<usize>,
+pub(super) struct TagToken {
+    pub(super) kind: TagKind,
+    pub(super) name: String,
+    pub(super) attrs: Vec<HtmlAttr>,
+    pub(super) source_range: Range<usize>,
 }
 
 /// Parses and classifies a raw HTML fragment. The returned document always
 /// preserves `raw_source` exactly, even when semantic parsing succeeds.
 pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
     let markdown_value = gmark_markdown::HtmlDocument::parse(raw_source);
-    if raw_source.trim().is_empty() {
+    if should_keep_raw_source(raw_source) {
         return HtmlDocument::raw_with_markdown_value(markdown_value);
     }
-
-    if tree_sitter_reports_error(raw_source) {
+    let diagnostics = markdown_value.diagnostics().to_vec();
+    let Some(tree) = markdown_value.render_status.tree() else {
         return HtmlDocument::raw_with_markdown_value(markdown_value);
-    }
+    };
 
-    let (nodes, index, ok) = parse_nodes(raw_source, 0, None);
-    if !ok || index < raw_source.len() || nodes.is_empty() {
-        return HtmlDocument::raw_with_markdown_value(markdown_value);
-    }
-
-    if nodes
+    let nodes = tree
+        .roots
         .iter()
-        .all(|node| matches!(node.kind, HtmlNodeKind::RawTextBlock))
-    {
+        .map(|node| editor_node_from_domain(node, raw_source))
+        .collect::<Vec<_>>();
+    if nodes.is_empty() {
         return HtmlDocument::raw_with_markdown_value(markdown_value);
     }
 
@@ -300,6 +300,76 @@ pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
         raw_source: raw_source.to_string(),
         nodes,
         safety: HtmlSafetyClass::Semantic,
+        diagnostics,
+    }
+}
+
+fn should_keep_raw_source(raw_source: &str) -> bool {
+    let trimmed = raw_source.trim();
+    let Some(token) = parse_tag_token(trimmed, 0) else {
+        return false;
+    };
+    if token.kind != TagKind::Open {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let trailing = &trimmed[token.source_range.end..];
+    let void = matches!(
+        token.name.as_str(),
+        "br" | "hr" | "img" | "input" | "link" | "meta"
+    );
+    let has_close = lower[token.source_range.end..].contains(&format!("</{}", token.name));
+
+    // A single active URL/event attribute has no safe semantic node left to
+    // display. Preserve the complete source so the user can edit it, while
+    // allowing a safe sibling under a larger fragment to continue rendering.
+    // Keep an anchor with a dangerous target as editable source when the
+    // sanitizer has no safe navigation target left. Other nodes (including
+    // event-bearing containers) still render their sanitized text/children;
+    // html5ever is intentionally allowed to repair omitted closing tags.
+    token.name == "a"
+        && has_dangerous_attrs(&token.attrs)
+        && token.attrs.iter().any(|attr| attr.name == "href")
+        && (void && trailing.trim().is_empty() || !void && has_close)
+}
+
+fn editor_node_from_domain(node: &gmark_markdown::HtmlRenderNode, raw_source: &str) -> HtmlNode {
+    let tag_name = node.tag_name.clone();
+    let kind = if node.kind == gmark_markdown::HtmlRenderNodeKind::Text || is_inline_tag(&tag_name)
+    {
+        HtmlNodeKind::InlineSemantic
+    } else {
+        HtmlNodeKind::BlockSemantic
+    };
+    let attrs = node
+        .attrs
+        .iter()
+        .map(|attr| HtmlAttr {
+            name: attr.name.clone(),
+            value: Some(attr.value.clone()),
+            raw_source: format!("{}=\"{}\"", attr.name, attr.value),
+        })
+        .collect::<Vec<_>>();
+    let raw = if node.kind == gmark_markdown::HtmlRenderNodeKind::Text {
+        node.text.clone()
+    } else if node.tag_name == "#text" {
+        node.text.clone()
+    } else {
+        raw_source.to_owned()
+    };
+    HtmlNode {
+        id: Some(node.id),
+        kind,
+        tag_name,
+        attrs,
+        children: node
+            .children
+            .iter()
+            .map(|child| editor_node_from_domain(child, raw_source))
+            .collect(),
+        raw_source: raw,
+        source_range: 0..raw_source.len(),
     }
 }
 
@@ -316,91 +386,13 @@ pub(crate) fn style_for_node(node: &HtmlNode) -> HtmlInlineStyle {
     parse_inline_style(style)
 }
 
-fn parse_nodes(
-    raw: &str,
-    mut index: usize,
-    closing_tag: Option<&str>,
-) -> (Vec<HtmlNode>, usize, bool) {
-    let mut nodes = Vec::new();
-    while index < raw.len() {
-        let Some(tag_start_relative) = raw[index..].find('<') else {
-            if closing_tag.is_some() {
-                push_text_node(raw, index..raw.len(), &mut nodes);
-            } else {
-                push_text_node(raw, index..raw.len(), &mut nodes);
-            }
-            return (nodes, raw.len(), closing_tag.is_none());
-        };
-
-        let tag_start = index + tag_start_relative;
-        if tag_start > index {
-            push_text_node(raw, index..tag_start, &mut nodes);
-        }
-
-        let Some(token) = parse_tag_token(raw, tag_start) else {
-            push_text_node(raw, tag_start..tag_start + 1, &mut nodes);
-            index = tag_start + 1;
-            continue;
-        };
-
-        match token.kind {
-            TagKind::Close => {
-                if closing_tag == Some(token.name.as_str()) {
-                    return (nodes, token.source_range.end, true);
-                }
-                nodes.push(raw_node(raw, token.source_range.clone()));
-                index = token.source_range.end;
-            }
-            TagKind::CommentLike => {
-                nodes.push(raw_node(raw, token.source_range.clone()));
-                index = token.source_range.end;
-            }
-            TagKind::Open => {
-                let class = classify_open_tag(&token);
-                if class == HtmlSafetyClass::RawTextBlock {
-                    let raw_end = raw_region_end(raw, &token).unwrap_or(token.source_range.end);
-                    nodes.push(raw_node(raw, token.source_range.start..raw_end));
-                    index = raw_end;
-                    continue;
-                }
-
-                if token.self_closing || is_void_tag(&token.name) {
-                    nodes.push(semantic_node(raw, token, Vec::new()));
-                    index = nodes
-                        .last()
-                        .map(|node| node.source_range.end)
-                        .unwrap_or(index);
-                    continue;
-                }
-
-                let (children, child_end, closed) =
-                    parse_nodes(raw, token.source_range.end, Some(&token.name));
-                if !closed {
-                    nodes.push(raw_node(raw, token.source_range.start..raw.len()));
-                    return (nodes, raw.len(), closing_tag.is_none());
-                }
-
-                let mut node = semantic_node(raw, token, children);
-                node.source_range.end = child_end;
-                node.raw_source = raw[node.source_range.clone()].to_string();
-                nodes.push(node);
-                index = child_end;
-            }
-        }
-    }
-
-    (nodes, index, closing_tag.is_none())
-}
 #[path = "html_parts/parser.rs"]
 mod parser;
 
 pub(crate) use parser::{
     attr_value, has_dangerous_attrs, is_inline_tag, parse_html_attrs, parse_html_image_block,
 };
-use parser::{
-    classify_open_tag, css_number, is_void_tag, parse_inline_style, parse_tag_token,
-    push_text_node, raw_node, raw_region_end, semantic_node, tree_sitter_reports_error,
-};
+use parser::{css_number, parse_inline_style, parse_tag_token, raw_node};
 #[cfg(test)]
 #[path = "../../../../tests/unit/components/markdown/html.rs"]
 mod tests;

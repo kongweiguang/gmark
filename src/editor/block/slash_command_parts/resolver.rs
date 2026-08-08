@@ -369,6 +369,7 @@ impl Block {
         let c = &theme.colors;
         let palette = &c.workbench;
         let d = &theme.dimensions;
+        let t = &theme.typography;
         // Callout 与脚注的实体会被编辑器级卡片再次缩进。块操作入口抵消这些外层
         // inset，始终锚定到文档内容列左边；嵌套脚注需要同时抵消两层容器。
         let container_inset = block_gutter_container_inset(
@@ -384,54 +385,58 @@ impl Block {
             .cloned()
             .unwrap_or_else(|| "Block Actions".to_owned())
             .into();
-        let button = |id: &'static str, icon: &'static str, tooltip: SharedString| {
-            div()
-                .id(id)
-                .size(px(24.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(5.0))
-                .text_color(palette.icon)
-                .hover(|button| button.bg(palette.control_hover))
-                .active(|button| button.opacity(0.82))
-                .cursor_pointer()
-                .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(14.0))
-                        .text_color(palette.icon)
-                        .debug_selector(move || format!("{id}-icon")),
-                )
+        let first_line_text_size = match self.kind() {
+            BlockKind::Heading { level: 1 } => t.h1_size,
+            BlockKind::Heading { level: 2 } => t.h2_size,
+            BlockKind::Heading { level: 3 } => t.h3_size,
+            BlockKind::Heading { level: 4 } => t.h4_size,
+            BlockKind::Heading { level: 5 } => t.h5_size,
+            BlockKind::Heading { level: 6 } => t.h6_size,
+            _ => t.text_size,
         };
+        let block_padding_y = if self.callout_anchor.is_some() || self.footnote_anchor.is_some() {
+            1.0
+        } else {
+            d.block_padding_y
+        };
+        // 手柄中心对齐当前块的首个视觉行；长标题换行时仍固定在第一行，不随块高漂移。
+        let gutter_top = block_padding_y
+            + (first_line_text_size * t.text_line_height - BLOCK_GUTTER_HEIGHT) / 2.0;
         let drag_payload = BlockDragPayload {
             source: cx.entity().entity_id(),
         };
-        let actions_button = button(
-            "block-context-actions",
-            "icon/ui/more-horizontal.svg",
-            actions_label,
-        )
-        .debug_selector(move || {
-            if focused {
-                "focused-block-context-actions".to_owned()
-            } else {
-                "block-context-actions".to_owned()
-            }
-        });
+        let actions_button = div()
+            .id("block-context-actions")
+            .size(px(24.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.0))
+            .text_color(palette.icon)
+            .hover(|button| button.bg(palette.control_hover))
+            .active(|button| button.opacity(0.82))
+            .cursor_pointer()
+            .tooltip(move |_window, cx| crate::ui::ui_tooltip(actions_label.clone(), cx))
+            .child(block_grip_icon(palette.icon))
+            .debug_selector(move || {
+                if focused {
+                    "focused-block-context-actions".to_owned()
+                } else {
+                    "block-context-actions".to_owned()
+                }
+            });
         Some(
             div()
                 .id("block-context-gutter")
                 .debug_selector(|| "block-context-gutter".to_owned())
                 .absolute()
-                .left(px(-container_inset))
-                .top(px(2.0))
-                .h(px(28.0))
+                .left(px(-container_inset - BLOCK_GUTTER_ACTION_OUTSET))
+                .top(px(gutter_top))
+                .h(px(BLOCK_GUTTER_HEIGHT))
                 .px(px(2.0))
                 .flex()
                 .items_center()
-                // 单一“…”入口留在文档内容列左侧；小窗口不会裁剪，所有块也保持左对齐。
+                // 单一九点入口留在文档内容列左侧；小窗口不会裁剪，所有块也保持左对齐。
                 .opacity(if focused { 1.0 } else { 0.0 })
                 .group_hover(group, |gutter| gutter.opacity(1.0))
                 // 事件放在稳定的 gutter 外壳上；未聚焦块按下后即使子按钮重绘也不会丢失操作。

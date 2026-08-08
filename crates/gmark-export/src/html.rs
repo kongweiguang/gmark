@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use base64::{Engine as _, engine::general_purpose};
 use gmark_markdown::escape_html;
 use pulldown_cmark::{Event, Options, Parser, html};
 
@@ -30,6 +31,19 @@ pub fn render_html_with_base_dir(
     base_dir: Option<&Path>,
 ) -> String {
     render_html_document(markdown, theme, title, base_dir, &theme_css(theme))
+}
+
+/// Builds only the safe rendered body used by rich clipboard adapters.
+///
+/// It intentionally reuses the exact same rewrite, URL, HTML, math and
+/// Mermaid pipeline as full HTML/PDF export; callers must not parse Markdown
+/// a second time merely to populate `text/html`.
+pub fn render_html_fragment_with_base_dir(
+    markdown: &str,
+    theme: &ExportTheme,
+    base_dir: Option<&Path>,
+) -> String {
+    render_browser_html_body(markdown, theme, base_dir)
 }
 
 /// Builds HTML tailored to Chromium's print-to-PDF pipeline.
@@ -91,6 +105,7 @@ fn render_browser_html_body(
         .map(|event| rewrite_local_image_event(event, base_dir));
     let mut body = String::new();
     html::push_html(&mut body, parser);
+    let body = restore_visible_comment_payloads(&body);
     inject_heading_ids(&body, &collect_toc_entries(markdown))
 }
 
@@ -141,12 +156,44 @@ fn rewrite_visible_comment_blocks(markdown: &str) -> String {
         }
         let raw = lines[start..=index].join("\n");
         rewritten.push(format!(
-            "<pre class=\"vlt-comment\">{}</pre>",
-            escape_html(&raw)
+            "<pre class=\"vlt-comment\">{}{}</pre>",
+            VISIBLE_COMMENT_PREFIX,
+            general_purpose::STANDARD.encode(raw.as_bytes()),
         ));
         index += 1;
     }
     rewritten.join("\n")
+}
+
+const VISIBLE_COMMENT_PREFIX: &str = "gmark-comment:";
+
+fn restore_visible_comment_payloads(html: &str) -> String {
+    let mut output = String::with_capacity(html.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = html[cursor..].find(VISIBLE_COMMENT_PREFIX) {
+        let start = cursor + relative_start;
+        output.push_str(&html[cursor..start]);
+        let payload_start = start + VISIBLE_COMMENT_PREFIX.len();
+        let end = html[payload_start..]
+            .find('<')
+            .map(|offset| payload_start + offset)
+            .unwrap_or(html.len());
+        let payload = &html[payload_start..end];
+        let Ok(decoded) = general_purpose::STANDARD.decode(payload) else {
+            output.push_str(VISIBLE_COMMENT_PREFIX);
+            cursor = payload_start;
+            continue;
+        };
+        let Ok(decoded) = String::from_utf8(decoded) else {
+            output.push_str(VISIBLE_COMMENT_PREFIX);
+            cursor = payload_start;
+            continue;
+        };
+        output.push_str(&escape_html(&decoded));
+        cursor = end;
+    }
+    output.push_str(&html[cursor..]);
+    output
 }
 
 fn rewrite_table_of_contents_markers(markdown: &str) -> String {

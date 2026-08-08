@@ -127,6 +127,22 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.math_edit_session.is_some() || self.kind() == BlockKind::MathBlock {
+            let modifiers = event.keystroke.modifiers;
+            if event.keystroke.key == "enter"
+                && (modifiers.platform || modifiers.control)
+                && !modifiers.alt
+            {
+                self.finish_math_edit(cx);
+                cx.stop_propagation();
+                return;
+            }
+            if event.keystroke.key == "escape" {
+                self.finish_math_edit(cx);
+                cx.stop_propagation();
+                return;
+            }
+        }
         if self.host_submit_enabled()
             && event.keystroke.key == "enter"
             && event.keystroke.modifiers == Modifiers::none()

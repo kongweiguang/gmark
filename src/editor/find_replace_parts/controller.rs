@@ -15,7 +15,18 @@ impl Editor {
     }
 
     fn close_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let restore = self.find_panel.take().and_then(|state| state.restore_focus);
+        let Some(state) = self.find_panel.take() else {
+            return;
+        };
+        let restore = state.restore_focus;
+        if let Some(snapshot) = state.view_state_before_expand {
+            self.ensure_markdown_view_state();
+            self.view_state
+                .replace_tab_state(self.tabs.active_id(), snapshot);
+            self.render_row_cache = None;
+            self.prev_render_window = None;
+            self.row_stride_cache.clear();
+        }
         if let Some(block) = restore.and_then(|id| self.focusable_entity_by_id(id)) {
             block.read(cx).focus_handle.focus(window);
         }
@@ -179,7 +190,82 @@ impl Editor {
             state.selected = (state.selected as isize - 1).rem_euclid(len) as usize;
         }
         let range = state.matches[state.selected].clone();
+        let visible_offset = state
+            .match_metadata
+            .get(state.selected)
+            .map(|metadata| metadata.visible.start);
         let query = state.query.clone();
+        let fold_sources = visible_offset
+            .map(|offset| {
+                gmark_markdown::parse_markdown(&self.source_document.text())
+                    .visible_text_projection()
+                    .folds_containing(offset)
+                    .map(|fold| fold.source)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let view_state_snapshot = self.view_state.state_for_tab(self.tabs.active_id());
+        let mut heading_keys_to_expand = Vec::new();
+        let mut callout_keys_to_expand = Vec::new();
+        if !fold_sources.is_empty() {
+            let source_ranges = self.build_source_target_mappings_with_block_ranges(cx).1;
+            for visible in self.document.flatten_visible_blocks() {
+                let Some(source_range) = source_ranges.get(&visible.entity.entity_id()).cloned()
+                else {
+                    continue;
+                };
+                let (key, heading) = visible.entity.read_with(cx, |block, _cx| {
+                    (
+                        block
+                            .presentation_fold_key
+                            .as_ref()
+                            .map(ToString::to_string),
+                        block.presentation_fold_heading,
+                    )
+                });
+                let Some(key) = key else { continue };
+                let matches_fold = fold_sources.iter().any(|source| {
+                    source.start == source_range.start && source.end == source_range.end
+                });
+                if !matches_fold {
+                    continue;
+                }
+                let collapsed = view_state_snapshot.as_ref().is_some_and(|state| {
+                    if heading {
+                        state.collapsed_headings.get(&key).copied().unwrap_or(false)
+                    } else {
+                        state.collapsed_callouts.get(&key).copied().unwrap_or(false)
+                    }
+                });
+                if collapsed {
+                    if heading {
+                        heading_keys_to_expand.push(key);
+                    } else {
+                        callout_keys_to_expand.push(key);
+                    }
+                }
+            }
+        }
+        if !heading_keys_to_expand.is_empty() || !callout_keys_to_expand.is_empty() {
+            if let Some(state) = self.find_panel.as_mut()
+                && state.view_state_before_expand.is_none()
+            {
+                state.view_state_before_expand = view_state_snapshot;
+            }
+            self.ensure_markdown_view_state();
+            self.view_state
+                .update_tab(self.tabs.active_id(), |view_state| {
+                    for key in heading_keys_to_expand {
+                        view_state.collapsed_headings.remove(&key);
+                    }
+                    for key in callout_keys_to_expand {
+                        view_state.collapsed_callouts.remove(&key);
+                    }
+                });
+            self.render_row_cache = None;
+            self.prev_render_window = None;
+            self.row_stride_cache.clear();
+        }
         if let Some(y) = self
             .virtual_surface
             .as_ref()
@@ -227,6 +313,15 @@ impl Editor {
         let Some(range) = state.matches.get(state.selected).cloned() else {
             return;
         };
+        let replaceable = state
+            .match_metadata
+            .get(state.selected)
+            .is_some_and(|metadata| {
+                metadata.replaceability == gmark_markdown::Replaceability::Direct
+            });
+        if !replaceable {
+            return;
+        }
         if state.revision != self.source_document.revision() {
             self.schedule_find(cx);
             return;
@@ -276,7 +371,12 @@ impl Editor {
         };
         let mut edits = Vec::with_capacity(state.matches.len());
         let mut first_selection = None;
-        for range in &state.matches {
+        for (index, range) in state.matches.iter().enumerate() {
+            if !state.match_metadata.get(index).is_some_and(|metadata| {
+                metadata.replaceability == gmark_markdown::Replaceability::Direct
+            }) {
+                continue;
+            }
             let Some(replacement) = replacement_for_range(
                 &regex,
                 &source,
@@ -298,86 +398,6 @@ impl Editor {
                 state.query.read(cx).focus_handle.focus(window);
             }
         }
-    }
-
-    /// 所有替换共享一个 Rope transaction；失败时 projection、dirty 与 undo 均保持不变。
-    fn apply_find_edits(
-        &mut self,
-        edits: Vec<TextEdit>,
-        selection: Range<usize>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if edits.is_empty() || self.view_mode == super::ViewMode::Preview {
-            return false;
-        }
-        self.finalize_pending_undo_capture(cx);
-        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
-        let revision = self.source_document.revision();
-        let updated = match self
-            .source_document
-            .apply_transaction(Transaction::new(revision, edits))
-        {
-            Ok(updated) => updated,
-            Err(error) => {
-                self.pending_undo_capture = None;
-                self.pending_virtual_undo_selection = None;
-                eprintln!("文档替换事务提交失败: {error}");
-                return false;
-            }
-        };
-        let source = updated.text();
-        self.projection_cache_task = None;
-        self.projection_cache_scheduled_revision = None;
-        if self.virtual_surface.is_some() && self.view_mode == super::ViewMode::Rendered {
-            let prepared = Arc::new(if let Some(previous) = self.projection_cache.as_deref() {
-                PreparedSplitProjection::from_snapshot_incremental_regions_only(updated, previous)
-            } else {
-                PreparedSplitProjection::from_snapshot_adaptive(
-                    updated,
-                    Self::VIRTUAL_SURFACE_REGION_THRESHOLD,
-                )
-            });
-            self.active_entity_id = None;
-            self.pending_focus = None;
-            self.install_virtual_surface_projection(Arc::clone(&prepared), cx);
-            self.rebuild_runtime_context_from_markdown(&prepared.source, cx);
-            self.projection_cache = Some(prepared);
-        } else {
-            match self.view_mode {
-                super::ViewMode::Rendered => {
-                    self.rebuild_primary_projection_from_source_reusing(cx)
-                }
-                super::ViewMode::Source | super::ViewMode::Split => {
-                    let block = Self::new_block(cx, BlockRecord::paragraph(source.clone()));
-                    block.update(cx, |block, _cx| block.set_source_document_mode());
-                    self.document.replace_roots(vec![block], cx);
-                    self.table_cells.clear();
-                    if self.view_mode == super::ViewMode::Split {
-                        self.schedule_split_preview_projection(cx);
-                    }
-                }
-                super::ViewMode::Preview => return false,
-            }
-        }
-        self.pending_dirty_source = Some(source);
-        self.render_row_cache = None;
-        self.status_bar.invalidate_word_count();
-        self.document_dirty = true;
-        self.pending_window_edited = true;
-        self.pending_window_title_refresh = true;
-        self.apply_selection_snapshot_in_current_mode(
-            &UndoSelectionSnapshot::from_range(selection, false),
-            cx,
-        );
-        self.pending_focus = None;
-        self.finalize_pending_undo_capture(cx);
-        self.schedule_recovery_journal(cx);
-        self.schedule_auto_save(cx);
-        self.schedule_active_block_spellcheck(cx);
-        self.pending_scroll_active_block_into_view = true;
-        self.pending_scroll_recheck_after_layout = true;
-        cx.notify();
-        true
     }
 
     pub(in crate::editor) fn render_find_panel(

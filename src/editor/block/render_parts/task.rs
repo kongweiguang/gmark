@@ -99,6 +99,7 @@ impl Block {
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
                                 resize_basis_width,
+                                true,
                                 theme,
                                 strings,
                                 cx,

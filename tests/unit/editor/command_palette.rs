@@ -92,6 +92,42 @@ async fn command_labels_follow_the_selected_chinese_language(cx: &mut gpui::Test
             localized_action_label(&crate::components::ExportPdf, strings, "zh-CN"),
             "导出为 PDF"
         );
+        assert_eq!(
+            localized_action_label(&crate::components::CancelFormatting, strings, "zh-CN"),
+            "取消格式化"
+        );
+        assert_eq!(
+            localized_action_label(&crate::components::CollapseAllFolds, strings, "zh-CN"),
+            "全部折叠"
+        );
+        assert_eq!(
+            localized_action_label(&crate::components::FocusStructuredFilter, strings, "zh-CN"),
+            "聚焦结构化筛选"
+        );
+        assert_eq!(
+            localized_action_label(&crate::components::FormatDocument, strings, "zh-CN"),
+            "格式化文档"
+        );
+        let format_label =
+            localized_action_label(&crate::components::FormatDocument, strings, "zh-CN");
+        assert_eq!(
+            localized_action_description(
+                &crate::components::FormatDocument,
+                &format_label,
+                "zh-CN",
+            ),
+            "格式化当前文档"
+        );
+        let columns_label =
+            localized_action_label(&crate::components::FocusStructuredColumns, strings, "zh-CN");
+        assert_eq!(
+            localized_action_description(
+                &crate::components::FocusStructuredColumns,
+                &columns_label,
+                "zh-CN",
+            ),
+            "将焦点移到结构化视图的列工具"
+        );
         let resource = crate::components::InsertResource;
         let resource_label = localized_action_label(&resource, strings, "zh-CN");
         assert_eq!(resource_label, "资源");
@@ -112,7 +148,7 @@ fn command_metadata_hides_action_names_and_indexes_human_aliases() {
     assert!(search_text.contains("code block"));
     assert!(search_text.contains("代码块"));
     assert_eq!(display_shortcut("gmark::SetCodeBlock", action.name()), "");
-    assert_eq!(display_shortcut("ctrl-alt-c", action.name()), "ctrl-alt-c");
+    assert_eq!(display_shortcut("ctrl-alt-c", action.name()), "Ctrl+Alt+C");
     assert_eq!(command_icon(&action), "icon/ui/code.svg");
     assert!(std::path::Path::new("assets/icon/ui/code.svg").is_file());
 

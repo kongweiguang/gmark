@@ -5,9 +5,11 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use gmark_export::{
-    ExportCancellation, ExportCancellationHandle, ExportTheme, prepare_html_resources, render_html,
-    render_pdf_cancellable, render_png_cancellable,
+    ClipboardSelection, ExportCancellation, ExportCancellationHandle, ExportTheme,
+    export_clipboard_fragment, prepare_html_resources, render_html, render_pdf_cancellable,
+    render_png_cancellable,
 };
+use gmark_markdown::parse_markdown;
 use uuid::Uuid;
 
 #[test]
@@ -24,6 +26,23 @@ fn html_export_projects_toc_math_mermaid_and_safe_html() {
     assert!(html.contains("class=\"vlt-mermaid\""));
     assert!(html.contains("color: rgba(0,0,255,1.000);"));
     assert!(!html.contains("background-image"));
+}
+
+#[test]
+fn clipboard_and_export_share_the_markdown_visible_text_contract() {
+    let markdown =
+        "# Title\n\nA **bold** [link](https://example.test)\n\n| A | B |\n|---|---|\n| C | D |";
+    let visible = parse_markdown(markdown).visible_text_projection();
+    let fragment = export_clipboard_fragment(
+        ClipboardSelection::Markdown {
+            markdown: markdown.to_owned(),
+        },
+        &ExportTheme::default(),
+        None,
+    );
+    assert!(visible.text.contains("Title"));
+    assert!(fragment.plain_text.contains("bold"));
+    assert!(fragment.html.contains("<strong>bold</strong>"));
 }
 
 #[test]

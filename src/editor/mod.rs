@@ -45,10 +45,14 @@ mod history;
 mod image_preview;
 mod link_completion;
 pub(crate) use crate::perf;
+mod markdown_render_state;
+pub(crate) mod markdown_view_state;
+pub(crate) mod math_edit;
 mod persistence;
 mod projection;
 mod recovery;
 pub(crate) mod render;
+pub(crate) mod render_asset_manager;
 mod runtime_context;
 mod selection;
 mod services;
@@ -70,7 +74,7 @@ mod tree;
 mod update;
 mod virtual_surface;
 mod window_state;
-mod workspace;
+pub(crate) mod workspace;
 mod workspace_file_ops;
 
 use self::document_session::EditorDocumentSession;
@@ -205,6 +209,9 @@ pub struct Editor {
     document_kind: DocumentKind,
     /// 每次整文档替换递增；后台保存完成时用它拒绝回写到另一份文档。
     document_epoch: u64,
+    /// Stable per-editor scope used to isolate shared render-cache entries
+    /// belonging to different windows with the same document epoch.
+    render_asset_scope: uuid::Uuid,
     /// Live、Preview 与 Split 共用的最近一次纯语义投影，可落后于正在编辑的源码 revision。
     projection_cache: Option<Arc<PreparedSplitProjection>>,
     document: DocumentTree,
@@ -217,11 +224,25 @@ pub struct Editor {
     document_toolbar_focus_handles: [FocusHandle; 3],
     /// 图片缩放工具条跨异步分片加载保持稳定的键盘焦点顺序。
     image_preview_focus_handles: [FocusHandle; 4],
+    /// Stable tile identities used to release standalone image-preview assets
+    /// when the active tab changes. Pixel buffers remain owned by GPUI.
+    image_preview_tile_ids: Vec<u64>,
     file_open_failure_focus_handles: [FocusHandle; 2],
     /// 更新面板是应用级浮层，但焦点身份属于当前窗口，跨进度刷新必须保持稳定。
     update_primary_focus_handle: FocusHandle,
     update_secondary_focus_handle: FocusHandle,
     table_cells: HashMap<EntityId, TableCellBinding>,
+    /// Shared bounded lifecycle for image/diagram render assets.  The model
+    /// is independent from GPUI handles so async completions can be rejected
+    /// before touching the live block tree.
+    render_assets: render_asset_manager::SharedRenderAssetManager,
+    /// Background local-image preflight/decode tasks keyed by the exact asset
+    /// identity. Dropping a task cancels its completion path on tab/document
+    /// replacement.
+    render_asset_tasks:
+        HashMap<render_asset_manager::AssetKey, (Task<()>, render_asset_manager::AssetLoadToken)>,
+    /// Process-local collapse/column-width snapshots for rendered Markdown.
+    view_state: markdown_view_state::SharedMarkdownViewState,
     /// Which view the editor is currently presenting.
     pub(crate) view_mode: ViewMode,
     /// Deferred focus target applied during render when a [`Window`] is
@@ -403,6 +424,10 @@ impl Drop for Editor {
         if let Some(cancelled) = self.export_cancel.as_ref() {
             cancelled.store(true, std::sync::atomic::Ordering::Release);
         }
+        // Render assets own decoded CPU/GPU payloads and background tasks. Drop
+        // them explicitly with the editor entity so closing the last window
+        // cannot retain a document's cache until process teardown.
+        self.release_all_render_assets();
     }
 }
 

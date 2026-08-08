@@ -234,6 +234,13 @@ pub(super) struct TabState {
 }
 
 impl TabState {
+    pub(super) fn active_id(&self) -> uuid::Uuid {
+        self.records
+            .get(self.active)
+            .map(|record| record.id)
+            .unwrap_or_else(uuid::Uuid::nil)
+    }
+
     pub(super) fn new() -> Self {
         Self {
             records: vec![TabRecord {

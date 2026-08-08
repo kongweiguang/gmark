@@ -22,6 +22,94 @@ pub(crate) fn normalize_shortcut_keys(keys: &[String]) -> Option<Vec<String>> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
+/// Formats one or more GPUI keystrokes for user-facing labels.
+///
+/// Shortcut values remain in GPUI's canonical form everywhere else. This
+/// helper is deliberately display-only: it parses each space-separated
+/// candidate and falls back to the original candidate when GPUI cannot parse
+/// it, so a malformed preference still has a readable representation.
+pub(crate) fn format_shortcut_for_display(raw: &str) -> String {
+    if raw.trim().is_empty() {
+        return raw.to_owned();
+    }
+
+    raw.split_whitespace()
+        .map(format_single_shortcut_for_display)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_single_shortcut_for_display(raw: &str) -> String {
+    let Ok(keystroke) = Keystroke::parse(raw) else {
+        return raw.to_owned();
+    };
+
+    let modifiers = keystroke.modifiers;
+    let mut parts = Vec::with_capacity(6);
+    if modifiers.control {
+        parts.push("Ctrl".to_owned());
+    }
+    if modifiers.alt {
+        parts.push("Alt".to_owned());
+    }
+    if modifiers.shift {
+        parts.push("Shift".to_owned());
+    }
+    if modifiers.platform {
+        parts.push(platform_modifier_label().to_owned());
+    }
+    if modifiers.function {
+        parts.push("Fn".to_owned());
+    }
+    parts.push(display_shortcut_key(&keystroke.key));
+    parts.join("+")
+}
+
+fn platform_modifier_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Cmd"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "Win"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "Super"
+    }
+}
+
+fn display_shortcut_key(key: &str) -> String {
+    match key {
+        "backspace" => "Backspace".to_owned(),
+        "delete" => "Delete".to_owned(),
+        "escape" => "Esc".to_owned(),
+        "enter" => "Enter".to_owned(),
+        "space" => "Space".to_owned(),
+        "tab" => "Tab".to_owned(),
+        "pageup" => "Page Up".to_owned(),
+        "pagedown" => "Page Down".to_owned(),
+        "left" => "Left".to_owned(),
+        "right" => "Right".to_owned(),
+        "up" => "Up".to_owned(),
+        "down" => "Down".to_owned(),
+        "home" => "Home".to_owned(),
+        "end" => "End".to_owned(),
+        "insert" => "Insert".to_owned(),
+        "back" => "Back".to_owned(),
+        "forward" => "Forward".to_owned(),
+        key if key.len() == 1 => key.to_uppercase(),
+        key if key.strip_prefix('f').is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+        }) =>
+        {
+            key.to_uppercase()
+        }
+        other => other.to_owned(),
+    }
+}
+
 fn default_keys(definition: ShortcutDefinition) -> Vec<String> {
     definition
         .default_keys

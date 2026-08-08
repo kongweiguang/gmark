@@ -246,6 +246,11 @@ pub(crate) fn run_app() {
             preferences.theme_appearance,
             preferences.theme_palette,
         );
+        // Render-only Markdown state is process-scoped: duplicate windows
+        // share the latest fold/column snapshot and one bounded asset budget,
+        // while the GPUI globals are dropped wholesale on application exit.
+        cx.set_global(crate::editor::markdown_view_state::SharedMarkdownViewState::default());
+        cx.set_global(crate::editor::render_asset_manager::SharedRenderAssetManager::default());
         VisualPreferencesManager::init(cx, preferences.visual_accessibility);
         config::EditorSettings::init_with_typography(
             cx,

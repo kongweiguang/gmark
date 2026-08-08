@@ -1,5 +1,8 @@
 // @author kongweiguang
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use super::*;
 
 fn preview_key(source: &str, parameters: impl Hash) -> u64 {
@@ -12,13 +15,31 @@ fn preview_key(source: &str, parameters: impl Hash) -> u64 {
 impl Block {
     pub(super) fn on_html_details_toggle_mouse_down(
         &mut self,
+        node_id: gmark_markdown::HtmlNodeId,
+        initial_open: bool,
         _: &MouseDownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.html_details_open = !self.html_details_open;
+        let current = self
+            .html_details_state
+            .get(&node_id)
+            .copied()
+            .unwrap_or(initial_open);
+        self.html_details_state.insert(node_id, !current);
         cx.stop_propagation();
         cx.notify();
+    }
+
+    pub(super) fn sync_html_details_state(&mut self, source: &str) {
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        let source_hash = hasher.finish();
+        if self.html_details_source_hash != Some(source_hash) {
+            self.html_details_state.clear();
+            self.html_image_asset_states.clear();
+            self.html_details_source_hash = Some(source_hash);
+        }
     }
 
     pub(super) fn render_image_content(
@@ -28,6 +49,7 @@ impl Block {
         max_height: Pixels,
         placeholder_height: Pixels,
         resize_basis_width: f32,
+        allow_resize: bool,
         theme: &Theme,
         strings: &I18nStrings,
         cx: &mut Context<Self>,
@@ -43,35 +65,74 @@ impl Block {
         let loading_strings = strings.clone();
         let runtime_for_fallback = runtime.clone();
         let runtime_for_loading = runtime.clone();
+        let retry_block = cx.entity().downgrade();
 
-        let image = match source {
-            ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => img(uri),
-        }
-        .w_full()
-        .max_w(Length::Definite(relative(1.0)))
-        .max_h(max_height)
-        .object_fit(ObjectFit::Contain)
-        .with_fallback(move || {
-            render_image_placeholder(
-                &runtime_for_fallback,
-                Length::Definite(relative(1.0)),
-                placeholder_height,
-                &placeholder_theme,
-                &placeholder_strings,
-            )
-        })
-        .with_loading(move || {
-            render_loading_placeholder(
-                &runtime_for_loading,
-                Length::Definite(relative(1.0)),
-                placeholder_height,
-                &loading_theme,
-                &loading_strings,
-            )
-        });
+        let managed_local = matches!(source, ImageResolvedSource::Local(_))
+            && runtime.local_asset_state().is_some();
+        let image = if managed_local {
+            if let Some(render_image) = runtime
+                .asset_state
+                .last_good()
+                .and_then(crate::editor::render_asset_manager::AssetValue::render_image)
+            {
+                img(render_image)
+                    .w_full()
+                    .max_w(Length::Definite(relative(1.0)))
+                    .max_h(max_height)
+                    .object_fit(ObjectFit::Contain)
+                    .into_any_element()
+            } else if runtime.asset_state.error_message().is_some()
+                && !runtime.asset_state.is_loading()
+            {
+                render_image_placeholder_with_retry(
+                    &runtime,
+                    Length::Definite(relative(1.0)),
+                    placeholder_height,
+                    &placeholder_theme,
+                    &placeholder_strings,
+                    retry_block,
+                )
+            } else {
+                render_loading_placeholder(
+                    &runtime,
+                    Length::Definite(relative(1.0)),
+                    placeholder_height,
+                    &loading_theme,
+                    &loading_strings,
+                )
+            }
+        } else {
+            match source {
+                ImageResolvedSource::Local(path) => img(path),
+                ImageResolvedSource::Remote(uri) => img(uri),
+            }
+            .w_full()
+            .max_w(Length::Definite(relative(1.0)))
+            .max_h(max_height)
+            .object_fit(ObjectFit::Contain)
+            .with_fallback(move || {
+                render_image_placeholder_with_retry(
+                    &runtime_for_fallback,
+                    Length::Definite(relative(1.0)),
+                    placeholder_height,
+                    &placeholder_theme,
+                    &placeholder_strings,
+                    retry_block.clone(),
+                )
+            })
+            .with_loading(move || {
+                render_loading_placeholder(
+                    &runtime_for_loading,
+                    Length::Definite(relative(1.0)),
+                    placeholder_height,
+                    &loading_theme,
+                    &loading_strings,
+                )
+            })
+            .into_any_element()
+        };
 
-        let selected = self.image_selected && !self.is_read_only();
+        let selected = allow_resize && self.image_selected && !self.is_read_only();
         let resize_tooltip: SharedString = strings.image_resize.clone().into();
         let mut image_frame = div()
             .id("rendered-image-frame")
@@ -138,113 +199,6 @@ impl Block {
         }
 
         container.into_any_element()
-    }
-
-    pub(super) fn render_math_content(
-        &mut self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let c = &theme.colors;
-        let wb = &c.workbench;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        let raw = self
-            .record
-            .raw_fallback
-            .as_deref()
-            .unwrap_or_else(|| self.display_text())
-            .to_string();
-        let text_color = c.text_default;
-        let font_size = display_math_font_size(t.text_size);
-        let key = preview_key(&raw, (format!("{text_color:?}"), font_size.to_bits()));
-        if self.math_preview_key != Some(key) {
-            self.math_preview_key = Some(key);
-            self.math_render_error = None;
-            let source = raw.clone();
-            self.math_preview_task = Some(cx.spawn(
-                async move |this: WeakEntity<Block>, cx: &mut AsyncApp| {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(100))
-                        .await;
-                    let result = cx
-                        .background_spawn(async move {
-                            parse_display_math_source(&source)
-                                .ok_or_else(|| "invalid display math source".to_owned())
-                                .and_then(|parsed| {
-                                    render_display_math_svg(&parsed, text_color, font_size)
-                                        .map_err(|error| error.to_string())
-                                })
-                        })
-                        .await;
-                    let _ = this.update(cx, |block, cx| {
-                        if block.math_preview_key != Some(key) {
-                            return;
-                        }
-                        block.math_preview_task = None;
-                        match result {
-                            Ok(rendered) => {
-                                block.last_successful_math_render = Some(rendered);
-                                block.math_render_error = None;
-                            }
-                            Err(error) => block.math_render_error = Some(error),
-                        }
-                        cx.notify();
-                    });
-                },
-            ));
-        }
-
-        match (
-            self.last_successful_math_render.as_ref(),
-            self.math_render_error.as_ref(),
-        ) {
-            (Some(rendered), None) => render_math_svg_content(rendered, theme),
-            (Some(rendered), Some(error)) => div()
-                .id("math-render-fallback")
-                .debug_selector(|| "math-render-fallback".to_owned())
-                .w_full()
-                .min_w(px(0.0))
-                .max_w(Length::Definite(relative(1.0)))
-                .overflow_hidden()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(render_math_svg_content(rendered, theme))
-                .child(render_complex_warning(
-                    format!("LaTeX render error: {error}"),
-                    theme,
-                    "math-render-warning",
-                ))
-                .into_any_element(),
-            (None, Some(error)) => div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .rounded_sm()
-                .bg(wb.solid_surface)
-                .px(px(d.block_padding_x))
-                .py(px(d.block_padding_y))
-                .text_size(px(t.text_size))
-                .line_height(rems(t.text_line_height))
-                .text_color(c.text_default)
-                .child(SharedString::from(raw))
-                .child(render_complex_warning(
-                    format!("LaTeX render error: {error}"),
-                    theme,
-                    "math-render-warning",
-                ))
-                .into_any_element(),
-            (None, None) => div()
-                .id("math-render-pending")
-                .debug_selector(|| "math-render-pending".to_owned())
-                .w_full()
-                .min_h(px(64.0))
-                .rounded_sm()
-                .bg(wb.editor_surface)
-                .into_any_element(),
-        }
     }
 
     pub(super) fn render_mermaid_content(
@@ -690,7 +644,7 @@ impl Block {
             color = html_css_color_to_hsla(html_color, color);
         }
         let math_size = inline_math_font_size(font_size);
-        match render_inline_math_svg(&math.body, color, math_size) {
+        let rendered = match render_inline_math_svg(&math.body, color, math_size) {
             Ok(rendered) => div()
                 .flex()
                 .items_center()
@@ -710,6 +664,22 @@ impl Block {
                 FontWeight::NORMAL,
                 cx,
             ),
-        }
+        };
+        let block = cx.entity().downgrade();
+        let source = math.source.clone();
+        let range = span.range.clone();
+        div()
+            .id(ElementId::Name(
+                format!("inline-math-{}-{}", self.record.id, range.start).into(),
+            ))
+            .debug_selector(|| "inline-math-editor-target".to_owned())
+            .cursor(CursorStyle::PointingHand)
+            .on_click(move |_event, window, cx| {
+                let _ = block.update(cx, |block, _cx| {
+                    block.begin_inline_math_edit(&source, range.clone(), window);
+                });
+            })
+            .child(rendered)
+            .into_any_element()
     }
 }

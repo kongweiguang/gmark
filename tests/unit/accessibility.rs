@@ -6,6 +6,7 @@ use super::*;
 fn semantic_tree_is_bounded_and_exposes_source_contract() {
     let snapshot = EditorAccessibilitySnapshot {
         title: "large.md".to_owned(),
+        mode: AccessibilityMode::Source,
         dirty: true,
         status: "64 MiB · 20,000 lines".to_owned(),
         error: Some("invalid JSON near byte 42".to_owned()),
@@ -17,6 +18,7 @@ fn semantic_tree_is_bounded_and_exposes_source_contract() {
             .map(|line| (line, format!("row {line}")))
             .collect(),
         folds: Vec::new(),
+        math: None,
     }
     .bounded();
     let tree = build_tree(snapshot);
@@ -32,6 +34,7 @@ fn semantic_tree_is_bounded_and_exposes_source_contract() {
         .find(|(id, _)| *id == DOCUMENT_ID)
         .map(|(_, node)| node)
         .expect("document node");
+    assert_eq!(document.label(), Some("Source editor"));
     assert_eq!(
         document.text_selection().map(|selection| selection.focus),
         Some(TextPosition {
@@ -53,6 +56,69 @@ fn semantic_tree_is_bounded_and_exposes_source_contract() {
             .sum::<usize>(),
         first_run.value().expect("text run value").len()
     );
+}
+
+#[test]
+fn semantic_tree_announces_rendered_mode() {
+    let tree = build_tree(EditorAccessibilitySnapshot {
+        mode: AccessibilityMode::Live,
+        ..EditorAccessibilitySnapshot::default()
+    });
+    let document = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == DOCUMENT_ID)
+        .map(|(_, node)| node)
+        .expect("document node");
+    assert_eq!(document.label(), Some("Live rendered view"));
+    let mode = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == MODE_ID)
+        .map(|(_, node)| node)
+        .expect("mode node");
+    assert_eq!(mode.value(), Some("Live"));
+}
+
+#[test]
+fn fold_buttons_expose_expanded_state() {
+    let tree = build_tree(EditorAccessibilitySnapshot {
+        lines: vec![(0, "# title".to_owned()), (1, "body".to_owned())],
+        folds: vec![AccessibilityFold {
+            start_line: 0,
+            end_line: 1,
+            collapsed: false,
+            target: Some(AccessibilityFoldTarget::SourceLine),
+        }],
+        ..EditorAccessibilitySnapshot::default()
+    });
+    let button = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == NodeId(FIRST_FOLD_ID))
+        .map(|(_, node)| node)
+        .expect("fold button");
+    assert_eq!(button.label(), Some("Collapse lines 1 through 2"));
+    assert_eq!(button.is_expanded(), Some(true));
+
+    let tree = build_tree(EditorAccessibilitySnapshot {
+        lines: vec![(0, "# title".to_owned()), (1, "body".to_owned())],
+        folds: vec![AccessibilityFold {
+            start_line: 0,
+            end_line: 1,
+            collapsed: true,
+            target: Some(AccessibilityFoldTarget::SourceLine),
+        }],
+        ..EditorAccessibilitySnapshot::default()
+    });
+    let button = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == NodeId(FIRST_FOLD_ID))
+        .map(|(_, node)| node)
+        .expect("fold button");
+    assert_eq!(button.label(), Some("Expand lines 1 through 2"));
+    assert_eq!(button.is_expanded(), Some(false));
 }
 
 #[test]
@@ -78,6 +144,7 @@ fn semantic_text_budget_is_utf8_safe() {
         lines: (0..512)
             .map(|line| (line, "测".repeat(MAX_EXPOSED_LINE_BYTES)))
             .collect(),
+        math: None,
         ..EditorAccessibilitySnapshot::default()
     }
     .bounded();
@@ -97,4 +164,103 @@ fn semantic_text_budget_is_utf8_safe() {
             .iter()
             .all(|(_, text)| text.is_char_boundary(text.len()))
     );
+}
+
+#[test]
+fn active_math_exposes_slot_tabs_page_and_grid_roving_focus() {
+    let tree = build_tree(EditorAccessibilitySnapshot {
+        math: Some(AccessibilityMath {
+            source: "\\begin{matrix}a&b\\\\c&d\\end{matrix}".to_owned(),
+            slot_value: "b".to_owned(),
+            slot_cursor: 1,
+            slot_label: "Formula slot".to_owned(),
+            symbols_label: "Symbols".to_owned(),
+            structures_label: "Structures".to_owned(),
+            page: AccessibilityMathPage::Symbols,
+            controls: vec![AccessibilityMathControl {
+                key: "alpha".to_owned(),
+                label: "Insert Alpha".to_owned(),
+                page: AccessibilityMathPage::Symbols,
+            }],
+            grid: Some(AccessibilityMathGrid {
+                rows: 2,
+                columns: 2,
+                active_row: 0,
+                active_column: 1,
+                cells: vec![
+                    AccessibilityMathGridCell {
+                        row: 0,
+                        column: 0,
+                        value: "a".to_owned(),
+                    },
+                    AccessibilityMathGridCell {
+                        row: 0,
+                        column: 1,
+                        value: "b".to_owned(),
+                    },
+                    AccessibilityMathGridCell {
+                        row: 1,
+                        column: 0,
+                        value: "c".to_owned(),
+                    },
+                    AccessibilityMathGridCell {
+                        row: 1,
+                        column: 1,
+                        value: "d".to_owned(),
+                    },
+                ],
+            }),
+        }),
+        ..EditorAccessibilitySnapshot::default()
+    });
+    let math = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == MATH_ID)
+        .map(|(_, node)| node)
+        .expect("math node");
+    assert_eq!(math.role(), Role::Math);
+    let input = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == MATH_INPUT_ID)
+        .map(|(_, node)| node)
+        .expect("math input");
+    assert_eq!(input.role(), Role::TextInput);
+    assert_eq!(input.value(), Some("b"));
+    assert!(input.supports_action(Action::ReplaceSelectedText));
+    let symbols = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == MATH_SYMBOLS_TAB_ID)
+        .map(|(_, node)| node)
+        .expect("symbols tab");
+    assert_eq!(symbols.is_selected(), Some(true));
+    assert!(symbols.supports_action(Action::Click));
+    let action = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == NodeId(FIRST_MATH_ACTION_ID))
+        .map(|(_, node)| node)
+        .expect("math action");
+    assert_eq!(action.label(), Some("Insert Alpha"));
+    assert!(action.supports_action(Action::Click));
+    let grid = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == MATH_GRID_ID)
+        .map(|(_, node)| node)
+        .expect("math grid");
+    assert_eq!(
+        grid.active_descendant(),
+        Some(NodeId(FIRST_MATH_GRID_CELL_ID + 1))
+    );
+    let cell = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == NodeId(FIRST_MATH_GRID_CELL_ID + 1))
+        .map(|(_, node)| node)
+        .expect("active grid cell");
+    assert!(cell.supports_action(Action::Focus));
+    assert_eq!(tree.focus, MATH_INPUT_ID);
 }

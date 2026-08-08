@@ -22,6 +22,7 @@ const REGISTRY_VERSION_V5: u32 = 5;
 const REGISTRY_VERSION_V6: u32 = 6;
 const PREVIOUS_REGISTRY_VERSION: u32 = 7;
 pub(crate) const CURRENT_REGISTRY_VERSION: u32 = 8;
+const TRANSITIONAL_NON_BOARD_REGISTRY_VERSION: u32 = 9;
 pub(crate) const SESSION_FILE_LIMIT: u64 = 1024 * 1024;
 pub(crate) const SESSION_TAB_LIMIT: usize = 100;
 pub(crate) const SESSION_WINDOW_LIMIT: usize = 20;
@@ -43,6 +44,14 @@ pub(crate) fn decode_registry(bytes: &[u8]) -> Result<WorkspaceSessionRegistry> 
         .and_then(|version| u32::try_from(version).ok())
         .unwrap_or_default();
     match version {
+        TRANSITIONAL_NON_BOARD_REGISTRY_VERSION => {
+            if value_contains_board_marker(&value) {
+                bail!("workspace session registry version {version} contains Board-owned data");
+            }
+            let mut registry: WorkspaceSessionRegistry = serde_json::from_value(value)?;
+            registry.version = CURRENT_REGISTRY_VERSION;
+            Ok(registry)
+        }
         CURRENT_REGISTRY_VERSION => Ok(serde_json::from_value(value)?),
         PREVIOUS_REGISTRY_VERSION
         | REGISTRY_VERSION_V6
@@ -71,6 +80,22 @@ pub(crate) fn decode_registry(bytes: &[u8]) -> Result<WorkspaceSessionRegistry> 
         }
         version => bail!("unsupported workspace session registry version {version}"),
     }
+}
+
+// A short-lived build wrote ordinary sessions as v9 before that version was reserved for Board.
+// Accept only the data shape owned by main; silently dropping Board state would corrupt recovery.
+fn value_contains_board_marker(value: &serde_json::Value) -> bool {
+    value
+        .get("windows")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|window| window.get("tabs").and_then(serde_json::Value::as_array))
+        .flatten()
+        .any(|tab| {
+            tab.get("board").is_some()
+                || tab.get("view_mode").and_then(serde_json::Value::as_str) == Some("board")
+        })
 }
 
 pub(crate) fn normalize_registry(

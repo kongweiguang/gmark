@@ -59,6 +59,7 @@ impl Block {
             .flex_row()
             .items_center()
             .gap(px(d.callout_header_gap))
+            .children(self.render_fold_button(theme, false, cx))
             .child(
                 div()
                     .id(ElementId::Name(

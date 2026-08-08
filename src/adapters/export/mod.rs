@@ -31,7 +31,7 @@ impl ExportFormat {
 
 pub(crate) use html::{
     PreparedHtmlResources, count_local_resource_cards, prepare_html_resources_with_progress,
-    render_html_with_base_dir,
+    render_clipboard_fragment_with_base_dir, render_html_with_base_dir,
 };
 #[cfg(test)]
 pub(crate) use image::render_png;

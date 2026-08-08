@@ -84,6 +84,22 @@ fn prepared_projection_builds_non_recursive_semantics_before_ui_installation() {
 }
 
 #[test]
+fn prepared_projection_keeps_section_html_as_native_html() {
+    let source = "# title\n\n<section><h2>Heading</h2><p><strong>safe</strong></p></section>";
+    let prepared = PreparedSplitProjection::from_snapshot(
+        gmark_document::SourceDocument::new(source).snapshot(),
+    );
+    let html = prepared
+        .nodes
+        .iter()
+        .flatten()
+        .flat_map(|nodes| nodes.iter())
+        .find(|node| node.record.kind == BlockKind::HtmlBlock)
+        .expect("section should be a native HTML block");
+    assert!(html.record.html.as_ref().is_some_and(|html| html.is_semantic()));
+}
+
+#[test]
 fn prepared_projection_builds_common_recursive_blocks_as_pure_nodes() {
     let source = "- one\n  - nested\n- two\n\n> quoted line\n\n> [!NOTE] Title\n> callout body\n\n[^n]: footnote *body*";
     let prepared = PreparedSplitProjection::from_snapshot(
@@ -119,6 +135,28 @@ fn prepared_projection_builds_common_recursive_blocks_as_pure_nodes() {
         BlockKind::FootnoteDefinition
     );
     assert_eq!(semantic_nodes[3][0].children.len(), 1);
+}
+
+#[test]
+fn rendered_find_uses_visible_text_and_marks_derived_matches_nonreplaceable() {
+    let result = super::find_replace::find_matches_for_view(
+        "[label](https://example.test) &amp;\n\n```mermaid\nflowchart LR\nA-->B\n```",
+        "example",
+        super::find_replace::FindOptions::default(),
+        gmark_document::Revision::INITIAL,
+        true,
+    );
+    assert!(result.matches.is_empty(), "link destinations are hidden");
+
+    let result = super::find_replace::find_matches_for_view(
+        "[label](https://example.test) &amp;\n\n```mermaid\nflowchart LR\nA-->B\n```",
+        "flowchart",
+        super::find_replace::FindOptions::default(),
+        gmark_document::Revision::INITIAL,
+        true,
+    );
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.match_metadata[0].replaceability, gmark_markdown::Replaceability::Derived);
 }
 
 #[test]

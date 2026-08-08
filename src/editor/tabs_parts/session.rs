@@ -621,6 +621,10 @@ impl Editor {
     }
 
     pub(super) fn capture_active_tab(&mut self, cx: &mut Context<Self>) -> DocumentTabSnapshot {
+        // Snapshots outlive the active renderer. Release the active document's
+        // GPUI assets before moving its path/source into the snapshot, so the
+        // parent image key and every in-flight generation remain removable.
+        self.release_render_assets_for_active_document(cx);
         if matches!(self.view_mode, ViewMode::Source | ViewMode::Split) {
             let source = self.document.raw_source_text(cx);
             self.sync_source_document_from_projection(&source);

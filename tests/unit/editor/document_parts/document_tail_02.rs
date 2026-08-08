@@ -1,6 +1,54 @@
 // @author kongweiguang
 
     #[gpui::test]
+    async fn html_survives_source_live_round_trip(cx: &mut TestAppContext) {
+        let markdown = "<div>html block</div>\n\nbody".to_string();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+        editor.update(cx, |editor, cx| {
+            editor.toggle_view_mode(cx);
+            editor.toggle_view_mode(cx);
+
+            let visible = editor.document.visible_blocks();
+            let html = visible
+                .iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::HtmlBlock)
+                .expect("HTML block should survive Live/Source round trip");
+            assert_eq!(html.entity.read(cx).display_text(), "<div>html block</div>");
+            assert_eq!(editor.document.markdown_text(cx), markdown);
+        });
+    }
+
+    #[gpui::test]
+    async fn imports_full_html_smoke_as_native_html_block(cx: &mut TestAppContext) {
+        let markdown = concat!(
+            "# HTML render full\n\n",
+            "<section>\n",
+            "  <h2 style=\"color:#2563eb\">原生 HTML 渲染</h2>\n",
+            "  <p><strong>安全文本</strong>、<em>斜体</em>、<code>inline</code>、<a href=\"https://example.com\">链接</a> 😀</p>\n",
+            "  <blockquote>引用 <mark>高亮</mark></blockquote>\n",
+            "  <details open><summary>展开详情</summary><p>可折叠内容</p></details>\n",
+            "  <table><caption>表格</caption><thead><tr><th>列一</th><th>列二</th></tr></thead><tbody><tr><td>中文</td><td>long-url-example.example/very-long-word</td></tr></tbody></table>\n",
+            "  <script>alert('blocked')</script><p>危险节点后的安全兄弟</p>\n",
+            "</section>\n"
+        );
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            assert!(editor.document.visible_blocks().iter().any(|visible| {
+                visible.entity.read(cx).kind() == BlockKind::HtmlBlock
+                    && visible
+                        .entity
+                        .read(cx)
+                        .record
+                        .html
+                        .as_ref()
+                        .is_some_and(|html| html.is_semantic())
+            }));
+        });
+    }
+
+    #[gpui::test]
     async fn imports_quote_with_list_children(cx: &mut TestAppContext) {
         let editor = cx.new(|cx| {
             Editor::from_markdown(
@@ -745,4 +793,3 @@
             assert_eq!(editor.document.markdown_text(cx), markdown);
         });
     }
-

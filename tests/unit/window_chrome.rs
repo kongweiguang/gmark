@@ -80,6 +80,54 @@ fn titlebar_drag_strategy_matches_platform_window_api() {
 }
 
 #[test]
+fn titlebar_controls_use_native_hit_testing_only_on_windows() {
+    assert_eq!(
+        titlebar_control_strategy_for_target_os("windows"),
+        TitlebarControlStrategy::SystemHitTest
+    );
+    assert_eq!(
+        titlebar_control_strategy_for_target_os("linux"),
+        TitlebarControlStrategy::AppCallback
+    );
+    assert_eq!(
+        titlebar_control_strategy_for_target_os("freebsd"),
+        TitlebarControlStrategy::AppCallback
+    );
+}
+
+#[test]
+fn titlebar_double_click_follows_platform_window_conventions() {
+    assert_eq!(
+        titlebar_double_click_strategy_for_target_os("macos"),
+        TitlebarDoubleClickStrategy::SystemPreference
+    );
+    assert_eq!(
+        titlebar_double_click_strategy_for_target_os("linux"),
+        TitlebarDoubleClickStrategy::ToggleMaximize
+    );
+    assert_eq!(
+        titlebar_double_click_strategy_for_target_os("windows"),
+        TitlebarDoubleClickStrategy::PlatformDefault
+    );
+}
+
+#[test]
+fn linux_window_move_starts_only_after_left_button_motion() {
+    assert!(should_start_window_move(&MouseMoveEvent {
+        pressed_button: Some(MouseButton::Left),
+        ..MouseMoveEvent::default()
+    }));
+    assert!(!should_start_window_move(&MouseMoveEvent {
+        pressed_button: None,
+        ..MouseMoveEvent::default()
+    }));
+    assert!(!should_start_window_move(&MouseMoveEvent {
+        pressed_button: Some(MouseButton::Right),
+        ..MouseMoveEvent::default()
+    }));
+}
+
+#[test]
 fn custom_titlebar_background_uses_workbench_material() {
     let theme = Theme::light_theme();
     assert_eq!(

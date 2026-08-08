@@ -144,7 +144,14 @@ impl Editor {
         self.external_conflict_restore_focus = None;
         self.allow_external_overwrite_once = false;
         self.document_kind = DocumentKind::from_path(&path);
-        self.file_path = Some(path);
+        self.file_path = Some(path.clone());
+        if path_changed {
+            let tab_id = self.tabs.active_id();
+            let _ = self.view_state.rekey_tab(
+                tab_id,
+                super::markdown_view_state::MarkdownTabIdentity::saved(&path, tab_id),
+            );
+        }
         if path_changed {
             self.restart_file_watcher(cx);
         }
@@ -195,7 +202,14 @@ impl Editor {
         self.external_conflict_restore_focus = None;
         self.allow_external_overwrite_once = false;
         self.document_kind = DocumentKind::from_path(&path);
-        self.file_path = Some(path);
+        self.file_path = Some(path.clone());
+        if path_changed {
+            let tab_id = self.tabs.active_id();
+            let _ = self.view_state.rekey_tab(
+                tab_id,
+                super::markdown_view_state::MarkdownTabIdentity::saved(&path, tab_id),
+            );
+        }
         if path_changed {
             self.restart_file_watcher(cx);
         }

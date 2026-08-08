@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use gmark_markdown::escape_html;
+use gmark_markdown::{escape_html, sanitize_html_for_export};
 use pulldown_cmark::{Event, Options, Parser};
 
 use crate::images::{local_image_data_uri, render_image_html, sanitize_image_style};
@@ -115,10 +115,17 @@ fn rewrite_root_html_blocks(markdown: &str, base_dir: Option<&Path>) -> String {
 /// Replaces unsafe raw HTML emitted by either pulldown-cmark HTML event variant.
 pub(crate) fn sanitize_html_event<'a>(event: Event<'a>, base_dir: Option<&Path>) -> Event<'a> {
     match event {
+        Event::Html(raw) if is_comment_fragment(&raw) => Event::Html(raw),
+        Event::InlineHtml(raw) if is_comment_fragment(&raw) => Event::InlineHtml(raw),
         Event::Html(raw) => Event::Html(sanitize_html_block(&raw, base_dir).into()),
         Event::InlineHtml(raw) => Event::InlineHtml(sanitize_html_inline(&raw, base_dir).into()),
         event => event,
     }
+}
+
+fn is_comment_fragment(raw: &str) -> bool {
+    let trimmed = raw.trim_start();
+    trimmed.starts_with("<!--") || trimmed.starts_with("-->")
 }
 
 #[derive(Clone, Debug)]
@@ -171,327 +178,279 @@ fn collect_html_region(lines: &[&str], start: usize, html: &HtmlStart) -> usize 
 }
 
 fn sanitize_html_block(raw: &str, base_dir: Option<&Path>) -> String {
-    sanitize_html(raw, base_dir, true)
+    sanitize_html(raw, base_dir)
 }
 
 fn sanitize_html_inline(raw: &str, base_dir: Option<&Path>) -> String {
-    sanitize_html(raw, base_dir, false)
+    let trimmed = raw.trim();
+    if let Some(end) = html_tag_end(trimmed, 0)
+        && let Some(tag) = parse_html_tag(&trimmed[..end])
+        && tag.closing
+    {
+        // pulldown-cmark exposes inline closing tags as standalone events.
+        // The shared fragment sanitizer quite correctly drops unmatched close
+        // tags, so normalize this inert boundary after the opening tag has
+        // already been sanitized by the shared policy.
+        return format!("</{}>", tag.name);
+    }
+
+    let sanitized = sanitize_html(raw, base_dir);
+    let Some(end) = html_tag_end(trimmed, 0) else {
+        return sanitized;
+    };
+    let Some(tag) = parse_html_tag(&trimmed[..end]) else {
+        return sanitized;
+    };
+    if tag.closing || is_void_tag(&tag.name) || trimmed[end..].contains("</") {
+        return sanitized;
+    }
+    let synthetic_close = format!("</{}>", tag.name);
+    if let Some(stripped) = sanitized.strip_suffix(&synthetic_close) {
+        stripped.to_owned()
+    } else {
+        sanitized
+    }
 }
 
-fn sanitize_html(raw: &str, base_dir: Option<&Path>, display_dangerous_block: bool) -> String {
-    let trimmed = raw.trim_start();
-    if trimmed.starts_with("<!--") {
+/// Keeps comment blocks available to the export comment projection, then lets
+/// the shared Markdown HTML policy own all security decisions. Image source
+/// rewriting is a separate export concern because it reads local files and
+/// turns them into data URIs.
+fn sanitize_html(raw: &str, base_dir: Option<&Path>) -> String {
+    if is_comment_fragment(raw) {
         return raw.to_owned();
     }
-    if display_dangerous_block
-        && html_tag_end(trimmed, 0)
-            .and_then(|end| parse_html_tag(&trimmed[..end]))
-            .is_some_and(|tag| is_dangerous_tag(&tag.name) && !tag.closing)
-    {
-        return format!("<pre class=\"vlt-raw-html\">{}</pre>", escape_html(raw));
+    let mut local_images = Vec::new();
+    let rewritten = rewrite_local_image_placeholders(raw, base_dir, &mut local_images);
+    let sanitized = sanitize_html_for_export(&rewritten);
+    if sanitized.starts_with("<pre class=\"gmark-raw-html\">") {
+        return sanitized.replacen("class=\"gmark-raw-html\"", "class=\"vlt-raw-html\"", 1);
     }
-    let mut output = String::with_capacity(raw.len());
+
+    // Native rendering drops blocked nodes from its tree. Export keeps the
+    // same security policy but exposes the blocked source as escaped text so
+    // a document reader can see what was rejected without executing it.
+    let escaped_blocked = escape_blocked_html_nodes(&rewritten);
+    let sanitized = if escaped_blocked == rewritten {
+        sanitized
+    } else {
+        sanitize_html_for_export(&escaped_blocked)
+    };
+    let sanitized = rewrite_export_image_tags(&sanitized);
+    restore_local_image_sources(&sanitized, &local_images)
+}
+
+fn escape_blocked_html_nodes(html: &str) -> String {
+    let mut output = String::with_capacity(html.len());
     let mut index = 0;
-    while index < raw.len() {
-        let Some(relative_start) = raw[index..].find('<') else {
-            output.push_str(&raw[index..]);
-            break;
-        };
+    while let Some(relative_start) = html[index..].find('<') {
         let start = index + relative_start;
-        output.push_str(&raw[index..start]);
-        let Some(end) = html_tag_end(raw, start) else {
-            output.push_str(&escape_html(&raw[start..]));
-            break;
+        output.push_str(&html[index..start]);
+        let Some(end) = html_tag_end(html, start) else {
+            output.push_str(&html[start..]);
+            return output;
         };
-        let token = &raw[start..end];
+        let token = &html[start..end];
         let Some(tag) = parse_html_tag(token) else {
-            output.push_str(&escape_html(token));
+            output.push_str(token);
             index = end;
             continue;
         };
-        if is_dangerous_tag(&tag.name) && !tag.closing {
-            let close = format!("</{}", tag.name);
-            let tail = raw[end..].to_ascii_lowercase();
-            let dangerous_end = tail
-                .find(&close)
-                .and_then(|offset| html_tag_end(raw, end + offset))
-                .unwrap_or(end);
-            output.push_str(&escape_html(&raw[start..dangerous_end]));
-            index = dangerous_end;
+        if tag.closing || !is_blocked_tag(&tag.name) {
+            output.push_str(token);
+            index = end;
             continue;
         }
-        if !is_safe_tag(&tag.name) {
-            output.push_str(&escape_html(token));
-        } else if tag.closing {
-            output.push_str(&format!("</{}>", tag.name));
-        } else if tag.name == "img" {
-            output.push_str(&sanitize_image_tag(&tag, base_dir));
-        } else {
-            output.push_str(&sanitize_open_tag(&tag));
-        }
-        index = end;
+
+        let closing = format!("</{}", tag.name);
+        let tail = html[end..].to_ascii_lowercase();
+        let blocked_end = tail
+            .find(&closing)
+            .and_then(|offset| html_tag_end(html, end + offset))
+            .unwrap_or(end);
+        output.push_str(&escape_html(&html[start..blocked_end]));
+        index = blocked_end;
     }
+    output.push_str(&html[index..]);
     output
 }
 
-fn sanitize_open_tag(tag: &HtmlTag) -> String {
+fn is_blocked_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "audio"
+            | "base"
+            | "embed"
+            | "form"
+            | "iframe"
+            | "math"
+            | "meta"
+            | "object"
+            | "script"
+            | "style"
+            | "svg"
+            | "video"
+    )
+}
+
+fn rewrite_export_image_tags(html: &str) -> String {
+    rewrite_html_tags(html, |tag| {
+        if tag.closing || tag.name != "img" {
+            return None;
+        }
+        let value = |name: &str| {
+            tag.attributes
+                .iter()
+                .find(|(attribute, _)| attribute == name)
+                .and_then(|(_, value)| value.as_deref())
+        };
+        let style = value("style").unwrap_or_default();
+        if !style
+            .split(';')
+            .filter_map(|declaration| declaration.split_once(':'))
+            .any(|(property, _)| {
+                matches!(
+                    property.trim().to_ascii_lowercase().as_str(),
+                    "zoom" | "width"
+                )
+            })
+        {
+            return None;
+        }
+        let source = value("src")?;
+        let (zoom, width) = sanitize_image_style(style);
+        Some(render_image_html(
+            source,
+            value("alt").unwrap_or_default(),
+            value("title"),
+            zoom,
+            width,
+        ))
+    })
+}
+
+fn rewrite_html_tags<F>(html: &str, mut replacement_for: F) -> String
+where
+    F: FnMut(&HtmlTag) -> Option<String>,
+{
+    let mut output = String::with_capacity(html.len());
+    let mut index = 0;
+    while let Some(relative_start) = html[index..].find('<') {
+        let start = index + relative_start;
+        output.push_str(&html[index..start]);
+        let Some(end) = html_tag_end(html, start) else {
+            output.push_str(&html[start..]);
+            return output;
+        };
+        let token = &html[start..end];
+        if let Some(tag) = parse_html_tag(token)
+            && let Some(replacement) = replacement_for(&tag)
+        {
+            output.push_str(&replacement);
+        } else {
+            output.push_str(token);
+        }
+        index = end;
+    }
+    output.push_str(&html[index..]);
+    output
+}
+
+fn rewrite_local_image_placeholders(
+    html: &str,
+    base_dir: Option<&Path>,
+    local_images: &mut Vec<LocalImageReplacement>,
+) -> String {
+    rewrite_image_sources(html, |tag| {
+        let source = tag
+            .attributes
+            .iter()
+            .find(|(name, _)| name == "src")
+            .and_then(|(_, value)| value.as_deref())?;
+        let data_uri = source
+            .starts_with("data:image/")
+            .then(|| source.to_owned())
+            .or_else(|| local_image_data_uri(source, base_dir))?;
+        let placeholder = format!("https://gmark.invalid/local-image/{}", local_images.len());
+        local_images.push(LocalImageReplacement {
+            placeholder: placeholder.clone(),
+            data_uri,
+        });
+        Some(placeholder)
+    })
+}
+
+fn restore_local_image_sources(html: &str, local_images: &[LocalImageReplacement]) -> String {
+    rewrite_image_sources(html, |tag| {
+        let source = tag
+            .attributes
+            .iter()
+            .find(|(name, _)| name == "src")
+            .and_then(|(_, value)| value.as_deref())?;
+        local_images
+            .iter()
+            .find(|image| image.placeholder == source)
+            .map(|image| image.data_uri.clone())
+    })
+}
+
+struct LocalImageReplacement {
+    placeholder: String,
+    data_uri: String,
+}
+
+fn rewrite_image_sources<F>(html: &str, mut source_for: F) -> String
+where
+    F: FnMut(&HtmlTag) -> Option<String>,
+{
+    let mut output = String::with_capacity(html.len());
+    let mut index = 0;
+    while let Some(relative_start) = html[index..].find('<') {
+        let start = index + relative_start;
+        output.push_str(&html[index..start]);
+        let Some(end) = html_tag_end(html, start) else {
+            output.push_str(&html[start..]);
+            return output;
+        };
+        let token = &html[start..end];
+        output.push_str(&rewrite_image_tag(token, &mut source_for));
+        index = end;
+    }
+    output.push_str(&html[index..]);
+    output
+}
+
+fn rewrite_image_tag<F>(token: &str, source_for: &mut F) -> String
+where
+    F: FnMut(&HtmlTag) -> Option<String>,
+{
+    let Some(tag) = parse_html_tag(token) else {
+        return token.to_owned();
+    };
+    if tag.closing || tag.name != "img" {
+        return token.to_owned();
+    }
+
+    let source = source_for(&tag);
+    let Some(source) = source else {
+        return token.to_owned();
+    };
+
     let mut output = format!("<{}", tag.name);
     for (name, value) in &tag.attributes {
-        if name == "style" {
-            if let Some(style) = sanitize_text_style(value.as_deref().unwrap_or_default()) {
-                output.push_str(&format!(" style=\"{}\"", escape_html(&style)));
-            }
-        } else if safe_attribute(&tag.name, name, value.as_deref()) {
-            if let Some(value) = value {
-                output.push_str(&format!(" {name}=\"{}\"", escape_html(value)));
-            } else {
-                output.push_str(&format!(" {name}"));
-            }
+        let value = if name == "src" {
+            Some(source.as_str())
+        } else {
+            value.as_deref()
+        };
+        if let Some(value) = value {
+            output.push_str(&format!(" {name}=\"{}\"", escape_html(value)));
+        } else {
+            output.push_str(&format!(" {name}"));
         }
     }
     output.push('>');
     output
-}
-
-fn sanitize_image_tag(tag: &HtmlTag, base_dir: Option<&Path>) -> String {
-    let value = |name: &str| {
-        tag.attributes
-            .iter()
-            .find(|(attribute, _)| attribute == name)
-            .and_then(|(_, value)| value.as_deref())
-    };
-    let source = value("src").unwrap_or_default();
-    let source = local_image_data_uri(source, base_dir).unwrap_or_else(|| source.to_owned());
-    let (zoom, width) = sanitize_image_style(value("style").unwrap_or_default());
-    render_image_html(
-        &source,
-        value("alt").unwrap_or_default(),
-        value("title"),
-        zoom,
-        width,
-    )
-}
-
-fn sanitize_text_style(style: &str) -> Option<String> {
-    let mut color = None;
-    let mut background = None;
-    let mut font_size = None;
-    for declaration in style.split(';') {
-        let Some((name, value)) = declaration.split_once(':') else {
-            continue;
-        };
-        let value = value.trim();
-        match name.trim().to_ascii_lowercase().as_str() {
-            "color" => color = css_color(value),
-            "background-color" => background = css_color(value),
-            "font-size" if safe_font_size(value) => font_size = Some(value.to_owned()),
-            _ => {}
-        }
-    }
-    let mut declarations = Vec::new();
-    if let Some(value) = color {
-        declarations.push(format!("color: {value}"));
-    }
-    if let Some(value) = background {
-        declarations.push(format!("background-color: {value}"));
-    }
-    if let Some(value) = font_size {
-        declarations.push(format!("font-size: {value}"));
-    }
-    (!declarations.is_empty()).then(|| format!("{};", declarations.join("; ")))
-}
-
-fn css_color(value: &str) -> Option<String> {
-    let lower = value.trim().to_ascii_lowercase();
-    let named = match lower.as_str() {
-        "black" => Some((0, 0, 0)),
-        "white" => Some((255, 255, 255)),
-        "red" => Some((255, 0, 0)),
-        "blue" => Some((0, 0, 255)),
-        "green" => Some((0, 128, 0)),
-        "yellow" => Some((255, 255, 0)),
-        _ => None,
-    };
-    let rgb = named
-        .or_else(|| hex_color(&lower))
-        .or_else(|| normalized_rgba_color(&lower))?;
-    Some(format!("rgba({},{},{},1.000)", rgb.0, rgb.1, rgb.2))
-}
-
-fn hex_color(value: &str) -> Option<(u8, u8, u8)> {
-    let source = value.strip_prefix('#')?;
-    match source.len() {
-        3 => Some((
-            u8::from_str_radix(&source[0..1].repeat(2), 16).ok()?,
-            u8::from_str_radix(&source[1..2].repeat(2), 16).ok()?,
-            u8::from_str_radix(&source[2..3].repeat(2), 16).ok()?,
-        )),
-        6 => Some((
-            u8::from_str_radix(&source[0..2], 16).ok()?,
-            u8::from_str_radix(&source[2..4], 16).ok()?,
-            u8::from_str_radix(&source[4..6], 16).ok()?,
-        )),
-        _ => None,
-    }
-}
-
-fn normalized_rgba_color(value: &str) -> Option<(u8, u8, u8)> {
-    let values = value.strip_prefix("rgba(")?.strip_suffix(')')?;
-    let mut values = values.split(',').map(str::trim);
-    let red = values.next()?.parse().ok()?;
-    let green = values.next()?.parse().ok()?;
-    let blue = values.next()?.parse().ok()?;
-    (values.next()? == "1.000" && values.next().is_none()).then_some((red, green, blue))
-}
-
-fn safe_font_size(value: &str) -> bool {
-    let lower = value.trim().to_ascii_lowercase();
-    ["px", "em", "rem", "%"].iter().any(|suffix| {
-        lower
-            .strip_suffix(suffix)
-            .is_some_and(|number| number.trim().parse::<f32>().is_ok())
-    }) || matches!(
-        lower.as_str(),
-        "small" | "medium" | "large" | "smaller" | "larger"
-    )
-}
-
-fn safe_attribute(tag: &str, name: &str, value: Option<&str>) -> bool {
-    match name {
-        "class" | "title" | "colspan" | "rowspan" | "align" => true,
-        "alt" => tag == "img",
-        "href" => tag == "a" && safe_url(value.unwrap_or_default(), false),
-        "src" => tag == "img" && safe_url(value.unwrap_or_default(), true),
-        "open" => tag == "details",
-        _ => false,
-    }
-}
-
-fn safe_url(value: &str, is_image: bool) -> bool {
-    let lower = normalized_url(value);
-    !lower.starts_with("javascript:")
-        && !lower.starts_with("vbscript:")
-        && !lower.starts_with("data:text/html")
-        && (!lower.starts_with("data:") || (is_image && lower.starts_with("data:image/")))
-}
-
-fn normalized_url(value: &str) -> String {
-    decode_html_entities(value)
-        .chars()
-        .filter(|character| !character.is_ascii_control() && !character.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-fn decode_html_entities(value: &str) -> String {
-    let mut decoded = String::with_capacity(value.len());
-    let mut index = 0;
-    while let Some(offset) = value[index..].find('&') {
-        let start = index + offset;
-        decoded.push_str(&value[index..start]);
-        if let Some((character, end)) = decode_html_entity(value, start) {
-            decoded.push(character);
-            index = end;
-        } else {
-            decoded.push('&');
-            index = start + 1;
-        }
-    }
-    decoded.push_str(&value[index..]);
-    decoded
-}
-
-fn decode_html_entity(value: &str, start: usize) -> Option<(char, usize)> {
-    let bytes = value.as_bytes();
-    let mut index = start.checked_add(1)?;
-    if bytes.get(index) == Some(&b'#') {
-        index += 1;
-        let hexadecimal = matches!(bytes.get(index), Some(b'x' | b'X'));
-        index += usize::from(hexadecimal);
-        let digits_start = index;
-        while bytes.get(index).is_some_and(|byte| {
-            if hexadecimal {
-                byte.is_ascii_hexdigit()
-            } else {
-                byte.is_ascii_digit()
-            }
-        }) {
-            index += 1;
-        }
-        if index == digits_start {
-            return None;
-        }
-        let digits = &value[digits_start..index];
-        let radix = if hexadecimal { 16 } else { 10 };
-        let code_point = u32::from_str_radix(digits, radix).ok()?;
-        let character = char::from_u32(code_point)?;
-        index += usize::from(bytes.get(index) == Some(&b';'));
-        return Some((character, index));
-    }
-
-    let name_start = index;
-    while bytes.get(index).is_some_and(u8::is_ascii_alphanumeric) {
-        index += 1;
-    }
-    let name = value.get(name_start..index)?;
-    let character = match name {
-        "amp" => '&',
-        "colon" => ':',
-        "NewLine" | "newline" => '\n',
-        "Tab" | "tab" => '\t',
-        _ => return None,
-    };
-    index += usize::from(bytes.get(index) == Some(&b';'));
-    Some((character, index))
-}
-
-fn is_safe_tag(name: &str) -> bool {
-    matches!(
-        name,
-        "a" | "abbr"
-            | "b"
-            | "blockquote"
-            | "br"
-            | "code"
-            | "del"
-            | "details"
-            | "dfn"
-            | "div"
-            | "em"
-            | "figcaption"
-            | "figure"
-            | "hr"
-            | "i"
-            | "img"
-            | "ins"
-            | "kbd"
-            | "mark"
-            | "p"
-            | "pre"
-            | "q"
-            | "small"
-            | "span"
-            | "strong"
-            | "sub"
-            | "summary"
-            | "sup"
-            | "table"
-            | "tbody"
-            | "td"
-            | "tfoot"
-            | "th"
-            | "thead"
-            | "time"
-            | "tr"
-            | "u"
-    )
-}
-
-fn is_dangerous_tag(name: &str) -> bool {
-    matches!(
-        name,
-        "script" | "iframe" | "object" | "embed" | "base" | "style" | "link" | "meta"
-    )
 }
 
 fn is_void_tag(name: &str) -> bool {

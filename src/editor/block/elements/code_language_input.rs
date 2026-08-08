@@ -83,7 +83,7 @@ impl Element for CodeLanguageInputElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let theme = cx.global::<ThemeManager>().current_arc();
-        let wb = &theme.colors.workbench;
+        let colors = &theme.colors;
         let input = self.input.read(cx);
         let content = input.code_language_text().to_string();
         let is_placeholder = content.is_empty();
@@ -95,9 +95,9 @@ impl Element for CodeLanguageInputElement {
         let focused = input.code_language_focus_handle.is_focused(window);
         let style = window.text_style();
         let run_color = if is_placeholder {
-            wb.text_tertiary
+            colors.code_language_input_placeholder
         } else {
-            wb.text_primary
+            colors.code_language_input_text
         };
         let base_run = TextRun {
             len: display_text.len(),
@@ -151,14 +151,14 @@ impl Element for CodeLanguageInputElement {
                     point(bounds.left() + start, bounds.top()),
                     point(bounds.left() + end, bounds.bottom()),
                 ),
-                wb.selection,
+                colors.selection,
             ))
         } else {
             None
         };
         let cursor = if focused && input.code_language_selected_range.is_empty() {
             let cursor_x = line.x_for_index(input.code_language_cursor_offset());
-            let mut cursor_color = wb.caret;
+            let mut cursor_color = colors.cursor;
             cursor_color.a *= input.cursor_opacity();
             Some(fill(
                 code_language_cursor_bounds(

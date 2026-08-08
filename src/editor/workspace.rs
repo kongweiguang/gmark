@@ -774,7 +774,7 @@ fn stable_node_hash(id: &str) -> u64 {
 #[path = "workspace/layout_outline.rs"]
 mod layout_outline;
 use layout_outline::{build_outline_tree, collect_visible_keyboard_nodes, prune_outline_state};
-pub(super) use layout_outline::{
+pub(crate) use layout_outline::{
     document_sidebar_panel_width_for_viewport, workspace_panel_width_for_viewport,
     workspace_uses_overlay,
 };

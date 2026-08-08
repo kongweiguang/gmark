@@ -196,14 +196,18 @@ async fn code_toolbar_copies_body_without_mutating_document_and_clears_feedback(
     let source = "```rust\nfn main() {}\n```";
     let (editor, visual_cx) =
         cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, source.to_owned(), None));
-    for viewport in [size(px(720.0), px(520.0)), size(px(1180.0), px(780.0))] {
+    for viewport in [
+        size(px(720.0), px(520.0)),
+        size(px(1180.0), px(780.0)),
+        size(px(1440.0), px(780.0)),
+    ] {
         visual_cx.simulate_resize(viewport);
         redraw(visual_cx);
         let toolbar = visual_cx.debug_bounds("code-block-toolbar").unwrap();
         let control = visual_cx.debug_bounds("code-language-control").unwrap();
         let copy = visual_cx.debug_bounds("code-block-copy").unwrap();
         let content = visual_cx.debug_bounds("editor-content").unwrap();
-        assert_eq!(f32::from(toolbar.size.height), 28.0);
+        assert_eq!(f32::from(toolbar.size.height), 32.0);
         assert!(toolbar.left() >= content.left());
         assert!(toolbar.right() <= content.right());
         assert!(control.left() >= toolbar.left());
@@ -257,4 +261,14 @@ async fn code_toolbar_copies_body_without_mutating_document_and_clears_feedback(
                 .code_copy_feedback
         );
     });
+
+    visual_cx.simulate_keystrokes("enter");
+    redraw(visual_cx);
+    assert_eq!(
+        visual_cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("fn main() {}")
+    );
 }

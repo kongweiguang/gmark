@@ -1,0 +1,5 @@
+id,title,kind,status,score,notes
+1,完整渲染总览,markdown,done,0.92,"包含标题、Callout、表格和脚注"
+2,代码示例,code,done,0.88,"覆盖常见语言代码块"
+3,数学公式,math,ready,0.95,"包含块公式和矩阵"
+4,Mermaid 图表,diagram,ready,0.90,"包含流程图和时序图"

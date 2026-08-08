@@ -226,6 +226,42 @@
         let _ = fs::remove_dir_all(root);
     }
 
+    #[gpui::test]
+    async fn switching_between_workspace_files_keeps_the_window_alive(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_workspace_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "gmark-workspace-switch-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let paths = [
+            root.join("first.md"),
+            root.join("second.md"),
+            root.join("third.md"),
+        ];
+        fs::write(&paths[0], "# First\n\n- one\n- two\n").unwrap();
+        fs::write(&paths[1], "# Second\n\n| A | B |\n| - | - |\n| 1 | 2 |\n").unwrap();
+        fs::write(&paths[2], "# Third\n\n> [!NOTE]\n> keep switching\n").unwrap();
+        let (editor, visual) = cx.add_window_view(|_window, cx| {
+            super::Editor::from_markdown(cx, "initial".to_owned(), None)
+        });
+
+        for path in paths.iter().cycle().take(12) {
+            editor.update_in(visual, |editor, window, cx| {
+                editor.open_workspace_file(path.clone(), window, cx);
+            });
+            visual.run_until_parked();
+            visual.update(|window, cx| window.draw(cx).clear());
+            editor.update(visual, |editor, _cx| {
+                assert_eq!(editor.file_path.as_ref(), Some(path));
+            });
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn explicitly_created_empty_directory_can_be_merged_into_scanned_tree() {
         let root =

@@ -4,6 +4,174 @@
 
 use super::*;
 
+/// Cached standalone image presentation state for a block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImageRuntime {
+    pub(crate) alt: String,
+    pub(crate) src: String,
+    pub(crate) title: Option<String>,
+    pub(crate) width_percent: u8,
+    pub(crate) resolved_source: ImageResolvedSource,
+    /// Process-local bounded image preparation identity. Remote sources leave
+    /// this unset and continue through GPUI's URL/resource loader unchanged.
+    pub(crate) asset_key: Option<crate::editor::render_asset_manager::AssetKey>,
+    /// Explicit local preparation state projected by the editor scheduler.
+    pub(crate) asset_state: crate::editor::render_asset_manager::AssetState,
+}
+
+impl ImageRuntime {
+    pub(crate) fn local_asset_state(
+        &self,
+    ) -> Option<(
+        &crate::editor::render_asset_manager::AssetKey,
+        &crate::editor::render_asset_manager::AssetState,
+    )> {
+        self.asset_key.as_ref().map(|key| (key, &self.asset_state))
+    }
+}
+
+/// A local `<img>` discovered inside the shared safe HTML tree.  The editor
+/// scheduler owns its decoded payload; the HTML renderer only consumes the
+/// projected key/state by node id.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HtmlImageAssetRequest {
+    pub(crate) node_id: gmark_markdown::HtmlNodeId,
+    pub(crate) path: PathBuf,
+}
+
+impl Block {
+    pub(crate) fn local_html_image_requests(&self) -> Vec<HtmlImageAssetRequest> {
+        let Some(document) = self
+            .record
+            .html
+            .as_ref()
+            .filter(|document| document.is_semantic())
+        else {
+            return Vec::new();
+        };
+        let mut requests = Vec::new();
+        collect_html_image_requests(
+            &document.nodes,
+            self.image_base_dir.as_deref(),
+            &mut requests,
+        );
+        requests
+    }
+
+    pub(crate) fn html_image_asset_state(
+        &self,
+        node_id: gmark_markdown::HtmlNodeId,
+    ) -> Option<(
+        &crate::editor::render_asset_manager::AssetKey,
+        &crate::editor::render_asset_manager::AssetState,
+    )> {
+        self.html_image_asset_states
+            .get(&node_id)
+            .map(|(key, state)| (key, state))
+    }
+
+    pub(crate) fn bind_html_image_asset_state(
+        &mut self,
+        node_id: gmark_markdown::HtmlNodeId,
+        key: crate::editor::render_asset_manager::AssetKey,
+        state: crate::editor::render_asset_manager::AssetState,
+    ) -> bool {
+        let entry = self
+            .html_image_asset_states
+            .entry(node_id)
+            .or_insert_with(|| {
+                (
+                    key.clone(),
+                    crate::editor::render_asset_manager::AssetState::Idle,
+                )
+            });
+        let changed = entry.0 != key || entry.1 != state;
+        *entry = (key, state);
+        changed
+    }
+
+    pub(crate) fn set_html_image_asset_state(
+        &mut self,
+        node_id: gmark_markdown::HtmlNodeId,
+        key: &crate::editor::render_asset_manager::AssetKey,
+        state: crate::editor::render_asset_manager::AssetState,
+    ) -> bool {
+        let Some((current_key, current_state)) = self.html_image_asset_states.get_mut(&node_id)
+        else {
+            return false;
+        };
+        if current_key != key || *current_state == state {
+            return false;
+        }
+        *current_state = state;
+        true
+    }
+
+    pub(crate) fn bind_image_asset_state(
+        &mut self,
+        key: crate::editor::render_asset_manager::AssetKey,
+        state: crate::editor::render_asset_manager::AssetState,
+    ) -> bool {
+        let Some(runtime) = self.image_runtime.as_mut() else {
+            return false;
+        };
+        let changed = runtime.asset_key.as_ref() != Some(&key) || runtime.asset_state != state;
+        runtime.asset_key = Some(key);
+        runtime.asset_state = state;
+        changed
+    }
+
+    /// Projects editor-owned image preparation state into the block snapshot.
+    /// The key guard prevents a completion for an old path/size bucket from
+    /// mutating a runtime that has already changed in the document.
+    pub(crate) fn set_image_asset_state(
+        &mut self,
+        key: crate::editor::render_asset_manager::AssetKey,
+        state: crate::editor::render_asset_manager::AssetState,
+    ) -> bool {
+        let Some(runtime) = self.image_runtime.as_mut() else {
+            return false;
+        };
+        if runtime.asset_key.as_ref() != Some(&key) {
+            return false;
+        }
+        if runtime.asset_state == state {
+            return false;
+        }
+        runtime.asset_state = state;
+        true
+    }
+}
+
+fn collect_html_image_requests(
+    nodes: &[crate::components::HtmlNode],
+    base_dir: Option<&Path>,
+    output: &mut Vec<HtmlImageAssetRequest>,
+) {
+    for node in nodes {
+        if node.tag_name == "img"
+            && let Some(node_id) = node.id
+            && let Some(src) = node
+                .attrs
+                .iter()
+                .find(|attribute| attribute.name == "src")
+                .and_then(|attribute| attribute.value.as_deref())
+                .filter(|src| !src.trim().is_empty())
+            && let ImageResolvedSource::Local(path) = resolve_image_source(src, base_dir)
+        {
+            output.push(HtmlImageAssetRequest { node_id, path });
+        }
+        collect_html_image_requests(&node.children, base_dir, output);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImageResizeSession {
+    pub(crate) start_x: Pixels,
+    pub(crate) start_percent: u8,
+    pub(crate) available_width: f32,
+}
+
 impl Block {
     pub(crate) fn image_runtime(&self) -> Option<&ImageRuntime> {
         self.image_runtime.as_ref()
@@ -40,6 +208,8 @@ impl Block {
             title: resolved_target.title.clone(),
             width_percent: syntax.width_percent,
             resolved_source: resolve_image_source(&resolved_target.src, base_dir),
+            asset_key: None,
+            asset_state: crate::editor::render_asset_manager::AssetState::Idle,
         })
     }
 
@@ -65,8 +235,23 @@ impl Block {
         if next_runtime.is_none() {
             self.image_edit_expanded = false;
             self.image_expand_requested = false;
+            self.image_retry_requested = false;
         }
         self.image_runtime = next_runtime;
+    }
+
+    /// Requests a fresh bounded decode after a failed local-image load. The
+    /// editor owns the generation/token transition; the block only records
+    /// the user intent so the render pass remains side-effect free.
+    pub(crate) fn request_image_retry(&mut self, cx: &mut Context<Self>) {
+        if self.image_runtime.is_some() {
+            self.image_retry_requested = true;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn take_image_retry_request(&mut self) -> bool {
+        std::mem::take(&mut self.image_retry_requested)
     }
 
     fn standalone_image_markdown_for_runtime(&self) -> Option<String> {
@@ -110,12 +295,14 @@ impl Block {
         if self.image_runtime.is_none() {
             let had_image_state = self.image_edit_expanded
                 || self.image_expand_requested
+                || self.image_retry_requested
                 || self.image_selected
                 || self.image_resize_session.is_some()
                 || self.image_preview_width_percent.is_some();
             if had_image_state {
                 self.image_edit_expanded = false;
                 self.image_expand_requested = false;
+                self.image_retry_requested = false;
                 self.image_selected = false;
                 self.image_resize_session = None;
                 self.image_preview_width_percent = None;

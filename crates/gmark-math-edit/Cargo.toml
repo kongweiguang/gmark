@@ -1,0 +1,18 @@
+# @author kongweiguang
+
+[package]
+name = "gmark-math-edit"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ratex-layout = "0.1.9"
+ratex-parser = "0.1.9"

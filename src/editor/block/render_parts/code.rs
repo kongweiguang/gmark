@@ -10,6 +10,7 @@ impl Block {
         is_placeholder: bool,
         theme: &Theme,
         strings: &I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = &theme.colors;
@@ -82,16 +83,19 @@ impl Block {
             .id("code-language-control")
             .debug_selector(|| "code-language-control".to_owned())
             .relative()
-            .h(px(24.0))
+            .h(px(28.0))
             .w(px(d.code_language_input_width))
+            .min_w(px(96.0))
+            .flex_shrink()
             .pr(px(22.0))
             .pl(px(d.code_language_input_padding_x))
             .flex()
             .items_center()
             .rounded(px(d.code_language_input_radius.max(6.0).min(10.0)))
             .border(px(d.code_language_input_border_width))
-            .border_color(wb.border_subtle)
-            .bg(wb.input_surface)
+            .border_color(c.code_language_input_border)
+            .bg(c.code_language_input_bg)
+            .focus(|this| this.border_color(wb.focus_ring))
             .key_context(BLOCK_EDITOR_CONTEXT)
             .track_focus(&self.code_language_focus_handle)
             .on_action(cx.listener(Self::on_code_language_newline))
@@ -126,7 +130,7 @@ impl Block {
             )
             .on_mouse_move(cx.listener(Self::on_code_language_mouse_move))
             .text_size(px((t.code_size - 1.0).max(10.0)))
-            .text_color(wb.text_primary)
+            .text_color(c.code_language_input_text)
             .cursor(CursorStyle::IBeam)
             .child(CodeLanguageInputElement::new(
                 cx.entity(),
@@ -149,7 +153,7 @@ impl Block {
                     .tooltip(move |_window, cx| {
                         crate::ui::ui_tooltip(language_menu_tooltip.clone(), cx)
                     })
-                    .text_color(wb.text_primary)
+                    .text_color(c.code_language_input_text)
                     .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                         cx.stop_propagation();
                     })
@@ -164,29 +168,45 @@ impl Block {
                     ),
             )
             .children(language_menu);
+        // GPUI SVGs do not inherit the parent `text_color`; keep the icon
+        // color explicit so the copy/check glyph remains visible in every
+        // built-in light and dark palette.
+        let copy_color = if self.code_copy_feedback {
+            wb.success
+        } else {
+            wb.icon
+        };
         let copy_button = div()
             .id("code-block-copy")
             .debug_selector(|| "code-block-copy".to_owned())
-            .size(px(24.0))
+            .tab_index(0)
+            .track_focus(&self.code_copy_focus_handle)
+            .size(px(28.0))
             .flex_shrink_0()
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(6.0))
+            .border(px(1.0))
+            .border_color(wb.control_surface.opacity(0.0))
             .hover(|this| this.bg(wb.control_hover))
+            .focus(|this| this.border_color(wb.focus_ring))
             .active(|this| this.opacity(0.86))
             .cursor_pointer()
             .tooltip(move |_window, cx| crate::ui::ui_tooltip(copy_tooltip.clone(), cx))
-            .text_color(if self.code_copy_feedback {
-                wb.accent
-            } else {
-                wb.text_tertiary
-            })
+            .text_color(copy_color)
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                 cx.stop_propagation();
             })
-            .on_click(cx.listener(|block, _event, _window, cx| {
+            .on_click(cx.listener(|block, _event, window, cx| {
+                block.code_copy_focus_handle.focus(window);
                 block.copy_code_block(cx);
+            }))
+            .on_key_down(cx.listener(|block, event: &KeyDownEvent, _window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    block.copy_code_block(cx);
+                    cx.stop_propagation();
+                }
             }))
             .child(
                 svg()
@@ -195,30 +215,43 @@ impl Block {
                     } else {
                         COPY_ICON
                     })
-                    .size(px(15.0)),
+                    .size(px(15.0))
+                    .text_color(copy_color),
             );
         let toolbar = div()
             .id("code-block-toolbar")
             .debug_selector(|| "code-block-toolbar".to_owned())
             .w_full()
-            .h(px(28.0))
+            .h(px(32.0))
             .pr(px(1.0))
             .flex_shrink_0()
             .flex()
             .items_start()
-            .justify_between()
+            .gap(px(d.code_language_input_gap.max(8.0)))
             .child(language_control)
             .child(copy_button);
+        // The content column starts narrowing before the window itself feels
+        // narrow (sidebars and the centered reading width consume the same
+        // viewport). Keep the compact control group at the content edge until
+        // that transition is complete; otherwise both controls can be pushed
+        // past a clipped editor pane while the code remains readable.
+        let toolbar = if window.viewport_size().width <= px(d.centered_shrink_end) {
+            toolbar.justify_start()
+        } else {
+            toolbar.justify_end()
+        };
         // 交互 shell 负责左侧“+”预留；可见 surface 必须从正文内容边界开始。
         let code_surface = div()
             .debug_selector(|| "code-block-surface".to_owned())
             .w_full()
             .min_w(px(0.0))
             .bg(c.code_bg)
+            .border(px(1.0))
+            .border_color(wb.border_subtle)
             .rounded(px(8.0))
             .pl(px(d.code_block_padding_x))
             .pr(px(d.code_block_padding_x))
-            .pt(px(2.0))
+            .pt(px(4.0))
             .pb(px(d.code_block_padding_y))
             .flex()
             .flex_col()
@@ -230,7 +263,8 @@ impl Block {
                 div()
                     .min_w(px(0.0))
                     .w_full()
-                    .pt(px(2.0))
+                    .pt(px(4.0))
+                    .font_family(crate::document_host::source_monospace_font_family())
                     .child(BlockTextElement::new(cx.entity(), is_placeholder)),
             );
         focused_base.child(code_surface).into_any_element()

@@ -16,6 +16,10 @@ fn risky_tag_classifies_as_raw_text() {
     let doc = parse_html_document("<script>alert(1)</script>");
     assert_eq!(doc.safety, HtmlSafetyClass::RawTextBlock);
     assert!(doc.markdown_value().is_unsafe());
+    assert!(doc.diagnostics.iter().any(|diagnostic| {
+        diagnostic.kind == gmark_markdown::HtmlDiagnosticKind::BlockedTag
+            && diagnostic.tag.as_deref() == Some("script")
+    }));
     assert_eq!(doc.nodes[0].raw_source, "<script>alert(1)</script>");
 }
 
@@ -49,17 +53,84 @@ fn risky_child_is_local_raw_inside_safe_parent() {
     let doc = parse_html_document("<div>safe<script>alert(1)</script>tail</div>");
     assert!(doc.is_semantic());
     let div = &doc.nodes[0];
-    assert!(
+    assert_eq!(
         div.children
             .iter()
-            .any(|child| child.kind == HtmlNodeKind::RawTextBlock)
+            .filter(|child| child.tag_name == "#text")
+            .map(|child| child.raw_source.as_str())
+            .collect::<String>(),
+        "safetail"
+    );
+    assert!(doc.diagnostics.iter().any(|diagnostic| {
+        diagnostic.kind == gmark_markdown::HtmlDiagnosticKind::BlockedTag
+            && diagnostic.tag.as_deref() == Some("script")
+    }));
+}
+
+#[test]
+fn html5ever_repairs_malformed_html_nesting() {
+    let doc = parse_html_document("<details><summary>x</details>");
+    assert!(doc.is_semantic());
+    assert_eq!(
+        doc.markdown_value().parser,
+        gmark_markdown::HtmlParserKind::Html5ever
+    );
+    assert_eq!(
+        doc.markdown_value()
+            .render_status
+            .tree()
+            .unwrap()
+            .plain_text,
+        "x"
     );
 }
 
 #[test]
-fn malformed_html_falls_back_to_raw_text() {
-    let doc = parse_html_document("<details><summary>x</details>");
-    assert_eq!(doc.safety, HtmlSafetyClass::RawTextBlock);
+fn html5ever_repairs_an_omitted_block_closing_tag() {
+    let doc = parse_html_document("<div>repaired");
+
+    assert!(doc.is_semantic());
+    assert_eq!(doc.nodes[0].tag_name, "div");
+    assert_eq!(doc.nodes[0].children[0].raw_source, "repaired");
+}
+
+#[test]
+fn same_line_section_block_is_semantic_in_editor_projection() {
+    let doc =
+        parse_html_document("<section><h2>Heading</h2><p><strong>safe</strong></p></section>");
+
+    assert!(doc.is_semantic(), "diagnostics: {:?}", doc.diagnostics);
+    assert_eq!(doc.nodes[0].tag_name, "section");
+}
+
+#[test]
+fn dangerous_event_attributes_keep_safe_container_content() {
+    let doc = parse_html_document("<div onclick=alert(1)>safe</div>");
+
+    assert!(doc.is_semantic());
+    assert_eq!(doc.nodes[0].children[0].raw_source, "safe");
+    assert!(doc.diagnostics.iter().any(|diagnostic| {
+        diagnostic.kind == gmark_markdown::HtmlDiagnosticKind::BlockedAttribute
+    }));
+}
+
+#[test]
+fn html_section_with_safe_siblings_stays_semantic() {
+    let source = concat!(
+        "<section>\n",
+        "  <h2 style=\"color:#2563eb\">原生 HTML 渲染</h2>\n",
+        "  <p><strong>安全文本</strong>、<em>斜体</em>、<code>inline</code>、<a href=\"https://example.com\">链接</a> 😀</p>\n",
+        "  <blockquote>引用 <mark>高亮</mark></blockquote>\n",
+        "  <details open><summary>展开详情</summary><p>可折叠内容</p></details>\n",
+        "  <table><caption>表格</caption><thead><tr><th>列一</th><th>列二</th></tr></thead><tbody><tr><td>中文</td><td>long-url-example.example/very-long-word</td></tr></tbody></table>\n",
+        "  <script>alert('blocked')</script><p>危险节点后的安全兄弟</p>\n",
+        "</section>"
+    );
+    let doc = parse_html_document(source);
+
+    assert!(doc.is_semantic(), "diagnostics: {:?}", doc.diagnostics);
+    assert_eq!(doc.nodes[0].tag_name, "section");
+    assert!(parse_html_document(&format!("{source}\n")).is_semantic());
 }
 
 #[test]

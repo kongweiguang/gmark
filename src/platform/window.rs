@@ -7,7 +7,7 @@ use gmark_config::{WorkspaceSessionWindow, WorkspaceSessionWindowState};
 use gpui::Hsla;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Decorations, MouseButton, Pixels,
+    AnyElement, App, Bounds, ClickEvent, Context, Decorations, MouseButton, MouseMoveEvent, Pixels,
     PlatformDisplay, SharedString, TextAlign, TitlebarOptions, Window, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowDecorations, WindowOptions, div, img, point, px, size,
     svg,
@@ -71,6 +71,21 @@ pub(crate) struct CustomTitlebarLayout {
 pub(crate) enum TitlebarDragStrategy {
     PlatformHitTest,
     ExplicitMoveRequest,
+}
+
+/// 区分系统非客户区命中与应用回调，避免同一次标题栏点击被派发两次。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitlebarControlStrategy {
+    SystemHitTest,
+    AppCallback,
+}
+
+/// 标题栏双击必须服从各平台约定，macOS 还要遵循用户的系统偏好。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitlebarDoubleClickStrategy {
+    PlatformDefault,
+    SystemPreference,
+    ToggleMaximize,
 }
 
 pub(crate) fn titlebar_options_for_target_os(
@@ -231,6 +246,27 @@ pub(crate) fn titlebar_drag_strategy_for_target_os(
     }
 }
 
+pub(crate) fn titlebar_control_strategy_for_target_os(target_os: &str) -> TitlebarControlStrategy {
+    match target_os {
+        "linux" | "freebsd" => TitlebarControlStrategy::AppCallback,
+        _ => TitlebarControlStrategy::SystemHitTest,
+    }
+}
+
+pub(crate) fn titlebar_double_click_strategy_for_target_os(
+    target_os: &str,
+) -> TitlebarDoubleClickStrategy {
+    match target_os {
+        "macos" => TitlebarDoubleClickStrategy::SystemPreference,
+        "linux" | "freebsd" => TitlebarDoubleClickStrategy::ToggleMaximize,
+        _ => TitlebarDoubleClickStrategy::PlatformDefault,
+    }
+}
+
+pub(crate) fn should_start_window_move(event: &MouseMoveEvent) -> bool {
+    event.pressed_button == Some(MouseButton::Left)
+}
+
 pub(crate) fn custom_titlebar_height_for_target_os(
     target_os: &str,
     decorations: Decorations,
@@ -291,13 +327,16 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
         return None;
     }
 
+    let target_os = std::env::consts::OS;
     let layout = custom_titlebar_layout_for_target_os(
-        std::env::consts::OS,
+        target_os,
         window.window_decorations(),
         &theme.dimensions,
     )?;
     let drag_strategy =
-        titlebar_drag_strategy_for_target_os(std::env::consts::OS, window.window_decorations());
+        titlebar_drag_strategy_for_target_os(target_os, window.window_decorations());
+    let control_strategy = titlebar_control_strategy_for_target_os(target_os);
+    let double_click_strategy = titlebar_double_click_strategy_for_target_os(target_os);
     let c = &theme.colors;
     let t = &theme.typography;
     let controls = window.window_controls();
@@ -331,7 +370,6 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
         .flex()
         .items_center()
         .gap(px(7.0))
-        .window_control_area(WindowControlArea::Drag)
         .children(leading_icon.filter(|_| !centered_title).map(|path| {
             div()
                 .size(px(TITLEBAR_LEADING_ICON_SLOT))
@@ -349,21 +387,32 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
         .children(title_label);
 
     let drag_title = match drag_strategy {
-        TitlebarDragStrategy::PlatformHitTest => drag_title,
+        TitlebarDragStrategy::PlatformHitTest => {
+            drag_title.window_control_area(WindowControlArea::Drag)
+        }
         TitlebarDragStrategy::ExplicitMoveRequest => {
-            drag_title.on_mouse_down(MouseButton::Left, |event, window, cx| {
-                if event.click_count >= 2 {
-                    window.zoom_window();
-                } else {
+            drag_title.on_mouse_move(|event, window, cx| {
+                if should_start_window_move(event) {
                     window.start_window_move();
+                    cx.stop_propagation();
                 }
-                cx.stop_propagation();
             })
         }
     }
-    .on_click(|event, window, _cx| {
+    .on_click(move |event, window, _cx| {
         if event.is_right_click() {
             window.show_window_menu(event.position());
+            return;
+        }
+
+        if !event.standard_click() || event.click_count() != 2 {
+            return;
+        }
+
+        match double_click_strategy {
+            TitlebarDoubleClickStrategy::SystemPreference => window.titlebar_double_click(),
+            TitlebarDoubleClickStrategy::ToggleMaximize => window.zoom_window(),
+            TitlebarDoubleClickStrategy::PlatformDefault => {}
         }
     });
 
@@ -388,89 +437,104 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
             .child(drag_title)
             .child(div().w(px(MAC_TRAFFIC_LIGHT_RESERVED_WIDTH)).h_full()),
         TitlebarControlMode::AppControls => {
-            let close_entity = entity.clone();
             let mut controls_row = div().h_full().flex().items_center().flex_shrink_0();
 
             if controls.minimize {
-                controls_row = controls_row.child(
-                    div()
-                        .id("window-titlebar-minimize")
-                        .w(px(TITLEBAR_BUTTON_WIDTH))
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .window_control_area(WindowControlArea::Min)
-                        .hover(|this| this.bg(c.workbench.control_hover))
-                        .cursor_pointer()
-                        .child(
-                            svg()
-                                .path(TITLEBAR_MINIMIZE_ICON)
-                                .size(px(TITLEBAR_ICON_SIZE))
-                                .text_color(icon_color),
-                        )
-                        .on_click(|event, window, _cx| {
-                            if event.standard_click() {
-                                window.minimize_window();
-                            }
-                        }),
-                );
-            }
-
-            if controls.maximize {
-                controls_row = controls_row.child(
-                    div()
-                        .id("window-titlebar-maximize")
-                        .w(px(TITLEBAR_BUTTON_WIDTH))
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .window_control_area(WindowControlArea::Max)
-                        .hover(|this| this.bg(c.workbench.control_hover))
-                        .cursor_pointer()
-                        .child(
-                            svg()
-                                .path(titlebar_maximize_icon(
-                                    window.is_maximized(),
-                                    window.is_fullscreen(),
-                                ))
-                                .size(px(TITLEBAR_ICON_SIZE))
-                                .text_color(icon_color),
-                        )
-                        .on_click(|event, window, _cx| {
-                            if event.standard_click() {
-                                window.zoom_window();
-                            }
-                        }),
-                );
-            }
-
-            controls_row = controls_row.child(
-                div()
-                    .id("window-titlebar-close")
+                let minimize_button = div()
+                    .id("window-titlebar-minimize")
                     .w(px(TITLEBAR_BUTTON_WIDTH))
                     .h_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .window_control_area(WindowControlArea::Close)
-                    .hover(|this| this.bg(c.workbench.danger))
+                    .hover(|this| this.bg(c.workbench.control_hover))
                     .cursor_pointer()
                     .child(
                         svg()
-                            .path(TITLEBAR_CLOSE_ICON)
+                            .path(TITLEBAR_MINIMIZE_ICON)
                             .size(px(TITLEBAR_ICON_SIZE))
                             .text_color(icon_color),
-                    )
-                    .on_click(move |event, window, app| {
+                    );
+                let minimize_button = match control_strategy {
+                    TitlebarControlStrategy::SystemHitTest => {
+                        minimize_button.window_control_area(WindowControlArea::Min)
+                    }
+                    TitlebarControlStrategy::AppCallback => {
+                        minimize_button.on_click(|event, window, _cx| {
+                            if event.standard_click() {
+                                window.minimize_window();
+                            }
+                        })
+                    }
+                };
+                controls_row = controls_row.child(minimize_button);
+            }
+
+            if controls.maximize {
+                let maximize_button = div()
+                    .id("window-titlebar-maximize")
+                    .w(px(TITLEBAR_BUTTON_WIDTH))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .hover(|this| this.bg(c.workbench.control_hover))
+                    .cursor_pointer()
+                    .child(
+                        svg()
+                            .path(titlebar_maximize_icon(
+                                window.is_maximized(),
+                                window.is_fullscreen(),
+                            ))
+                            .size(px(TITLEBAR_ICON_SIZE))
+                            .text_color(icon_color),
+                    );
+                let maximize_button = match control_strategy {
+                    TitlebarControlStrategy::SystemHitTest => {
+                        maximize_button.window_control_area(WindowControlArea::Max)
+                    }
+                    TitlebarControlStrategy::AppCallback => {
+                        maximize_button.on_click(|event, window, _cx| {
+                            if event.standard_click() {
+                                window.zoom_window();
+                            }
+                        })
+                    }
+                };
+                controls_row = controls_row.child(maximize_button);
+            }
+
+            let close_button = div()
+                .id("window-titlebar-close")
+                .w(px(TITLEBAR_BUTTON_WIDTH))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(|this| this.bg(c.workbench.danger))
+                .cursor_pointer()
+                .child(
+                    svg()
+                        .path(TITLEBAR_CLOSE_ICON)
+                        .size(px(TITLEBAR_ICON_SIZE))
+                        .text_color(icon_color),
+                );
+            let close_button = match control_strategy {
+                TitlebarControlStrategy::SystemHitTest => {
+                    close_button.window_control_area(WindowControlArea::Close)
+                }
+                TitlebarControlStrategy::AppCallback => {
+                    let close_entity = entity.clone();
+                    close_button.on_click(move |event, window, app| {
                         if event.standard_click() {
                             let _ = close_entity.update(app, |view, cx| {
                                 on_close(view, event, window, cx);
                             });
                         }
-                    }),
-            );
+                    })
+                }
+            };
+            controls_row = controls_row.child(close_button);
 
             root.child(drag_title).child(controls_row)
         }

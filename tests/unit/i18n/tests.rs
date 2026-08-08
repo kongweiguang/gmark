@@ -41,6 +41,8 @@ fn built_in_chinese_strings_are_utf8() {
         "Reduce Transparency"
     );
     assert_eq!(strings.help_about_github_label, "GitHub");
+    assert_eq!(strings.math_palette["fraction"], "插入分数");
+    assert_eq!(strings.math_palette["sqrt"], "插入平方根");
     assert_eq!(
         strings.help_about_star_message,
         "如果本项目对您有帮助，那不妨给本项目一颗 Star⭐，十分感谢！"
@@ -74,6 +76,94 @@ fn large_document_strings_are_complete_and_language_specific() {
             "language-specific value fell back: {key}"
         );
     }
+}
+
+#[test]
+fn math_palette_strings_are_complete_and_language_specific() {
+    let zh = I18nStrings::zh_cn();
+    let en = I18nStrings::en_us();
+    let mut expected = vec![
+        "surface",
+        "symbols_tab",
+        "structures_tab",
+        "drag_handle",
+        "formula_editor",
+        "empty_slot",
+        "fraction",
+        "sqrt",
+        "nth_root",
+        "matrix",
+        "paren",
+        "bracket",
+        "brace",
+        "abs",
+        "norm",
+        "angle",
+        "floor",
+        "ceil",
+        "integral",
+        "sum",
+        "product",
+        "infinity",
+        "pi",
+        "theta",
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "lambda",
+        "mu",
+        "sigma",
+        "phi",
+        "omega",
+        "uppercase_delta",
+        "less_or_equal",
+        "greater_or_equal",
+        "not_equal",
+        "approximately",
+        "times",
+        "divide",
+        "dot",
+        "plus_minus",
+        "right_arrow",
+        "partial",
+        "nabla",
+        "member",
+        "superscript",
+        "subscript",
+        "cases",
+        "aligned",
+        "text_mode",
+    ];
+    expected.sort_unstable();
+
+    assert_eq!(
+        zh.math_palette
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        expected.as_slice()
+    );
+    assert_eq!(
+        en.math_palette
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        expected.as_slice()
+    );
+    for key in &expected {
+        let zh_value = &zh.math_palette[*key];
+        let en_value = &en.math_palette[*key];
+        assert!(!zh_value.trim().is_empty(), "Chinese value is empty: {key}");
+        assert!(!en_value.trim().is_empty(), "English value is empty: {key}");
+        assert_ne!(
+            zh_value, en_value,
+            "language-specific value fell back: {key}"
+        );
+    }
+    assert_eq!(zh.math_palette["fraction"], "插入分数");
+    assert_eq!(en.math_palette["fraction"], "Insert Fraction");
+    assert_eq!(en.math_palette_text("missing_key"), "missing_key");
 }
 
 #[test]

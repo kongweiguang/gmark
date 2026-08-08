@@ -283,6 +283,18 @@ impl Editor {
             return;
         }
 
+        // Formula structure editing is an ephemeral transaction. Changing the
+        // rendered/source coordinate space must cancel every active session
+        // before rebuilding or reusing blocks; every command has already been
+        // published, so switching views only ends the visual session.
+        for visible in self.document.flatten_visible_blocks() {
+            visible.entity.update(cx, |block, cx| {
+                if block.math_edit_session.is_some() {
+                    block.finish_math_edit(cx);
+                }
+            });
+        }
+
         self.end_block_pointer_selection_sessions(cx);
         let selection_snapshot = if self.view_mode == ViewMode::Preview {
             self.last_selection_snapshot

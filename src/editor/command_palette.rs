@@ -21,7 +21,7 @@ use crate::components::{
     OpenSafeSource, SetBulletedList, SetCodeBlock, SetHeading1, SetHeading2, SetHeading3,
     SetHeading4, SetHeading5, SetHeading6, SetNumberedList, SetParagraph, SetQuote, SetTaskList,
     ShortcutCommand, ShowAbout, StrikethroughSelection, SubscriptSelection, SuperscriptSelection,
-    UnderlineSelection, UninstallCliTool, shortcut_definitions,
+    UnderlineSelection, UninstallCliTool, format_shortcut_for_display, shortcut_definitions,
 };
 use crate::i18n::I18nStrings;
 use crate::preferences::localized_shortcut_command_label;
@@ -586,6 +586,19 @@ fn localized_action_label(action: &dyn Action, strings: &I18nStrings, language_i
             "normalizelineendingslf" => "统一为 LF 换行符",
             "normalizelineendingscrlf" => "统一为 CRLF 换行符",
             "normalizelineendingscr" => "统一为 CR 换行符",
+            "cancelformatting" => "取消格式化",
+            "collapsefold" => "折叠当前区域",
+            "collapseallfolds" => "全部折叠",
+            "expandfold" => "展开当前区域",
+            "expandallfolds" => "全部展开",
+            "focusstructuredcolumns" => "聚焦结构化列",
+            "focusstructuredfilter" => "聚焦结构化筛选",
+            "formatdocument" => "格式化文档",
+            "formatselection" => "格式化选区",
+            "showdocumentoutline" => "大纲",
+            "showstructureview" => "结构视图",
+            "showstructuredinspector" => "检查器",
+            "showdocumentinfo" => "文档信息",
             "exporthtml" => "导出为 HTML",
             "exportimage" => "导出为 PNG 图片",
             "exportpdf" => "导出为 PDF",
@@ -661,7 +674,7 @@ fn display_shortcut(raw: &str, action_name: &str) -> String {
     {
         String::new()
     } else {
-        shortcut.to_owned()
+        format_shortcut_for_display(shortcut)
     }
 }
 

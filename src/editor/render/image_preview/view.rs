@@ -88,6 +88,8 @@ impl Editor {
             }
         };
 
+        self.image_preview_tile_ids = asset.tile_source_ids();
+
         let zoom = self
             .image_preview_zoom
             .clamp(IMAGE_PREVIEW_MIN_ZOOM, IMAGE_PREVIEW_MAX_ZOOM);
@@ -111,15 +113,8 @@ impl Editor {
         let center_canvas = canvas_width <= (viewport_width - IMAGE_PREVIEW_PADDING * 2.0).max(1.0);
         let scale = canvas_width / asset.width as f32;
         let scroll_y = (-f32::from(self.scroll_handle.offset().y)).max(0.0);
-        let canvas = image_preview_canvas(
-            &path,
-            &asset,
-            canvas_width,
-            scale,
-            scroll_y,
-            viewport_height,
-            cx,
-        );
+        let canvas =
+            image_preview_canvas(&asset, canvas_width, scale, scroll_y, viewport_height, cx);
         let zoom_toolbar =
             self.render_image_preview_zoom_toolbar(theme, strings, fit_scale, scale, cx);
         div()

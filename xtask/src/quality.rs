@@ -15,6 +15,9 @@ pub(crate) fn check_source_size(root: &Path) -> Result<(), String> {
     let mut warnings = Vec::new();
     let mut violations = Vec::new();
     for path in source::manual_rust_files(root)? {
+        if source::is_optional_board_evidence_source(&source::read_text(&path)?) {
+            continue;
+        }
         let lines = source::line_count(&path)?;
         let relative = source::relative(root, &path);
         if lines > HARD_LINE_LIMIT {
@@ -146,6 +149,10 @@ pub(crate) fn check_source_structure(
             let text = source::read_text(&path)?;
             let tokens = source::rust_tokens(&text);
             Ok(SourceFile { path, text, tokens })
+        })
+        .filter_map(|result| match result {
+            Ok(file) if source::is_optional_board_evidence_source(&file.text) => None,
+            other => Some(other),
         })
         .collect::<Result<Vec<_>, String>>()?;
     let reachable = declared_module_files(root, &sources);

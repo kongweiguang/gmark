@@ -81,6 +81,7 @@ impl DocumentHost {
                 start_line: region.start_line as u64,
                 end_line: region.end_line as u64,
                 collapsed: self.fold_projection.is_collapsed(region.id),
+                target: Some(crate::accessibility::AccessibilityFoldTarget::SourceLine),
             })
             .collect();
         let error = self
@@ -91,6 +92,12 @@ impl DocumentHost {
             .map(ToString::to_string);
         crate::accessibility::EditorAccessibilitySnapshot {
             title,
+            mode: match self.view_mode {
+                DocumentHostViewMode::Source => crate::accessibility::AccessibilityMode::Source,
+                DocumentHostViewMode::Live => crate::accessibility::AccessibilityMode::Live,
+                DocumentHostViewMode::Structure => crate::accessibility::AccessibilityMode::Preview,
+                DocumentHostViewMode::Split => crate::accessibility::AccessibilityMode::Split,
+            },
             dirty: document_dirty_state(&self.document, &self.pending_dirty),
             status: self
                 .status_text(cx.global::<I18nManager>().strings())
@@ -102,6 +109,7 @@ impl DocumentHost {
             caret: Some(self.accessibility_caret(cx)),
             lines,
             folds,
+            math: None,
         }
     }
 
@@ -116,7 +124,13 @@ impl DocumentHost {
             | (u64::from(self.navigation_visible) << 5)
             | (u64::from(self.error.is_some()) << 6)
             | (u64::from(self.structure_error.is_some()) << 7)
-            | (u64::from(self.coordinator.recovery_error.is_some()) << 8);
+            | (u64::from(self.coordinator.recovery_error.is_some()) << 8)
+            | (match self.view_mode {
+                DocumentHostViewMode::Source => 0,
+                DocumentHostViewMode::Live => 1,
+                DocumentHostViewMode::Structure => 2,
+                DocumentHostViewMode::Split => 3,
+            } << 10);
         let row_signature = self
             .displayed_screen_lines
             .rows

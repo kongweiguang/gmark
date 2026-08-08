@@ -20,6 +20,8 @@ html-native = ["dep:tree-sitter", "dep:tree-sitter-html"]
 [dependencies]
 ammonia = "=4.1.3"
 cssparser = "0.37"
+html5ever = "=0.39.0"
+markup5ever_rcdom = "=0.39.0"
 pulldown-cmark = "0.13"
 regex = "1"
 tree-sitter = { version = "0.26.9", optional = true }

@@ -3,7 +3,7 @@
     #[gpui::test]
     async fn regular_fenced_code_is_not_mermaid(cx: &mut TestAppContext) {
         let markdown = "```rust\nfn main() {}\n```".to_string();
-        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.to_string(), None));
 
         editor.update(cx, |editor, cx| {
             let visible = editor.document.visible_blocks();

@@ -100,7 +100,8 @@ impl Element for BlockTextElement {
         let shared_text = input.shared_display_text();
         let is_placeholder = self.is_placeholder;
         let show_inline_code_backgrounds = !input.is_source_raw_mode();
-        let show_source_line_numbers = input.show_source_line_numbers();
+        let show_source_line_numbers =
+            input.show_source_line_numbers() || input.kind().is_code_block();
         let compact_source_host = input.compact_source_host();
         let source_layout_identity = input.source_layout_identity.clone();
         let cached_source_layout_key = input.source_layout_cache_key.clone();
@@ -276,7 +277,8 @@ impl Element for BlockTextElement {
         let line_height = window.line_height();
         let focused = input.focus_handle.is_focused(window);
         let show_inline_code_backgrounds = !input.is_source_raw_mode();
-        let show_source_line_numbers = input.show_source_line_numbers();
+        let show_source_line_numbers =
+            input.show_source_line_numbers() || input.kind().is_code_block();
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
 
@@ -287,7 +289,11 @@ impl Element for BlockTextElement {
             .unwrap_or(px(0.0));
         let text_bounds = source_text_bounds(bounds, source_line_number_gutter_width);
         let source_line_numbers = if show_source_line_numbers {
-            let run_color = wb.text_tertiary;
+            let run_color = if input.kind().is_code_block() {
+                theme.colors.code_syntax_comment
+            } else {
+                wb.text_tertiary
+            };
             (1..=lines.len().max(1))
                 .map(|line_number| {
                     let label = line_number.to_string();

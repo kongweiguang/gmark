@@ -26,6 +26,8 @@ pub(super) const IMAGE_PREVIEW_TILE_EDGE: u32 = 4_096;
 pub(super) const IMAGE_PREVIEW_MAX_PIXELS: u64 = 32 * 1024 * 1024;
 pub(super) const IMAGE_PREVIEW_MAX_TILED_PIXELS: u64 = 256 * 1024 * 1024;
 const IMAGE_PREVIEW_MAX_DECODE_BYTES: u64 = IMAGE_PREVIEW_MAX_PIXELS * 4;
+const IMAGE_PREVIEW_MAX_TILED_BYTES: usize = 256 * 1024 * 1024;
+const IMAGE_PREVIEW_MAX_TILE_BAND_BYTES: u64 = 64 * 1024 * 1024;
 const IMAGE_PREVIEW_ZOOM_STEP: f32 = 0.1;
 const IMAGE_PREVIEW_PADDING: f32 = 24.0;
 
@@ -44,9 +46,20 @@ pub(super) struct ImagePreviewAsset {
     pub(super) content: ImagePreviewContent,
 }
 
+impl ImagePreviewAsset {
+    pub(super) fn tile_source_ids(&self) -> Vec<u64> {
+        match &self.content {
+            ImagePreviewContent::Tiled(rows) => rows
+                .iter()
+                .flat_map(|row| row.tiles.iter())
+                .map(|tile| tile.source.id)
+                .collect(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum ImagePreviewContent {
-    Native,
     Tiled(Arc<[ImagePreviewTileRow]>),
 }
 
@@ -63,7 +76,7 @@ pub(super) struct ImagePreviewTile {
 }
 
 #[derive(Clone)]
-struct ImagePreviewTileSource {
+pub(super) struct ImagePreviewTileSource {
     id: u64,
     png: Arc<[u8]>,
 }
@@ -71,6 +84,17 @@ struct ImagePreviewTileSource {
 impl Hash for ImagePreviewTileSource {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+    }
+}
+
+impl ImagePreviewTileSource {
+    /// Recreates only the cache identity for explicit GPUI removal. The
+    /// loader hashes the stable ID and never needs to decode this tombstone.
+    fn cache_key(id: u64) -> Self {
+        Self {
+            id,
+            png: Arc::new([]),
+        }
     }
 }
 
@@ -117,6 +141,23 @@ impl Asset for ImagePreviewTileLoader {
                 Ok(Arc::new(RenderImage::new(smallvec![Frame::new(image)])))
             })();
             result.map_err(Arc::new)
+        }
+    }
+}
+
+impl Editor {
+    /// Releases the current image-preview source and every tile identity that
+    /// may still be resident in GPUI's asset cache. Only stable IDs are kept
+    /// on the editor, so this path never retains decoded tile bytes itself.
+    pub(super) fn release_image_preview_assets(&mut self, cx: &mut Context<Self>) {
+        // Keep the path until the caller has captured the tab snapshot. A
+        // switch/close path must release the GPUI key without losing the
+        // document identity that will be restored later.
+        if let Some(path) = self.image_preview_path.as_ref() {
+            cx.remove_asset::<ImagePreviewAssetLoader>(path);
+        }
+        for id in self.image_preview_tile_ids.drain(..) {
+            cx.remove_asset::<ImagePreviewTileLoader>(&ImagePreviewTileSource::cache_key(id));
         }
     }
 }
@@ -188,20 +229,13 @@ pub(super) fn load_image_preview_asset(path: &Path) -> Result<ImagePreviewAsset>
     if width == 0 || height == 0 {
         bail!("image dimensions must be non-zero");
     }
-    if width <= IMAGE_PREVIEW_TILE_EDGE && height <= IMAGE_PREVIEW_TILE_EDGE {
-        return Ok(ImagePreviewAsset {
-            width,
-            height,
-            content: ImagePreviewContent::Native,
-        });
-    }
-
+    let mut tile_budget = TileBudget::default();
     let rows = if format == Some(ImageFormat::Png) {
         validate_image_preview_tiled_dimensions(width, height)?;
-        load_oversized_png_tiles(path, width, height)?
+        load_oversized_png_tiles(path, width, height, &mut tile_budget)?
     } else {
         validate_image_preview_dimensions(width, height)?;
-        load_oversized_generic_tiles(path, width, height)?
+        load_oversized_generic_tiles(path, width, height, &mut tile_budget)?
     };
     Ok(ImagePreviewAsset {
         width,
@@ -232,6 +266,7 @@ fn load_oversized_png_tiles(
     path: &Path,
     expected_width: u32,
     expected_height: u32,
+    tile_budget: &mut TileBudget,
 ) -> Result<Vec<ImagePreviewTileRow>> {
     let file = File::open(path)
         .with_context(|| format!("failed to open oversized PNG '{}'", path.display()))?;
@@ -241,7 +276,7 @@ fn load_oversized_png_tiles(
         .read_info()
         .with_context(|| format!("failed to read oversized PNG '{}'", path.display()))?;
     if reader.info().interlaced {
-        return load_oversized_generic_tiles(path, expected_width, expected_height);
+        return load_oversized_generic_tiles(path, expected_width, expected_height, tile_budget);
     }
     let width = reader.info().width;
     let height = reader.info().height;
@@ -259,7 +294,7 @@ fn load_oversized_png_tiles(
     let column_widths = tile_column_widths(width);
     let mut rows = Vec::new();
     let mut band_height = 0u32;
-    let band_capacity_height = height.min(IMAGE_PREVIEW_TILE_EDGE);
+    let band_capacity_height = bounded_tile_band_height(width, height);
     let mut buffers = tile_band_buffers(&column_widths, band_capacity_height)?;
     while let Some(row) = reader
         .next_row()
@@ -267,12 +302,13 @@ fn load_oversized_png_tiles(
     {
         append_png_row(row.data(), color_type, &column_widths, &mut buffers)?;
         band_height += 1;
-        if band_height == IMAGE_PREVIEW_TILE_EDGE {
+        if band_height == band_capacity_height {
             rows.push(finish_tile_row(
                 &column_widths,
                 band_height,
                 band_capacity_height,
                 &mut buffers,
+                tile_budget,
             )?);
             band_height = 0;
         }
@@ -283,6 +319,7 @@ fn load_oversized_png_tiles(
             band_height,
             band_capacity_height,
             &mut buffers,
+            tile_budget,
         )?);
     }
     let decoded_height: u32 = rows.iter().map(|row| row.height).sum();
@@ -299,6 +336,7 @@ fn load_oversized_generic_tiles(
     path: &Path,
     expected_width: u32,
     expected_height: u32,
+    tile_budget: &mut TileBudget,
 ) -> Result<Vec<ImagePreviewTileRow>> {
     let mut reader = ImageReader::open(path)
         .with_context(|| format!("failed to open image '{}'", path.display()))?
@@ -336,7 +374,7 @@ fn load_oversized_generic_tiles(
                 let end = start + (tile_width * 4) as usize;
                 pixels.extend_from_slice(&image.as_raw()[start..end]);
             }
-            tiles.push(render_tile(tile_width, tile_height, pixels)?);
+            tiles.push(render_tile(tile_width, tile_height, pixels, tile_budget)?);
         }
         rows.push(ImagePreviewTileRow {
             height: tile_height,
@@ -351,6 +389,13 @@ fn tile_column_widths(width: u32) -> Vec<u32> {
         .step_by(IMAGE_PREVIEW_TILE_EDGE as usize)
         .map(|left| (width - left).min(IMAGE_PREVIEW_TILE_EDGE))
         .collect()
+}
+
+fn bounded_tile_band_height(width: u32, height: u32) -> u32 {
+    let bytes_per_row = u64::from(width).saturating_mul(4).max(1);
+    let max_height = (IMAGE_PREVIEW_MAX_TILE_BAND_BYTES / bytes_per_row)
+        .clamp(1, u64::from(IMAGE_PREVIEW_TILE_EDGE));
+    height.min(max_height as u32)
 }
 
 fn tile_band_buffers(column_widths: &[u32], height: u32) -> Result<Vec<Vec<u8>>> {
@@ -414,6 +459,7 @@ fn finish_tile_row(
     height: u32,
     band_capacity_height: u32,
     buffers: &mut Vec<Vec<u8>>,
+    tile_budget: &mut TileBudget,
 ) -> Result<ImagePreviewTileRow> {
     let replacement = tile_band_buffers(column_widths, band_capacity_height)?;
     let finished = std::mem::replace(buffers, replacement);
@@ -421,7 +467,7 @@ fn finish_tile_row(
         .iter()
         .copied()
         .zip(finished)
-        .map(|(width, pixels)| render_tile(width, height, pixels))
+        .map(|(width, pixels)| render_tile(width, height, pixels, tile_budget))
         .collect::<Result<Vec<_>>>()?;
     Ok(ImagePreviewTileRow {
         height,
@@ -429,7 +475,34 @@ fn finish_tile_row(
     })
 }
 
-fn render_tile(width: u32, height: u32, pixels: Vec<u8>) -> Result<ImagePreviewTile> {
+#[derive(Default)]
+struct TileBudget {
+    encoded_bytes: usize,
+}
+
+impl TileBudget {
+    fn reserve(&mut self, bytes: usize) -> Result<()> {
+        let next = self
+            .encoded_bytes
+            .checked_add(bytes)
+            .context("image preview tile budget overflowed")?;
+        if next > IMAGE_PREVIEW_MAX_TILED_BYTES {
+            bail!(
+                "image preview tiles exceed the bounded budget of {} bytes",
+                IMAGE_PREVIEW_MAX_TILED_BYTES
+            );
+        }
+        self.encoded_bytes = next;
+        Ok(())
+    }
+}
+
+fn render_tile(
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+    tile_budget: &mut TileBudget,
+) -> Result<ImagePreviewTile> {
     static NEXT_TILE_ID: AtomicU64 = AtomicU64::new(1);
 
     let mut encoded = Vec::new();
@@ -445,6 +518,7 @@ fn render_tile(width: u32, height: u32, pixels: Vec<u8>) -> Result<ImagePreviewT
             .write_image_data(&pixels)
             .context("failed to encode image preview tile")?;
     }
+    tile_budget.reserve(encoded.len())?;
     Ok(ImagePreviewTile {
         width,
         source: ImagePreviewTileSource {
@@ -458,7 +532,6 @@ fn render_tile(width: u32, height: u32, pixels: Vec<u8>) -> Result<ImagePreviewT
 mod view;
 
 fn image_preview_canvas(
-    path: &Path,
     asset: &ImagePreviewAsset,
     canvas_width: f32,
     scale: f32,
@@ -475,41 +548,29 @@ fn image_preview_canvas(
         .flex_shrink_0()
         .flex()
         .flex_col();
-    match &asset.content {
-        ImagePreviewContent::Native => canvas
-            .child(
-                img(path.to_path_buf())
-                    .id("image-preview-content")
-                    .debug_selector(|| "image-preview-content".to_owned())
-                    .w_full()
-                    .h_auto()
-                    .object_fit(ObjectFit::Contain),
-            )
-            .into_any_element(),
-        ImagePreviewContent::Tiled(rows) => {
-            let (visible, top_spacer, bottom_spacer) =
-                visible_tile_row_window(rows, scale, scroll_y, viewport_height);
-            for (row_index, row) in rows.iter().enumerate() {
-                if visible.contains(&row_index) {
-                    continue;
+    let content =
+        match &asset.content {
+            ImagePreviewContent::Tiled(rows) => {
+                let (visible, top_spacer, bottom_spacer) =
+                    visible_tile_row_window(rows, scale, scroll_y, viewport_height);
+                for (row_index, row) in rows.iter().enumerate() {
+                    if visible.contains(&row_index) {
+                        continue;
+                    }
+                    for tile in row.tiles.iter() {
+                        cx.remove_asset::<ImagePreviewTileLoader>(&tile.source);
+                    }
                 }
-                for tile in row.tiles.iter() {
-                    cx.remove_asset::<ImagePreviewTileLoader>(&tile.source);
-                }
-            }
-            canvas
-                .children((top_spacer > 0.5).then(|| {
-                    div()
-                        .w_full()
-                        .h(px(top_spacer))
-                        .flex_shrink_0()
-                        .into_any_element()
-                }))
-                .children(
-                    rows[visible.clone()]
-                        .iter()
-                        .enumerate()
-                        .map(|(visible_index, row)| {
+                canvas
+                    .children((top_spacer > 0.5).then(|| {
+                        div()
+                            .w_full()
+                            .h(px(top_spacer))
+                            .flex_shrink_0()
+                            .into_any_element()
+                    }))
+                    .children(rows[visible.clone()].iter().enumerate().map(
+                        |(visible_index, row)| {
                             let row_index = visible.start + visible_index;
                             div()
                                 .id(("image-preview-tile-row", row_index))
@@ -543,18 +604,23 @@ fn image_preview_canvas(
                                         .object_fit(ObjectFit::Fill)
                                     },
                                 ))
-                        }),
-                )
-                .children((bottom_spacer > 0.5).then(|| {
-                    div()
-                        .w_full()
-                        .h(px(bottom_spacer))
-                        .flex_shrink_0()
-                        .into_any_element()
-                }))
-                .into_any_element()
-        }
-    }
+                        },
+                    ))
+                    .children((bottom_spacer > 0.5).then(|| {
+                        div()
+                            .w_full()
+                            .h(px(bottom_spacer))
+                            .flex_shrink_0()
+                            .into_any_element()
+                    }))
+                    .into_any_element()
+            }
+        };
+    div()
+        .id("image-preview-content")
+        .debug_selector(|| "image-preview-content".to_owned())
+        .child(content)
+        .into_any_element()
 }
 
 fn visible_tile_row_window(

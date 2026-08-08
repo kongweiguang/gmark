@@ -1,0 +1,30 @@
+{
+  "name": "GMark rendering fixtures",
+  "version": 1,
+  "enabled": true,
+  "owner": null,
+  "features": [
+    "markdown",
+    "math",
+    "mermaid",
+    "json",
+    "csv"
+  ],
+  "workspace": {
+    "path": "gmark-docs",
+    "theme": "obsidian",
+    "views": ["live", "source", "split", "preview"]
+  },
+  "checks": [
+    {
+      "id": "markdown",
+      "status": "done",
+      "coverage": 0.92
+    },
+    {
+      "id": "structured-data",
+      "status": "ready",
+      "coverage": 1
+    }
+  ]
+}

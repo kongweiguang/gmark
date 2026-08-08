@@ -2,7 +2,7 @@
 
 [package]
 name = "gmark"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 rust-version = "1.95"
 authors = ["kongweiguang"]
@@ -21,6 +21,7 @@ members = [
     "crates/gmark-i18n",
     "crates/gmark-json-graph",
     "crates/gmark-markdown",
+    "crates/gmark-math-edit",
     "crates/gmark-paged-document",
     "crates/gmark-recovery-codec",
     "crates/gmark-source-tools",
@@ -74,7 +75,14 @@ collapsible_if = "allow"
 collapsible_else_if = "allow"
 
 [features]
-default = ["code-highlight-core", "code-highlight-official", "code-highlight-config", "code-highlight-extra", "html-native"]
+default = [
+    "code-highlight-core",
+    "code-highlight-official",
+    "code-highlight-config",
+    "code-highlight-extra",
+    "html-native",
+    "native-html-render",
+]
 code-highlight-core = [
     "dep:tree-sitter",
     "dep:tree-sitter-highlight",
@@ -86,7 +94,9 @@ html-native = [
     "dep:tree-sitter-html",
     "gmark-export/html-native",
     "gmark-markdown/html-native",
+    "native-html-render",
 ]
+native-html-render = []
 code-highlight-official = [
     "code-highlight-core",
     "gmark-export/code-highlight-official",
@@ -133,6 +143,7 @@ gmark-export = { path = "crates/gmark-export", default-features = false }
 gmark-i18n = { path = "crates/gmark-i18n" }
 gmark-json-graph = { path = "crates/gmark-json-graph" }
 gmark-markdown = { path = "crates/gmark-markdown", default-features = false }
+gmark-math-edit = { path = "crates/gmark-math-edit" }
 gmark-paged-document = { package = "gmark-paged-document", path = "crates/gmark-paged-document" }
 gmark-recovery-codec = { path = "crates/gmark-recovery-codec" }
 gmark-source-tools = { path = "crates/gmark-source-tools", default-features = false }
@@ -157,6 +168,7 @@ url = "2"
 pulldown-cmark = "0.13"
 cssparser = "0.37"
 ammonia = "=4.1.3"
+arboard = "3.6.1"
 crc32fast = "1"
 directories = "6"
 dunce = "1"

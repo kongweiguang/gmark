@@ -355,13 +355,33 @@ fn table_cell_to_markdown_value(cell: &InlineTextTree) -> MarkdownTableCell {
     }
 }
 
-/// Responsive width fractions shared by every row of a native table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableColumnLayout {
     fractions: Vec<f32>,
 }
 
 impl TableColumnLayout {
+    /// Restores a normalized, process-local view snapshot.
+    /// can never make a table unrenderable.
+    pub fn from_fractions(fractions: &[f32]) -> Option<Self> {
+        if fractions.is_empty() || fractions.iter().any(|fraction| !fraction.is_finite()) {
+            return None;
+        }
+        let sum = fractions
+            .iter()
+            .map(|fraction| fraction.max(0.0))
+            .sum::<f32>();
+        if sum <= f32::EPSILON {
+            return None;
+        }
+        Some(Self {
+            fractions: fractions
+                .iter()
+                .map(|fraction| fraction.max(0.0) / sum)
+                .collect(),
+        })
+    }
+
     pub fn equal(column_count: usize) -> Self {
         let column_count = column_count.max(1);
         let fraction = 1.0 / column_count as f32;
@@ -370,16 +390,39 @@ impl TableColumnLayout {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn fractions(&self) -> &[f32] {
-        &self.fractions
-    }
-
     pub fn fraction(&self, column: usize) -> f32 {
         self.fractions
             .get(column)
             .copied()
             .unwrap_or_else(|| 1.0 / self.fractions.len().max(1) as f32)
+    }
+
+    pub fn fractions(&self) -> Vec<f32> {
+        self.fractions.clone()
+    }
+
+    pub fn resize_boundary(
+        &mut self,
+        boundary: usize,
+        delta_pixels: f32,
+        table_width: f32,
+        minimum_pixels: f32,
+    ) -> bool {
+        if boundary + 1 >= self.fractions.len() || table_width <= 0.0 {
+            return false;
+        }
+        let left = self.fractions[boundary] * table_width;
+        let right = self.fractions[boundary + 1] * table_width;
+        let total = left + right;
+        let min = minimum_pixels.max(1.0).min(total / 2.0);
+        let next_left = (left + delta_pixels).clamp(min, total - min);
+        let next_right = total - next_left;
+        if (next_left - left).abs() <= f32::EPSILON {
+            return false;
+        }
+        self.fractions[boundary] = next_left / table_width;
+        self.fractions[boundary + 1] = next_right / table_width;
+        true
     }
 
     pub fn measure(
@@ -393,6 +436,14 @@ impl TableColumnLayout {
             .map(f32::from)
             .collect::<Vec<_>>();
         Self::from_preferred_widths(&preferred_widths, table_width, minimum_column_width(theme))
+    }
+
+    pub fn intrinsic_width(table: &TableData, window: &mut Window, theme: &Theme) -> f32 {
+        measure_preferred_column_widths(table, window, theme)
+            .into_iter()
+            .map(f32::from)
+            .sum::<f32>()
+            .clamp(120.0, 4096.0)
     }
 
     pub fn from_preferred_widths(

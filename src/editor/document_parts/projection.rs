@@ -577,7 +577,9 @@ pub(super) fn html_or_raw_block(
 
 pub(super) fn html_or_raw_record(markdown: String) -> BlockRecord {
     let document = parse_html_document(&markdown);
-    if document.safety == HtmlSafetyClass::Semantic {
+    if document.safety == HtmlSafetyClass::Semantic
+        && !should_keep_unclosed_html_projection_raw(&markdown)
+    {
         // 复用已经分类完成的 HtmlDocument，避免 BlockRecord::html 再解析一次。
         let mut record = BlockRecord::with_plain_text(BlockKind::HtmlBlock, markdown.clone());
         record.html = Some(document);
@@ -586,6 +588,29 @@ pub(super) fn html_or_raw_record(markdown: String) -> BlockRecord {
     } else {
         BlockRecord::raw_markdown(markdown)
     }
+}
+
+/// 保留编辑器对未闭合块 HTML 的历史源码回退语义。
+///
+/// 领域层仍使用 html5ever 的 HTML5 自动修复能力；这里只限制 Markdown
+/// projection，避免一个未闭合的行首标签吸收后续文本后再以可视 HTML 形式
+/// 脱离原始编辑边界。完整闭合的片段和领域测试不受影响。
+fn should_keep_unclosed_html_projection_raw(markdown: &str) -> bool {
+    let first_line = markdown.lines().next().unwrap_or_default();
+    let Some(HtmlBlockStart::Tag {
+        name,
+        self_closing,
+        closes_same_line,
+    }) = parse_html_block_start(first_line)
+    else {
+        return false;
+    };
+    if self_closing || closes_same_line {
+        return false;
+    }
+
+    let lower = markdown.to_ascii_lowercase();
+    !lower.contains(&format!("</{}", name.to_ascii_lowercase()))
 }
 
 pub(super) fn math_or_raw_block(

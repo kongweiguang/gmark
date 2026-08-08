@@ -138,7 +138,14 @@ impl Editor {
         file_path: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
+        // A document replacement invalidates every renderer-owned generation,
+        // not only standalone image-preview tiles. Cancel the old document's
+        // decode tasks before advancing the epoch so completions cannot retain
+        // or publish payloads into the new document.
+        self.release_render_assets_for_active_document(cx);
         self.document_epoch = self.document_epoch.wrapping_add(1);
+        self.reset_markdown_view_state_identity(file_path.as_deref());
+        self.image_preview_path = None;
         self.source_encoding = crate::document_io::DocumentEncoding::Utf8;
         self.show_encoding_conversion_dialog = false;
         self.saved_file_fingerprint = file_path
@@ -155,7 +162,6 @@ impl Editor {
             .map(DocumentKind::from_path)
             .unwrap_or(DocumentKind::Markdown);
         self.file_path = file_path;
-        self.image_preview_path = None;
         self.image_preview_zoom = 1.0;
         self.view_mode = ViewMode::Rendered;
         self.split_preview = None;
