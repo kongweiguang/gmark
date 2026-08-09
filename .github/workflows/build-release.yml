@@ -294,6 +294,14 @@ jobs:
   release:
     name: Publish installers and signed updater manifest
     needs: [validate, windows, linux, macos]
+    if: >-
+      ${{
+        always() &&
+        needs.validate.result == 'success' &&
+        needs.windows.result == 'success' &&
+        needs.linux.result == 'success' &&
+        needs.macos.result == 'success'
+      }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
