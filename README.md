@@ -138,6 +138,10 @@ sudo xattr -rd com.apple.quarantine /Applications/gmark.app
 
 旧客户端的退出逻辑无法被新安装包反向修复。第一次升级到包含 updater v2 的版本时，如果界面停在“等待应用关闭”，请正常关闭 GMark，或直接运行已经下载的系统安装器；不要强制结束进程。完成这一次过渡后，后续版本会在所有窗口批准退出后再交接 helper，并自动完成安装、启动确认和必要回滚。
 
+### 同版本更新修复发布
+
+真实更新验收失败时，维护者继续使用相同的 `release_tag` 和 Cargo 版本，并在 `Build and Release Installers` 手动工作流中设置 `rerun_failed_release=true`。该显式修复模式跳过已经通过的 full quality 与 focused updater 门禁，但仍执行版本身份校验、三平台构建与安装 smoke、清单重新签名和资产发布；普通发布默认不能移动已有标签。
+
 ## 快速开始
 
 1. 启动 gmark，直接新建文档，或从“文件”菜单打开文件/文件夹。

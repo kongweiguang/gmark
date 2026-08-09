@@ -32,10 +32,67 @@ def fail(path: Path, message: str) -> None:
     raise SystemExit(f"workflow validation failed for {path.relative_to(ROOT)}: {message}")
 
 
-def validate_release_contract(path: Path, jobs: dict[str, object]) -> None:
+def validate_release_contract(
+    path: Path, document: dict[str, object], jobs: dict[str, object]
+) -> None:
+    triggers = document.get("on")
+    dispatch = triggers.get("workflow_dispatch") if isinstance(triggers, dict) else None
+    inputs = dispatch.get("inputs") if isinstance(dispatch, dict) else None
+    rerun = inputs.get("rerun_failed_release") if isinstance(inputs, dict) else None
+    if not isinstance(rerun, dict) or rerun.get("default") is not False:
+        fail(path, "same-version rerun must remain an explicit false-by-default input")
+
+    quality = jobs.get("quality")
+    focused = jobs.get("updater-quality")
+    quality_condition = quality.get("if") if isinstance(quality, dict) else None
+    focused_condition = focused.get("if") if isinstance(focused, dict) else None
+    if (
+        not isinstance(quality_condition, str)
+        or "!inputs.rerun_failed_release" not in quality_condition
+    ):
+        fail(path, "same-version rerun must skip the full quality gate")
+    if (
+        not isinstance(focused_condition, str)
+        or "inputs.test_release" not in focused_condition
+        or "!inputs.rerun_failed_release" not in focused_condition
+    ):
+        fail(path, "same-version rerun must skip the focused updater gate")
+
     release = jobs.get("release")
     if not isinstance(release, dict):
         fail(path, "release workflow requires a release job")
+    steps = release.get("steps")
+    tag_step = None
+    if isinstance(steps, list):
+        tag_step = next(
+            (
+                step
+                for step in steps
+                if isinstance(step, dict) and step.get("name") == "Create release tag"
+            ),
+            None,
+        )
+    tag_script = tag_step.get("run") if isinstance(tag_step, dict) else None
+    if (
+        not isinstance(tag_script, str)
+        or "RERUN_FAILED_RELEASE" not in tag_script
+        or "git tag -f -a" not in tag_script
+        or "existing GitHub release is not a prerelease" in tag_script
+    ):
+        fail(path, "same-version rerun must explicitly permit moving an existing release tag")
+
+    for platform in ("windows", "linux", "macos"):
+        job = jobs.get(platform)
+        condition = job.get("if") if isinstance(job, dict) else None
+        required = (
+            "always()",
+            "needs.validate.result == 'success'",
+            "needs.quality.result == 'skipped'",
+            "needs.updater-quality.result == 'skipped'",
+        )
+        if not isinstance(condition, str) or any(part not in condition for part in required):
+            fail(path, f"{platform} artifacts must run after skipped repeat-release gates")
+
     needs = release.get("needs")
     if not isinstance(needs, list) or set(needs) != {
         "validate",
@@ -80,7 +137,7 @@ def main() -> None:
             if "uses" not in job and not isinstance(job.get("steps"), list):
                 fail(path, f"job {job_name} requires steps or reusable-workflow uses")
         if path.name == "build-release.yml":
-            validate_release_contract(path, jobs)
+            validate_release_contract(path, document, jobs)
     print(f"parsed and validated {len(workflows)} GitHub Actions workflows")
 
 
