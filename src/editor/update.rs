@@ -246,9 +246,14 @@ impl Editor {
                     Self::on_update_dismiss,
                 ));
             }
+            UpdateState::AwaitingQuit { release, .. } => {
+                title = format!("{} v{}", labels.preparing_restart, release.version);
+                detail = labels.waiting_exit.to_owned();
+                progress = Some(1.0);
+            }
             UpdateState::Installing { release } => {
                 title = format!("{} v{}", labels.installing, release.version);
-                detail = labels.waiting_exit.to_owned();
+                detail = labels.installing_detail.to_owned();
                 progress = Some(1.0);
             }
             UpdateState::Succeeded { version, message } => {
@@ -409,6 +414,7 @@ fn update_button_slots(state: &UpdateState) -> (bool, bool) {
         UpdateState::Idle
         | UpdateState::Checking { .. }
         | UpdateState::Verifying { .. }
+        | UpdateState::AwaitingQuit { .. }
         | UpdateState::Installing { .. } => (false, false),
     }
 }
@@ -423,8 +429,10 @@ struct UpdateLabels {
     verifying_detail: &'static str,
     ready: &'static str,
     ready_detail: &'static str,
+    preparing_restart: &'static str,
     installing: &'static str,
     waiting_exit: &'static str,
+    installing_detail: &'static str,
     failed: &'static str,
     updated: &'static str,
     download: &'static str,
@@ -457,8 +465,10 @@ impl UpdateLabels {
                 verifying_detail: "正在校验更新包完整性与签名…",
                 ready: "更新已准备好",
                 ready_detail: "保存工作后即可重启并完成安装。",
-                installing: "准备安装",
+                preparing_restart: "准备重启",
+                installing: "正在安装",
                 waiting_exit: "正在等待所有窗口安全退出…",
+                installing_detail: "安装事务已交给独立升级进程。",
                 failed: "更新失败",
                 updated: "更新完成",
                 download: "下载更新",
@@ -484,8 +494,10 @@ impl UpdateLabels {
                 verifying_detail: "Checking update integrity and signature…",
                 ready: "Update ready",
                 ready_detail: "Save your work, then restart to finish installing.",
-                installing: "Preparing to install",
+                preparing_restart: "Preparing to restart",
+                installing: "Installing",
                 waiting_exit: "Waiting for all windows to close safely…",
+                installing_detail: "The update transaction has been handed to the update process.",
                 failed: "Update failed",
                 updated: "Update complete",
                 download: "Download Update",

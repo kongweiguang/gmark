@@ -13,7 +13,6 @@ use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use gmark_update_core::{
     ApplyPlanV1, CancellationV1, HelperSignalV1, clear_helper_signal, parse_apply_result,
-    write_apply_plan,
 };
 use gpui::{App, AppContext as _, AsyncApp, Context, Entity, Global, Task};
 
@@ -23,6 +22,19 @@ use crate::net::update_v2::{
 
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(10);
 const AUTO_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+pub(crate) fn update_cache_root() -> PathBuf {
+    #[cfg(feature = "updater-e2e")]
+    if let Some(path) = std::env::var_os("GMARK_UPDATER_E2E_UPDATE_ROOT").map(PathBuf::from) {
+        if path.is_absolute() && path.parent().is_some_and(|parent| parent != path) {
+            return path;
+        }
+        eprintln!("ignoring invalid updater E2E update root");
+    }
+    crate::config::GmarkConfigDirs::from_system()
+        .map(|dirs| dirs.updates_dir())
+        .unwrap_or_else(|_| std::env::temp_dir().join("gmark-updates"))
+}
 
 mod coordinator;
 mod install;

@@ -728,7 +728,8 @@ fn update_accessibility_revision(cx: &App) -> u64 {
             downloaded, total, ..
         }) if total > 0 => downloaded.saturating_mul(100) / total + 1,
         Some(crate::updater::UpdateState::Verifying { .. }) => 102,
-        Some(crate::updater::UpdateState::Installing { .. }) => 103,
+        Some(crate::updater::UpdateState::AwaitingQuit { .. }) => 103,
+        Some(crate::updater::UpdateState::Installing { .. }) => 104,
         _ => 0,
     }
 }

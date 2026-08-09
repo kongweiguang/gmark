@@ -20,11 +20,20 @@ use crate::{
 };
 
 mod artifact;
+mod v2;
 
 pub use artifact::{StagedApplyArtifact, stage_and_verify_apply_plan_artifact};
+pub use v2::*;
 
 pub const MAX_APPLY_PLAN_BYTES: u64 = 64 * 1024;
-const MAX_APPLY_RESULT_BYTES: u64 = 64 * 1024;
+/// Maximum size of either the legacy result or a v2 result file.
+pub const MAX_APPLY_RESULT_BYTES: u64 = 64 * 1024;
+/// Maximum size of an atomic v2 progress snapshot.
+pub const MAX_APPLY_PROGRESS_BYTES: u64 = 64 * 1024;
+/// Explicit v2 alias kept for callers that want the schema in the name.
+pub const MAX_APPLY_RESULT_V2_BYTES: u64 = MAX_APPLY_RESULT_BYTES;
+/// Human-readable diagnostics are deliberately bounded independently of JSON size.
+pub const MAX_APPLY_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_STARTUP_ACKNOWLEDGEMENT_BYTES: usize = 1024;
 
 /// JSON plan handed to `gmark-update-helper --apply-plan`; fields are wire-compatible.

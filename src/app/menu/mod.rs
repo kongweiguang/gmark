@@ -141,6 +141,7 @@ mod dispatch;
 mod file_prompts;
 mod initialization;
 mod menu_build;
+mod quit;
 mod recent;
 mod windows;
 
@@ -163,10 +164,14 @@ use recent::record_recent_file_and_refresh;
 pub(crate) use cli_tool::{install_cli_tool, uninstall_cli_tool};
 pub(crate) use command_support::record_recent_file_from_editor;
 pub(crate) use dispatch::{
-    dispatch_menu_action, dispatch_menu_action_for_editor, request_quit_application,
+    abort_pending_quit, continue_pending_quit, dispatch_menu_action,
+    dispatch_menu_action_for_editor, request_quit_application, request_update_quit_application,
 };
 pub(crate) use initialization::init;
 pub(crate) use menu_build::install_menus;
+// 原因：测试与过渡调用方仍从 app_menu 根访问退出类型；当全部迁移到 quit 子模块后移除。
+#[allow(unused_imports)]
+pub(crate) use quit::{QuitCoordinator, QuitIntent, QuitPhase, QuitRequestOutcome};
 pub(crate) use windows::*;
 
 #[cfg(test)]

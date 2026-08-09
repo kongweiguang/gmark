@@ -32,6 +32,16 @@ on:
         required: true
         default: false
         type: boolean
+      test_release:
+        description: "Publish or refresh this tag as a prerelease for updater validation"
+        required: true
+        default: false
+        type: boolean
+      rerun_failed_release:
+        description: "Allow an existing prerelease tag to move to this commit after a failed test release"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -55,6 +65,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_TITLE: ${{ inputs.release_title }}
           RELEASE_CHANNEL: ${{ inputs.channel }}
+          TEST_RELEASE: ${{ inputs.test_release }}
+          RERUN_FAILED_RELEASE: ${{ inputs.rerun_failed_release }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
@@ -67,11 +79,15 @@ jobs:
           if [[ "$RELEASE_CHANNEL" == beta && "$package_version" != *-* ]]; then
             echo "beta channel requires a prerelease"; exit 1
           fi
+          if [[ "$RERUN_FAILED_RELEASE" == true && "$TEST_RELEASE" != true ]]; then
+            echo "rerun_failed_release is only valid for an explicit test_release"; exit 1
+          fi
           echo "version=$package_version" >> "$GITHUB_OUTPUT"
 
   quality:
     name: Windows release quality gate
     needs: validate
+    if: ${{ !inputs.test_release && !inputs.rerun_failed_release }}
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
@@ -94,9 +110,42 @@ jobs:
           python scripts/validate-workflows.py
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
 
+  updater-quality:
+    name: Focused updater test-release gate
+    needs: validate
+    if: ${{ inputs.test_release || inputs.rerun_failed_release }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo test -p gmark-update-core --tests --all-features --locked -j 1
+      - run: cargo test --bin gmark-update-helper --all-features --locked -j 1
+      - run: cargo test --bin gmark-update-agent --all-features --locked -j 1
+      - run: cargo test --lib -p gmark --locked quit_application -- --nocapture
+      - run: cargo test --lib -p gmark --locked acknowledgement -- --nocapture
+      - run: cargo test -p xtask --locked -j 1
+      - run: cargo clippy -p gmark-update-core --all-targets --all-features --locked -- -D warnings
+      - run: cargo run -p xtask -- quality
+      - name: Validate workflows
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+          python scripts/validate-workflows.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+
   windows:
     name: Windows x64 Setup EXE
-    needs: [validate, quality]
+    needs: [validate, quality, updater-quality]
+    if: >-
+      ${{
+        always() &&
+        needs.validate.result == 'success' &&
+        (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+        (needs.updater-quality.result == 'success' || needs.updater-quality.result == 'skipped')
+      }}
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
@@ -119,6 +168,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/payload | Out-Null
           Copy-Item target/release/gmark.exe dist/payload/gmark.exe
           Copy-Item target/release/gmark-update-helper.exe dist/payload/gmark-update-helper.exe
+          Copy-Item target/release/gmark-update-agent.exe dist/payload/gmark-update-agent.exe
           Copy-Item assets/icon/gmark.ico dist/payload/gmark.ico
           Copy-Item README.md,LICENSE dist/payload/
       - name: Install pinned Inno Setup
@@ -150,7 +200,14 @@ jobs:
 
   linux:
     name: Linux x64 AppImage and DEB
-    needs: [validate, quality]
+    needs: [validate, quality, updater-quality]
+    if: >-
+      ${{
+        always() &&
+        needs.validate.result == 'success' &&
+        (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+        (needs.updater-quality.result == 'success' || needs.updater-quality.result == 'skipped')
+      }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
@@ -186,7 +243,14 @@ jobs:
 
   macos:
     name: macOS ${{ matrix.arch }} DMG
-    needs: [validate, quality]
+    needs: [validate, quality, updater-quality]
+    if: >-
+      ${{
+        always() &&
+        needs.validate.result == 'success' &&
+        (needs.quality.result == 'success' || needs.quality.result == 'skipped') &&
+        (needs.updater-quality.result == 'success' || needs.updater-quality.result == 'skipped')
+      }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -258,19 +322,54 @@ jobs:
       - name: Create release tag
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_TITLE: ${{ inputs.release_title }}
+          RERUN_FAILED_RELEASE: ${{ inputs.rerun_failed_release }}
         run: |
           set -euo pipefail
           git fetch --tags --force origin
           current="$(git rev-parse HEAD)"
           if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$current"
+            tagged="$(git rev-list -n 1 "$RELEASE_TAG")"
+            if [[ "$tagged" != "$current" ]]; then
+              if [[ "$RERUN_FAILED_RELEASE" != true ]]; then
+                echo "tag $RELEASE_TAG already points to $tagged; explicit failed-release rerun is required"
+                exit 1
+              fi
+              prerelease="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .prerelease 2>/dev/null || true)"
+              if [[ "$prerelease" != true ]]; then
+                echo "refusing to move $RELEASE_TAG because its existing GitHub release is not a prerelease"
+                exit 1
+              fi
+              git config user.name github-actions[bot]
+              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              git tag -f -a "$RELEASE_TAG" -m "${RELEASE_TITLE:-gmark $RELEASE_TAG}" "$current"
+              git push --force origin "refs/tags/$RELEASE_TAG"
+            fi
           else
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git tag -a "$RELEASE_TAG" -m "${RELEASE_TITLE:-gmark $RELEASE_TAG}" "$current"
             git push origin "$RELEASE_TAG"
+          fi
+      - name: Ensure test prerelease exists before mutable release steps
+        if: ${{ inputs.test_release }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+        run: |
+          set -euo pipefail
+          title="${RELEASE_TITLE:-gmark $RELEASE_TAG test release}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            prerelease="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .prerelease)"
+            test "$prerelease" = true
+            gh release edit "$RELEASE_TAG" --title "$title" --prerelease=true --latest=false
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false \
+              --title "$title" --notes "Updater validation prerelease; assets are still being prepared."
           fi
       - name: Create and verify signed manifests
         shell: bash
@@ -312,6 +411,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_TITLE: ${{ inputs.release_title }}
           USER_NOTES: ${{ inputs.release_notes }}
+          TEST_RELEASE: ${{ inputs.test_release }}
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/release-notes.md"
@@ -325,15 +425,23 @@ jobs:
 
           gmark verifies signed update manifests and installer hashes before starting an update.
           Windows installers are currently unsigned and may trigger SmartScreen.
+          Clients older than the updater-v2 repair cannot be fixed retroactively: after choosing
+          update, close gmark normally when prompted, or run the downloaded system installer once.
+          Automatic restart/install is fully supported from the repaired version onward.
           gmark is open source under GPL-3.0-or-later.
           EOF
           if [[ -n "$USER_NOTES" ]]; then printf '\n%s\n' "$USER_NOTES" >> "$notes"; fi
           title="${RELEASE_TITLE:-gmark $RELEASE_TAG}"
+          prerelease=false
+          if [[ "$TEST_RELEASE" == true || "$RELEASE_TAG" == *-* ]]; then prerelease=true; fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/* --clobber
-            gh release edit "$RELEASE_TAG" --title "$title" --notes-file "$notes"
+            latest=true
+            if [[ "$prerelease" == true ]]; then latest=false; fi
+            gh release edit "$RELEASE_TAG" --title "$title" --notes-file "$notes" \
+              --prerelease="$prerelease" --latest="$latest"
           else
             args=("$RELEASE_TAG" dist/* --title "$title" --notes-file "$notes" --verify-tag)
-            if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
+            if [[ "$prerelease" == true ]]; then args+=(--prerelease --latest=false); else args+=(--latest); fi
             gh release create "${args[@]}"
           fi

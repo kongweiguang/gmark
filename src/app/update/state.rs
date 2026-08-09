@@ -35,6 +35,12 @@ pub(crate) enum UpdateState {
         release: UpdateRelease,
         artifact_path: PathBuf,
     },
+    /// All editor windows are being asked to approve the normal quit flow.
+    /// No apply plan or helper process exists while this state is active.
+    AwaitingQuit {
+        release: UpdateRelease,
+        artifact_path: PathBuf,
+    },
     Installing {
         release: UpdateRelease,
     },
@@ -67,6 +73,7 @@ impl UpdateState {
             | Self::Paused { release, .. }
             | Self::Verifying { release }
             | Self::Ready { release, .. }
+            | Self::AwaitingQuit { release, .. }
             | Self::Installing { release } => Some(release),
             Self::Failed { release, .. } => release.as_ref(),
             Self::Idle | Self::Checking { .. } | Self::UpToDate { .. } | Self::Succeeded { .. } => {
@@ -83,6 +90,7 @@ impl UpdateState {
                 Self::Checking { .. }
                     | Self::Downloading { .. }
                     | Self::Verifying { .. }
+                    | Self::AwaitingQuit { .. }
                     | Self::Installing { .. }
             ),
             UpdateCommand::Download => matches!(self, Self::Available(_)),
@@ -98,7 +106,10 @@ impl UpdateState {
             UpdateCommand::InstallAndRestart => matches!(self, Self::Ready { .. }),
             UpdateCommand::Dismiss => !matches!(
                 self,
-                Self::Downloading { .. } | Self::Verifying { .. } | Self::Installing { .. }
+                Self::Downloading { .. }
+                    | Self::Verifying { .. }
+                    | Self::AwaitingQuit { .. }
+                    | Self::Installing { .. }
             ),
         }
     }

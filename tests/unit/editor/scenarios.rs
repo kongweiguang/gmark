@@ -19,6 +19,7 @@ include!("scenarios/editor_tail_09.rs");
 include!("scenarios/editor_tail_08.rs");
 include!("scenarios/editor_tail_07.rs");
 include!("scenarios/editor_tail_06.rs");
+include!("scenarios/editor_quit_coordination.rs");
 include!("scenarios/editor_tail_05.rs");
 include!("scenarios/editor_tail_04.rs");
 include!("scenarios/editor_tail_03.rs");

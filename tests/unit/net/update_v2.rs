@@ -1,6 +1,18 @@
 // @author kongweiguang
 
 use super::*;
+
+#[cfg(feature = "updater-e2e")]
+#[test]
+fn updater_e2e_manifest_override_is_loopback_only() {
+    assert_eq!(
+        validate_updater_e2e_manifest_url("http://127.0.0.1:48123/update-manifest-v2.json")
+            .unwrap(),
+        "http://127.0.0.1:48123/update-manifest-v2.json"
+    );
+    assert!(validate_updater_e2e_manifest_url("https://example.com/update.json").is_err());
+    assert!(validate_updater_e2e_manifest_url("http://user@localhost/update.json").is_err());
+}
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::{Value, json};

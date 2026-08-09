@@ -81,6 +81,7 @@ impl Editor {
         self.close_menu_bar(cx);
         self.hide_unsaved_changes_dialog(cx);
         if had_pending_close {
+            crate::app_menu::abort_pending_quit(cx);
             crate::updater::UpdateCoordinator::cancel_pending_install(cx);
             self.restore_focus_after_close_dialog(cx);
         } else {
@@ -118,6 +119,13 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> bool {
         if self.show_external_conflict_dialog {
+            if crate::app_menu::QuitCoordinator::is_pending_apply_update(cx) {
+                // An existing external-file conflict has no automatic safe
+                // resolution. Cancel only the update intent and keep the
+                // verified artifact ready for a later explicit retry.
+                crate::app_menu::abort_pending_quit(cx);
+                crate::updater::UpdateCoordinator::cancel_pending_install(cx);
+            }
             return false;
         }
         if !self.activate_dirty_tab_for_window_close(cx) {
@@ -142,6 +150,7 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        crate::app_menu::abort_pending_quit(cx);
         crate::updater::UpdateCoordinator::cancel_pending_install(cx);
         self.pending_close_after_save = false;
         self.cancel_explicit_window_close();
@@ -165,7 +174,7 @@ impl Editor {
         if self.discard_all_document_changes_for_window_close(cx) {
             self.remove_workspace_session_for_explicit_close(cx);
             window.remove_window();
-            cx.defer(crate::updater::UpdateCoordinator::continue_pending_install_quit);
+            cx.defer(crate::app_menu::continue_pending_quit);
         } else {
             self.show_unsaved_changes_dialog = true;
             self.close_dialog_restore_focus = None;

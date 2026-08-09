@@ -63,7 +63,19 @@ pub fn stage_and_verify_apply_plan_artifact(
     platform: &Platform,
     staging_directory: impl AsRef<Path>,
 ) -> Result<StagedApplyArtifact> {
-    verify_apply_plan_manifest(plan, key, platform)?;
+    validate_apply_plan_files(plan, platform)?;
+    stage_and_verify_prevalidated_apply_plan_artifact(plan, key, platform, staging_directory)
+}
+
+/// V2 callers validate their UUID transaction layout before entering this
+/// byte-consumption boundary, so the legacy V1 layout must not be re-applied.
+pub(super) fn stage_and_verify_prevalidated_apply_plan_artifact(
+    plan: &ApplyPlanV1,
+    key: &VerifyingKey,
+    platform: &Platform,
+    staging_directory: impl AsRef<Path>,
+) -> Result<StagedApplyArtifact> {
+    verify_apply_plan_manifest_metadata(plan, key, platform)?;
     let mut source = open_regular_file_no_follow(&plan.artifact_path).map_err(|error| {
         UpdateCoreError::Io(format!("failed to open verified update artifact: {error}"))
     })?;
@@ -108,6 +120,14 @@ pub(super) fn verify_apply_plan_manifest(
     platform: &Platform,
 ) -> Result<VerifiedManifest> {
     validate_apply_plan_files(plan, platform)?;
+    verify_apply_plan_manifest_metadata(plan, key, platform)
+}
+
+pub(super) fn verify_apply_plan_manifest_metadata(
+    plan: &ApplyPlanV1,
+    key: &VerifyingKey,
+    platform: &Platform,
+) -> Result<VerifiedManifest> {
     let envelope = super::read_bounded(
         &plan.signed_envelope_path,
         crate::MAX_ENVELOPE_BYTES as u64,
@@ -153,6 +173,10 @@ pub(super) fn is_directory_non_reparse(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|metadata| is_directory_non_reparse_metadata(&metadata))
         .unwrap_or(false)
+}
+
+pub(super) fn is_reparse_metadata(metadata: &fs::Metadata) -> bool {
+    is_reparse_point(metadata)
 }
 
 pub(super) fn set_private_file(file: &File) -> Result<()> {

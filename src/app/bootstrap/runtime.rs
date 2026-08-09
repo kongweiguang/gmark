@@ -47,7 +47,7 @@ use super::assets::GmarkAssets;
 const UPDATE_ACK_CAPABILITY_ENV: &str = "GMARK_UPDATE_ACK_CAPABILITY";
 const ACKNOWLEDGEMENT_FILE_NAME: &str = "startup-ack";
 const ACK_CAPABILITY_FILE_PREFIX: &str = "startup-ack-capability-";
-const MAX_ACK_CAPABILITY_BYTES: usize = 64;
+const MAX_ACK_CAPABILITY_BYTES: usize = 128;
 
 /// 每个编辑器窗口监听自身外观；只有 system 模式会真正更新全局主题。
 fn install_system_theme_observer(cx: &mut App) {
@@ -271,7 +271,7 @@ pub(crate) fn run_app() {
         if let Some(path) = update_acknowledgement.as_ref() {
             if let Err(error) = write_update_acknowledgement(
                 path,
-                &update_cache_root(),
+                &crate::updater::update_cache_root(),
                 update_acknowledgement_capability.as_deref(),
                 env!("CARGO_PKG_VERSION"),
             ) {
@@ -415,12 +415,6 @@ pub(crate) fn run_app() {
     });
 }
 
-fn update_cache_root() -> PathBuf {
-    config::GmarkConfigDirs::from_system()
-        .map(|dirs| dirs.updates_dir())
-        .unwrap_or_else(|_| std::env::temp_dir().join("gmark-updates"))
-}
-
 /// Writes only the acknowledgement tied to the helper's active update transaction.
 /// New helpers supply a random capability, which must validate without fallback.
 /// Its absence is accepted only for the immediately preceding helper protocol,
@@ -441,9 +435,12 @@ fn write_update_acknowledgement(
         })
         .transpose()?;
     let transaction_dir = acknowledgement_transaction_dir(requested_path, updates_root)?;
-    validate_active_acknowledgement_plan(&transaction_dir, current_version)?;
+    let plan = validate_active_acknowledgement_plan(&transaction_dir, current_version)?;
+    if matches!(plan, ActiveAcknowledgementPlan::V2 { .. }) && capability.is_none() {
+        return Err("update protocol v2 requires an acknowledgement capability".to_owned());
+    }
     if let Some(capability) = capability.as_deref() {
-        validate_acknowledgement_capability(&transaction_dir, capability)?;
+        validate_acknowledgement_capability(&transaction_dir, capability, plan.transaction_id())?;
     }
     write_acknowledgement_exclusive(&transaction_dir, current_version)
 }
@@ -475,10 +472,31 @@ fn acknowledgement_transaction_dir(
     if !transaction_metadata.file_type().is_dir() || transaction_metadata.file_type().is_symlink() {
         return Err("update acknowledgement transaction is not a real directory".to_owned());
     }
-    if transaction_dir.parent() != Some(canonical_root.as_path()) {
-        return Err("update acknowledgement is outside the active update cache root".to_owned());
-    }
-    let version = transaction_dir
+    let version_dir = if transaction_dir.parent() == Some(canonical_root.as_path()) {
+        transaction_dir.as_path()
+    } else {
+        let transactions_dir = transaction_dir.parent().ok_or_else(|| {
+            "update acknowledgement transaction has no transactions root".to_owned()
+        })?;
+        let version_dir = transactions_dir
+            .parent()
+            .ok_or_else(|| "update acknowledgement transaction has no version root".to_owned())?;
+        if transactions_dir.file_name().and_then(|name| name.to_str())
+            != Some(gmark_update_core::ApplyPlanV2::TRANSACTIONS_DIR_NAME)
+            || version_dir.parent() != Some(canonical_root.as_path())
+            || transaction_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| Uuid::parse_str(name).ok())
+                .is_none()
+        {
+            return Err(
+                "update acknowledgement is outside the active update cache root".to_owned(),
+            );
+        }
+        version_dir
+    };
+    let version = version_dir
         .file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_prefix('v'))
@@ -488,16 +506,91 @@ fn acknowledgement_transaction_dir(
     Ok(transaction_dir)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActiveAcknowledgementPlan {
+    V1,
+    V2 { transaction_id: Uuid },
+}
+
+impl ActiveAcknowledgementPlan {
+    fn transaction_id(self) -> Option<Uuid> {
+        match self {
+            Self::V1 => None,
+            Self::V2 { transaction_id } => Some(transaction_id),
+        }
+    }
+}
+
 fn validate_active_acknowledgement_plan(
     transaction_dir: &Path,
     current_version: &str,
-) -> Result<(), String> {
+) -> Result<ActiveAcknowledgementPlan, String> {
     let plan_path = transaction_dir.join("apply-plan.json");
     let plan_metadata = fs::symlink_metadata(&plan_path)
         .map_err(|error| format!("failed to inspect update acknowledgement plan: {error}"))?;
     if !plan_metadata.file_type().is_file() || plan_metadata.file_type().is_symlink() {
         return Err("update acknowledgement plan is not a regular file".to_owned());
     }
+    if plan_metadata.len() > gmark_update_core::MAX_APPLY_PLAN_BYTES {
+        return Err("update acknowledgement plan exceeds its size limit".to_owned());
+    }
+    let plan_bytes = fs::read(&plan_path)
+        .map_err(|error| format!("failed to inspect update acknowledgement plan: {error}"))?;
+    let schema_version = serde_json::from_slice::<serde_json::Value>(&plan_bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64)
+        });
+    if schema_version == Some(u64::from(gmark_update_core::ApplyPlanV2::SCHEMA_VERSION)) {
+        let plan = gmark_update_core::read_apply_plan_v2(&plan_path)
+            .map_err(|error| format!("failed to read update acknowledgement plan v2: {error}"))?;
+        let declared_plan_path = plan
+            .transaction_dir()
+            .ok_or_else(|| {
+                "update acknowledgement plan v2 has no transaction directory".to_owned()
+            })?
+            .join(gmark_update_core::ApplyPlanV2::PLAN_FILE_NAME);
+        gmark_update_core::validate_apply_plan_v2_at_path(
+            &plan,
+            &declared_plan_path,
+            &gmark_update_core::Platform::current(),
+        )
+        .map_err(|error| format!("failed to validate update acknowledgement plan v2: {error}"))?;
+        // Windows canonicalization adds a verbatim path prefix. Validate the
+        // plan's lexical fixed layout first, then bind that exact file back to
+        // the canonical transaction opened above instead of comparing unlike
+        // path spellings.
+        let canonical_declared_plan = fs::canonicalize(&declared_plan_path).map_err(|error| {
+            format!("failed to resolve declared update acknowledgement plan v2: {error}")
+        })?;
+        if canonical_declared_plan != plan_path {
+            return Err(
+                "update acknowledgement plan v2 does not resolve to the active transaction"
+                    .to_owned(),
+            );
+        }
+        let plan_transaction = plan
+            .transaction_dir()
+            .and_then(|path| fs::canonicalize(path).ok());
+        if plan.target_version != current_version
+            || plan_transaction.as_deref() != Some(transaction_dir)
+            || !plan_path_in_transaction(
+                &plan.acknowledgement_path,
+                transaction_dir,
+                ACKNOWLEDGEMENT_FILE_NAME,
+            )
+        {
+            return Err(
+                "update acknowledgement is not bound to the active v2 transaction".to_owned(),
+            );
+        }
+        return Ok(ActiveAcknowledgementPlan::V2 {
+            transaction_id: plan.transaction_id,
+        });
+    }
+
     let plan = gmark_update_core::read_apply_plan(&plan_path)
         .map_err(|error| format!("failed to read update acknowledgement plan: {error}"))?;
     if plan.target_version != current_version
@@ -516,7 +609,7 @@ fn validate_active_acknowledgement_plan(
     {
         return Err("update acknowledgement is not bound to the active transaction".to_owned());
     }
-    Ok(())
+    Ok(ActiveAcknowledgementPlan::V1)
 }
 
 fn plan_path_in_transaction(path: &Path, transaction_dir: &Path, expected_name: &str) -> bool {
@@ -531,6 +624,7 @@ fn plan_path_in_transaction(path: &Path, transaction_dir: &Path, expected_name: 
 fn validate_acknowledgement_capability(
     transaction_dir: &Path,
     capability: &str,
+    transaction_id: Option<Uuid>,
 ) -> Result<(), String> {
     let path = transaction_dir.join(format!("{ACK_CAPABILITY_FILE_PREFIX}{capability}"));
     let metadata = fs::symlink_metadata(&path)
@@ -545,8 +639,17 @@ fn validate_acknowledgement_capability(
         .take(MAX_ACK_CAPABILITY_BYTES.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("failed to read update acknowledgement capability: {error}"))?;
-    if bytes != format!("{capability}\n").as_bytes() {
-        return Err("update acknowledgement capability did not match its transaction".to_owned());
+    let expected = transaction_id.map_or_else(
+        || format!("{capability}\n"),
+        |transaction_id| format!("{}:{capability}\n", transaction_id.hyphenated()),
+    );
+    if bytes != expected.as_bytes() {
+        let transaction = transaction_id
+            .map(|value| value.hyphenated().to_string())
+            .unwrap_or_else(|| "legacy".to_owned());
+        return Err(format!(
+            "update acknowledgement capability did not match transaction {transaction}"
+        ));
     }
     Ok(())
 }

@@ -4147,7 +4147,7 @@ dependencies = [
 
 [[package]]
 name = "gmark"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -11835,6 +11835,9 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 [[package]]
 name = "xtask"
 version = "0.0.0"
+dependencies = [
+ "semver",
+]
 
 [[package]]
 name = "y4m"

@@ -43,7 +43,7 @@ try {
     Invoke-HiddenProcess -FilePath $installerPath -ArgumentList $installArguments
 
     $executable = Join-Path $installDir 'gmark.exe'
-    foreach ($relative in @('gmark.exe', 'gmark-update-helper.exe', 'README.md', 'LICENSE')) {
+    foreach ($relative in @('gmark.exe', 'gmark-update-helper.exe', 'gmark-update-agent.exe', 'README.md', 'LICENSE')) {
         $path = Join-Path $installDir $relative
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Installed payload is missing: $relative"
@@ -65,8 +65,11 @@ try {
 
     # The same package must support the update/reinstall transaction.
     Invoke-HiddenProcess -FilePath $installerPath -ArgumentList $installArguments
-    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-        throw 'Reinstall removed the executable'
+    foreach ($relative in @('gmark.exe', 'gmark-update-helper.exe', 'gmark-update-agent.exe')) {
+        $path = Join-Path $installDir $relative
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Reinstall removed the payload: $relative"
+        }
     }
 
     $uninstaller = Join-Path $installDir 'unins000.exe'
@@ -76,8 +79,10 @@ try {
     Invoke-HiddenProcess -FilePath $uninstaller -ArgumentList @(
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
     )
-    if (Test-Path -LiteralPath $executable) {
-        throw 'Uninstall left the application executable behind'
+    foreach ($relative in @('gmark.exe', 'gmark-update-helper.exe', 'gmark-update-agent.exe')) {
+        if (Test-Path -LiteralPath (Join-Path $installDir $relative)) {
+            throw "Uninstall left the payload behind: $relative"
+        }
     }
 }
 finally {

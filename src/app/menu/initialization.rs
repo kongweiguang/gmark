@@ -6,7 +6,14 @@ use super::*;
 
 fn handle_window_closed(cx: &mut App) {
     if cx.windows().is_empty() {
-        cx.quit();
+        if QuitCoordinator::is_pending(cx) {
+            // A discard-and-close action can remove the last window before its
+            // deferred quit continuation runs.  Let the coordinator perform
+            // the update handoff (or normal quit) instead of exiting early.
+            cx.defer(crate::app_menu::continue_pending_quit);
+        } else {
+            cx.quit();
+        }
     }
 }
 
@@ -14,6 +21,7 @@ fn handle_window_closed(cx: &mut App) {
 pub(crate) fn init(cx: &mut App) {
     EditingCommandHistory::init(cx);
     cx.set_global(AppMenuState::default());
+    QuitCoordinator::ensure(cx);
     let subscription = cx.on_window_closed(handle_window_closed);
     cx.global_mut::<AppMenuState>().window_closed_subscription = Some(subscription);
 

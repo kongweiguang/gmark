@@ -80,7 +80,7 @@ pub(super) fn is_window_context_menu_action(action: &dyn Action) -> bool {
         || is_editor_scoped_menu_action(action)
 }
 
-fn current_window_candidates(cx: &mut App) -> Vec<AnyWindowHandle> {
+pub(super) fn current_window_candidates(cx: &mut App) -> Vec<AnyWindowHandle> {
     let mut candidates = Vec::new();
     let mut push_unique = |window: AnyWindowHandle| {
         if candidates
@@ -132,29 +132,90 @@ fn request_close_current_editor_window(cx: &mut App) {
     }
 }
 
-pub(crate) fn request_quit_application(cx: &mut App) {
-    let candidates = current_window_candidates(cx);
-    if candidates.is_empty() {
-        cx.quit();
-        return;
-    }
+pub(crate) fn request_quit_application(cx: &mut App) -> QuitRequestOutcome {
+    request_quit_with_intent(QuitIntent::UserQuit, cx)
+}
 
-    for window in candidates {
-        let Some(window) = window.downcast::<Editor>() else {
+/// Starts the update restart quit flow.  Installation is deliberately not
+/// prepared here: this function only records the intent and defers the window
+/// veto checks until the current editor callback has returned to GPUI.
+pub(crate) fn request_update_quit_application(cx: &mut App) -> QuitRequestOutcome {
+    request_quit_with_intent(QuitIntent::ApplyUpdate, cx)
+}
+
+fn request_quit_with_intent(intent: QuitIntent, cx: &mut App) -> QuitRequestOutcome {
+    let outcome = QuitCoordinator::begin(cx, intent);
+    if outcome == QuitRequestOutcome::Scheduled {
+        cx.defer(evaluate_quit_application);
+    }
+    outcome
+}
+
+/// Re-runs a previously vetoed request after an unsaved dialog saves/discards
+/// its document or after a window is removed.  The second scheduling boundary
+/// is intentional: the close button itself is an editor callback and may have
+/// just removed that callback's window.
+pub(crate) fn continue_pending_quit(cx: &mut App) {
+    if QuitCoordinator::schedule_continuation(cx) {
+        cx.defer(evaluate_quit_application);
+    }
+}
+
+/// Cancels the current intent when the user keeps editing, a save fails, or an
+/// external-file conflict remains unresolved.  Calling this for a normal close
+/// is harmless because the coordinator is idle.
+pub(crate) fn abort_pending_quit(cx: &mut App) {
+    let _ = QuitCoordinator::abort(cx);
+}
+
+fn evaluate_quit_application(cx: &mut App) {
+    let Some(intent) = QuitCoordinator::begin_evaluation(cx) else {
+        return;
+    };
+
+    let mut vetoed = false;
+    for candidate in current_window_candidates(cx) {
+        let Some(window) = candidate.downcast::<Editor>() else {
             continue;
         };
 
-        let should_close = window
-            .update(cx, |editor, window, cx| {
-                editor.on_window_should_close_for_quit(window, cx)
-            })
-            .unwrap_or(false);
-        if !should_close {
-            return;
+        // A window may disappear between collecting handles and evaluating it
+        // (for example, a discard-and-close action).  A stale handle is not a
+        // veto; treating it as one was the source of the old indefinite wait.
+        match window.update(cx, |editor, window, cx| {
+            editor.on_window_should_close_for_quit(window, cx)
+        }) {
+            Ok(true) => {}
+            Ok(false) => {
+                vetoed = true;
+                break;
+            }
+            Err(_) => {}
         }
     }
 
-    cx.quit();
+    if vetoed {
+        QuitCoordinator::veto(cx);
+        return;
+    }
+
+    match intent {
+        QuitIntent::UserQuit => {
+            QuitCoordinator::complete(cx);
+            cx.quit();
+        }
+        QuitIntent::ApplyUpdate => {
+            QuitCoordinator::mark_handoff(cx);
+            if crate::updater::UpdateCoordinator::handoff_install_after_quit_approval(cx) {
+                QuitCoordinator::complete(cx);
+                cx.quit();
+            } else {
+                // No helper/plan is left behind when the handoff cannot be
+                // prepared; the verified artifact remains ready for retry.
+                QuitCoordinator::abort(cx);
+            }
+        }
+    }
 }
 
 fn menu_block_kind(action: &dyn Action) -> Option<BlockKind> {

@@ -148,6 +148,18 @@ pub(crate) fn check_latest_version_v2(
         UpdateV2Error::Configuration(format!("failed to load installation id: {error}"))
     })?;
     let key = embedded_verifying_key()?;
+    #[cfg(feature = "updater-e2e")]
+    if let Some(url) = updater_e2e_manifest_url()? {
+        let envelope =
+            fetch_manifest(&url).map_err(|error| UpdateV2Error::Network(error.to_string()))?;
+        return compare_signed_manifest_v2(
+            current_version,
+            installation_id,
+            &envelope,
+            "updater-e2e",
+            &key,
+        );
+    }
     let github = fetch_manifest(GITHUB_UPDATE_V2_MANIFEST_URL);
     let (source, envelope) = match github {
         Ok(bytes) => ("GitHub", bytes),
@@ -159,6 +171,47 @@ pub(crate) fn check_latest_version_v2(
         Err(error) => return Err(UpdateV2Error::Network(error.to_string())),
     };
     compare_signed_manifest_v2(current_version, installation_id, &envelope, source, &key)
+}
+
+#[cfg(feature = "updater-e2e")]
+fn updater_e2e_manifest_url() -> Result<Option<String>, UpdateV2Error> {
+    let Some(value) = std::env::var_os("GMARK_UPDATER_E2E_MANIFEST_URL") else {
+        return Ok(None);
+    };
+    let value = value.into_string().map_err(|_| {
+        UpdateV2Error::Configuration("updater E2E manifest URL is not UTF-8".to_owned())
+    })?;
+    validate_updater_e2e_manifest_url(&value).map(Some)
+}
+
+#[cfg(feature = "updater-e2e")]
+fn validate_updater_e2e_manifest_url(value: &str) -> Result<String, UpdateV2Error> {
+    let url = reqwest::Url::parse(value).map_err(|error| {
+        UpdateV2Error::Configuration(format!("invalid updater E2E manifest URL: {error}"))
+    })?;
+    if !is_loopback_http_url(value) {
+        return Err(UpdateV2Error::Configuration(
+            "updater E2E manifest URL must be an unauthenticated loopback HTTP(S) URL without a fragment"
+                .to_owned(),
+        ));
+    }
+    Ok(url.to_string())
+}
+
+#[cfg(feature = "updater-e2e")]
+fn is_loopback_http_url(value: &str) -> bool {
+    reqwest::Url::parse(value).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && url.host_str().is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|address| address.is_loopback())
+            })
+    })
 }
 
 fn compare_signed_manifest_v2(
@@ -203,7 +256,18 @@ pub(crate) fn download_release(
     on_event: impl FnMut(DownloadEvent),
 ) -> Result<PathBuf, DownloadError> {
     let client = artifact_client()?;
-    download_release_with_client(release, updates_root, control, &client, false, on_event)
+    #[cfg(feature = "updater-e2e")]
+    let allow_insecure_test_url = is_loopback_http_url(&release.artifact_url);
+    #[cfg(not(feature = "updater-e2e"))]
+    let allow_insecure_test_url = false;
+    download_release_with_client(
+        release,
+        updates_root,
+        control,
+        &client,
+        allow_insecure_test_url,
+        on_event,
+    )
 }
 
 fn download_release_with_client(

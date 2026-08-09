@@ -107,6 +107,10 @@ pub enum SystemTrust {
 pub fn validate_official_release_url(value: &str, label: &str) -> Result<()> {
     let url = Url::parse(value)
         .map_err(|error| UpdateCoreError::Manifest(format!("invalid {label}: {error}")))?;
+    #[cfg(feature = "updater-e2e")]
+    if is_updater_e2e_loopback_url(&url) {
+        return Ok(());
+    }
     if url.scheme() != "https"
         || url.host_str() != Some("github.com")
         || !url.path().starts_with("/kongweiguang/gmark/releases/")
@@ -124,6 +128,10 @@ pub fn validate_official_release_url(value: &str, label: &str) -> Result<()> {
 pub fn validate_official_artifact_url(value: &str) -> Result<()> {
     let url = Url::parse(value)
         .map_err(|error| UpdateCoreError::Protocol(format!("invalid artifact URL: {error}")))?;
+    #[cfg(feature = "updater-e2e")]
+    if is_updater_e2e_loopback_url(&url) {
+        return Ok(());
+    }
     if url.scheme() != "https"
         || url.host_str() != Some("github.com")
         || !url
@@ -137,6 +145,20 @@ pub fn validate_official_artifact_url(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(feature = "updater-e2e")]
+fn is_updater_e2e_loopback_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.fragment().is_none()
+        && url.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        })
 }
 
 /// Validates an ASCII hexadecimal SHA-256 digest, preserving old case-insensitive input.

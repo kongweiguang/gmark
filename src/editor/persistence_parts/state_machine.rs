@@ -195,9 +195,7 @@ impl Editor {
                         window.set_window_edited(false);
                         if should_close_after_save {
                             window.remove_window();
-                            cx.defer(
-                                crate::updater::UpdateCoordinator::continue_pending_install_quit,
-                            );
+                            cx.defer(crate::app_menu::continue_pending_quit);
                         }
                     } else if conflict {
                         window.blur();
@@ -582,7 +580,7 @@ impl Editor {
                     }
                     if should_close_after_save && saved_current_revision {
                         window.remove_window();
-                        cx.defer(crate::updater::UpdateCoordinator::continue_pending_install_quit);
+                        cx.defer(crate::app_menu::continue_pending_quit);
                     }
                 },
             );

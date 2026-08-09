@@ -2,6 +2,7 @@
 
 //! Update check, download, and install orchestration service.
 
+use super::install;
 use super::*;
 
 pub(crate) struct UpdateService {
@@ -11,6 +12,11 @@ pub(crate) struct UpdateService {
     pub(super) download_control: Option<DownloadControl>,
     pub(super) progress_started_at: Option<(Instant, u64)>,
     pub(super) pending_install: Option<PendingInstall>,
+    pub(super) pending_install_v2: Option<InstallAttempt>,
+    pub(super) retry_install: Option<RetryPayload>,
+    pub(super) retry_redownload: bool,
+    pub(super) install_monitor: Option<Task<()>>,
+    pub(super) prepare_claimed: bool,
     pub(super) auto_check_enabled: bool,
     pub(super) last_progress_refresh: Instant,
 }
@@ -33,6 +39,11 @@ impl UpdateService {
             download_control: None,
             progress_started_at: None,
             pending_install: None,
+            pending_install_v2: None,
+            retry_install: None,
+            retry_redownload: false,
+            install_monitor: None,
+            prepare_claimed: false,
             auto_check_enabled,
             last_progress_refresh: Instant::now() - Duration::from_secs(1),
         }
@@ -135,6 +146,7 @@ impl UpdateService {
     }
 
     pub(super) fn start_download(&mut self, release: UpdateRelease, cx: &mut Context<Self>) {
+        self.retry_redownload = false;
         let control = DownloadControl::default();
         self.download_control = Some(control.clone());
         self.progress_started_at = Some((Instant::now(), 0));
@@ -214,6 +226,19 @@ impl UpdateService {
         if !self.state.accepts(UpdateCommand::Retry) {
             return;
         }
+        if let Some(payload) = self.retry_install.take() {
+            // RetryInstall is explicitly an apply retry: the signed envelope
+            // and verified artifact remain untouched, so no network download
+            // is started.  A fresh prepare allocates a new transaction UUID.
+            self.state = UpdateState::Ready {
+                release: payload.release,
+                artifact_path: payload.artifact_path,
+            };
+            self.refresh(cx);
+            return;
+        }
+        let redownload = self.retry_redownload;
+        self.retry_redownload = false;
         let release = match &self.state {
             UpdateState::Failed {
                 release: Some(release),
@@ -223,6 +248,17 @@ impl UpdateService {
             _ => return,
         };
         if let Some(release) = release {
+            if redownload {
+                if let Err(error) = discard_verified_source(&self.updates_root, &release.version) {
+                    self.state = UpdateState::Failed {
+                        release: Some(release),
+                        message: error,
+                        retryable: false,
+                    };
+                    self.refresh(cx);
+                    return;
+                }
+            }
             self.start_download(release, cx);
         } else {
             self.check(CheckOrigin::Manual, cx);
@@ -237,8 +273,14 @@ impl UpdateService {
         self.refresh(cx);
     }
 
-    pub(super) fn prepare_install(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.state.accepts(UpdateCommand::InstallAndRestart) {
+    /// Reserves the verified source payload while the quit coordinator asks
+    /// every editor window for approval.  No transaction directory, lock, or
+    /// helper exists until the handoff callback invokes `prepare_install`.
+    pub(super) fn begin_awaiting_quit(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.state.accepts(UpdateCommand::InstallAndRestart)
+            || self.prepare_claimed
+            || self.pending_install_v2.is_some()
+        {
             return false;
         }
         let UpdateState::Ready {
@@ -248,6 +290,32 @@ impl UpdateService {
         else {
             return false;
         };
+        self.state = UpdateState::AwaitingQuit {
+            release,
+            artifact_path,
+        };
+        self.refresh(cx);
+        true
+    }
+
+    pub(super) fn prepare_install(&mut self, cx: &mut Context<Self>) -> bool {
+        if !matches!(self.state, UpdateState::AwaitingQuit { .. })
+            || self.prepare_claimed
+            || self.pending_install_v2.is_some()
+        {
+            return false;
+        }
+        let payload = match self.state.clone() {
+            UpdateState::AwaitingQuit {
+                release,
+                artifact_path,
+            } => Some((release, artifact_path)),
+            _ => None,
+        };
+        let Some((release, artifact_path)) = payload else {
+            return false;
+        };
+        self.prepare_claimed = true;
         match self.write_apply_plan(&release, &artifact_path) {
             Ok(prepared) => {
                 let mut command = Command::new(&prepared.helper.path);
@@ -255,6 +323,11 @@ impl UpdateService {
                 command.env(
                     UPDATE_ACK_CAPABILITY_ENV,
                     &prepared.acknowledgement_capability,
+                );
+                command.env("GMARK_UPDATE_AGENT_PATH", &prepared.agent.path);
+                command.env(
+                    "GMARK_UPDATE_TRANSACTION_ID",
+                    prepared.plan_v2.transaction_id.hyphenated().to_string(),
                 );
                 #[cfg(target_os = "windows")]
                 {
@@ -267,11 +340,28 @@ impl UpdateService {
                 let helper_guard = match verify_staged_helper_for_launch(&prepared.helper) {
                     Ok(guard) => guard,
                     Err(message) => {
+                        self.abort_prepared_install(&prepared, false);
                         self.state = UpdateState::Failed {
                             release: Some(release),
                             message,
-                            retryable: false,
+                            retryable: true,
                         };
+                        self.prepare_claimed = false;
+                        self.refresh(cx);
+                        return false;
+                    }
+                };
+                let agent_guard = match verify_staged_helper_for_launch(&prepared.agent) {
+                    Ok(guard) => guard,
+                    Err(message) => {
+                        drop(helper_guard);
+                        self.abort_prepared_install(&prepared, false);
+                        self.state = UpdateState::Failed {
+                            release: Some(release),
+                            message,
+                            retryable: true,
+                        };
+                        self.prepare_claimed = false;
                         self.refresh(cx);
                         return false;
                     }
@@ -279,28 +369,59 @@ impl UpdateService {
                 match command.spawn() {
                     Ok(_) => {
                         drop(helper_guard);
+                        drop(agent_guard);
+                        let attempt = InstallAttempt {
+                            release: release.clone(),
+                            artifact_path: artifact_path.clone(),
+                            plan_path: prepared.plan_path.clone(),
+                            plan: prepared.plan_v2.clone(),
+                            helper: prepared.helper,
+                            agent: prepared.agent,
+                            acknowledgement_capability: prepared.acknowledgement_capability,
+                            started_at: Instant::now(),
+                        };
                         self.pending_install = Some(PendingInstall {
                             release: release.clone(),
-                            artifact_path,
+                            artifact_path: artifact_path.clone(),
                             plan: prepared.plan,
                         });
+                        self.pending_install_v2 = Some(attempt.clone());
                         self.state = UpdateState::Installing { release };
+                        self.start_install_monitor(attempt, cx);
                         self.refresh(cx);
                         true
                     }
                     Err(error) => {
                         drop(helper_guard);
+                        drop(agent_guard);
+                        let attempt = InstallAttempt {
+                            release: release.clone(),
+                            artifact_path: artifact_path.clone(),
+                            plan_path: prepared.plan_path.clone(),
+                            plan: prepared.plan_v2.clone(),
+                            helper: prepared.helper,
+                            agent: prepared.agent,
+                            acknowledgement_capability: prepared.acknowledgement_capability,
+                            started_at: Instant::now(),
+                        };
+                        self.abort_attempt(&attempt, false);
+                        self.retry_install = Some(RetryPayload {
+                            release: release.clone(),
+                            artifact_path: artifact_path.clone(),
+                        });
                         self.state = UpdateState::Failed {
                             release: Some(release),
                             message: format!("failed to start update helper: {error}"),
                             retryable: true,
                         };
+                        self.prepare_claimed = false;
                         self.refresh(cx);
                         false
                     }
                 }
             }
             Err(message) => {
+                self.prepare_claimed = false;
                 self.state = UpdateState::Failed {
                     release: Some(release),
                     message,
@@ -320,6 +441,31 @@ impl UpdateService {
     }
 
     pub(super) fn restore_ready_after_cancel(&mut self) -> Result<bool, String> {
+        if let UpdateState::AwaitingQuit {
+            release,
+            artifact_path,
+        } = self.state.clone()
+        {
+            self.prepare_claimed = false;
+            self.state = UpdateState::Ready {
+                release,
+                artifact_path,
+            };
+            return Ok(true);
+        }
+        if let Some(attempt) = self.pending_install_v2.clone() {
+            write_cancellation_marker(&attempt.plan.cancellation_path)?;
+            self.pending_install_v2 = None;
+            self.pending_install = None;
+            self.prepare_claimed = false;
+            self.abort_attempt(&attempt, false);
+            self.retry_install = None;
+            self.state = UpdateState::Ready {
+                release: attempt.release,
+                artifact_path: attempt.artifact_path,
+            };
+            return Ok(true);
+        }
         let Some(pending) = self.pending_install.as_ref() else {
             return Ok(false);
         };
@@ -334,10 +480,10 @@ impl UpdateService {
             };
             return Err(message);
         }
-        let pending = self
-            .pending_install
-            .take()
-            .expect("pending install was checked above");
+        let Some(pending) = self.pending_install.take() else {
+            return Ok(false);
+        };
+        self.prepare_claimed = false;
         self.state = UpdateState::Ready {
             release: pending.release,
             artifact_path: pending.artifact_path,
@@ -350,64 +496,155 @@ impl UpdateService {
         release: &UpdateRelease,
         artifact_path: &std::path::Path,
     ) -> Result<PreparedInstall, String> {
-        let transaction_dir = artifact_path
-            .parent()
-            .ok_or_else(|| "verified update has no transaction directory".to_owned())?;
-        if transaction_dir.parent() != Some(self.updates_root.as_path()) {
-            return Err("verified update is outside the configured transaction root".to_owned());
-        }
-        let installed_helper = installed_helper_path()?;
+        install::prepare_apply_plan(&self.updates_root, release, artifact_path)
+    }
 
-        let target_path = current_update_target()?;
-        let relaunch_path = current_relaunch_path(&target_path);
-        let backup_path = sibling_backup_path(&target_path);
-        let envelope_path = transaction_dir.join("manifest.envelope.json");
-        if !envelope_path.is_file() {
-            return Err("verified update manifest is missing from the cache".to_owned());
+    fn abort_prepared_install(&mut self, prepared: &PreparedInstall, _preserve_artifact: bool) {
+        if let Some(transaction_dir) = prepared.plan_v2.transaction_dir() {
+            cleanup_failed_prepare(
+                prepared.plan_v2.transaction_id,
+                transaction_dir,
+                Some(&prepared.acknowledgement_capability),
+            );
+        } else {
+            let _ = release_lifecycle_lock(prepared.plan_v2.transaction_id);
         }
-        let plan_path = transaction_dir.join("apply-plan.json");
-        let result_path = self.updates_root.join("last-result.json");
-        let helper_log_path = self.updates_root.join("last-helper.log");
-        let displayed_result_path = self.updates_root.join("last-result-displayed");
-        for stale in [&result_path, &displayed_result_path] {
-            let _ = std::fs::remove_file(stale);
+    }
+
+    fn abort_attempt(&mut self, attempt: &InstallAttempt, keep_terminal_transaction: bool) {
+        let transaction_dir = attempt.plan.transaction_dir().map(PathBuf::from);
+        let _ = release_lifecycle_lock(attempt.plan.transaction_id);
+        if let Some(transaction_dir) = transaction_dir {
+            release_transaction_claim(&transaction_dir);
+            if keep_terminal_transaction {
+                let _ = std::fs::remove_file(&attempt.helper.path);
+                let _ = std::fs::remove_file(&attempt.agent.path);
+                let _ = std::fs::remove_file(&attempt.plan_path);
+                let _ = std::fs::remove_file(acknowledgement_capability_path(
+                    &transaction_dir,
+                    &attempt.acknowledgement_capability,
+                ));
+            } else {
+                let _ = std::fs::remove_dir_all(transaction_dir);
+            }
+        } else if !keep_terminal_transaction {
+            let _ = std::fs::remove_file(&attempt.plan_path);
         }
-        let plan = ApplyPlanV1 {
-            schema_version: ApplyPlanV1::SCHEMA_VERSION,
-            parent_pid: std::process::id(),
-            current_version: release.current_version.clone(),
-            target_version: release.version.clone(),
-            artifact_path: artifact_path.to_path_buf(),
-            artifact_url: release.artifact_url.clone(),
-            artifact_size: release.artifact_size,
-            artifact_sha256: release.artifact_sha256.clone(),
-            artifact_format: release.artifact_format.as_protocol_name().to_owned(),
-            signed_envelope_path: envelope_path,
-            target_path,
-            backup_path,
-            relaunch_path,
-            acknowledgement_path: transaction_dir.join("startup-ack"),
-            cancellation_path: transaction_dir.join("cancel-install"),
-            result_path,
-            helper_log_path,
+    }
+
+    fn start_install_monitor(&mut self, attempt: InstallAttempt, cx: &mut Context<Self>) {
+        let plan = attempt.plan.clone();
+        self.install_monitor = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(200))
+                    .await;
+                let result = read_v2_result(&plan);
+                let progress = read_v2_progress(&plan);
+                let waiting_for_exit = progress.as_ref().is_some_and(|progress| {
+                    progress.phase == gmark_update_core::ApplyPhaseV1::WaitingForExit
+                });
+                let timed_out =
+                    waiting_for_exit && helper_timeout_expired(attempt.started_at, Instant::now());
+                let terminal = result.is_some();
+                let should_stop = terminal || timed_out;
+                let Ok(()) = this.update(cx, |service, cx| {
+                    if let Some(progress) = progress {
+                        service.apply_install_progress(progress, cx);
+                    }
+                    if let Some(result) = result {
+                        service.finish_install_attempt(result, cx);
+                    } else if timed_out {
+                        service.timeout_install_attempt(cx);
+                    }
+                    if should_stop {
+                        service.install_monitor = None;
+                    }
+                }) else {
+                    return;
+                };
+                if should_stop {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn apply_install_progress(
+        &mut self,
+        _progress: gmark_update_core::ApplyProgressV1,
+        cx: &mut Context<Self>,
+    ) {
+        // Progress is deliberately read independently from the download
+        // worker.  The current state model has no phase field; notifying here
+        // keeps the feedback surface live without conflating worker lifetimes.
+        self.refresh(cx);
+    }
+
+    fn finish_install_attempt(
+        &mut self,
+        result: gmark_update_core::ApplyResultV2,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(attempt) = self.pending_install_v2.take() else {
+            return;
         };
-        for signal in [
-            HelperSignalV1::Cancellation,
-            HelperSignalV1::Acknowledgement,
-        ] {
-            clear_helper_signal(&plan, signal)
-                .map_err(|error| format!("failed to clear stale update helper signal: {error}"))?;
+        self.pending_install = None;
+        self.prepare_claimed = false;
+        self.abort_attempt(&attempt, true);
+        if result.status == "succeeded" {
+            self.retry_install = None;
+            self.state = UpdateState::Succeeded {
+                version: result.to_version,
+                message: result.message,
+            };
+        } else {
+            let release = attempt.release.clone();
+            let artifact_path = attempt.artifact_path.clone();
+            self.retry_install = None;
+            self.retry_redownload = false;
+            let (retryable, state_release) = match result.recovery_action {
+                Some(gmark_update_core::RecoveryAction::ReattemptInstall) => {
+                    self.retry_install = Some(RetryPayload {
+                        release: release.clone(),
+                        artifact_path,
+                    });
+                    (true, Some(release))
+                }
+                Some(gmark_update_core::RecoveryAction::Redownload) => {
+                    self.retry_redownload = true;
+                    (true, Some(release))
+                }
+                Some(gmark_update_core::RecoveryAction::Recheck) => (true, None),
+                Some(gmark_update_core::RecoveryAction::Manual) | None => (false, None),
+            };
+            self.state = UpdateState::Failed {
+                release: state_release,
+                message: format_v2_failure(&result),
+                retryable,
+            };
         }
-        let acknowledgement_capability = create_acknowledgement_capability(transaction_dir)?;
-        write_apply_plan(&plan_path, &plan)
-            .map_err(|error| format!("failed to write update apply plan: {error}"))?;
-        let helper = stage_update_helper(transaction_dir, &installed_helper)?;
-        Ok(PreparedInstall {
-            plan_path,
-            helper,
-            plan,
-            acknowledgement_capability,
-        })
+        self.refresh(cx);
+    }
+
+    fn timeout_install_attempt(&mut self, cx: &mut Context<Self>) {
+        let Some(attempt) = self.pending_install_v2.take() else {
+            return;
+        };
+        let _ = write_cancellation_marker(&attempt.plan.cancellation_path);
+        self.pending_install = None;
+        self.prepare_claimed = false;
+        self.abort_attempt(&attempt, false);
+        self.retry_install = Some(RetryPayload {
+            release: attempt.release.clone(),
+            artifact_path: attempt.artifact_path.clone(),
+        });
+        self.state = UpdateState::Failed {
+            release: Some(attempt.release),
+            message: "update helper did not reach a terminal result within 30 seconds".to_owned(),
+            retryable: true,
+        };
+        self.refresh(cx);
     }
 
     pub(super) fn apply_worker_event(&mut self, event: WorkerEvent, cx: &mut Context<Self>) {

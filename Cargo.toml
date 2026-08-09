@@ -2,7 +2,7 @@
 
 [package]
 name = "gmark"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 rust-version = "1.95"
 authors = ["kongweiguang"]
@@ -75,6 +75,7 @@ collapsible_if = "allow"
 collapsible_else_if = "allow"
 
 [features]
+updater-e2e = ["gmark-update-core/updater-e2e"]
 default = [
     "code-highlight-core",
     "code-highlight-official",
@@ -328,6 +329,11 @@ bench = false
 [[bin]]
 name = "gmark-update-helper"
 path = "src/bin/gmark-update-helper.rs"
+bench = false
+
+[[bin]]
+name = "gmark-update-agent"
+path = "src/bin/gmark-update-agent.rs"
 bench = false
 
 [build-dependencies]
