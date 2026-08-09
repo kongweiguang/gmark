@@ -263,7 +263,8 @@ fn preflight_space(parent: &Path, required: u64) -> Result<(), String> {
     if !output.status.success() {
         return Err("failed to inspect available disk space".to_owned());
     }
-    let line = String::from_utf8_lossy(&output.stdout)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
         .lines()
         .nth(1)
         .ok_or_else(|| "available disk space response was empty".to_owned())?;

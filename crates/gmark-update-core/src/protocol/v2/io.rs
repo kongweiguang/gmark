@@ -2,11 +2,10 @@
 
 //! Apply protocol v2 bounded I/O, layout validation, and artifact verification.
 
-use std::{
-    fs,
-    io::ErrorKind,
-    path::{Component, Path},
-};
+use std::{fs, io::ErrorKind, path::Path};
+
+#[cfg(windows)]
+use std::path::Component;
 
 use ed25519_dalek::VerifyingKey;
 

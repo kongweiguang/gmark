@@ -139,7 +139,7 @@ pub(crate) fn verify_staged_helper_for_launch(
         file
     };
     #[cfg(not(windows))]
-    let mut file = File::open(&helper.path)
+    let file = File::open(&helper.path)
         .map_err(|error| format!("failed to open staged helper for launch: {error}"))?;
 
     #[cfg(windows)]
