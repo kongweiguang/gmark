@@ -115,7 +115,11 @@ jobs:
     needs: validate
     if: ${{ inputs.test_release || inputs.rerun_failed_release }}
     runs-on: windows-2025
-    timeout-minutes: 45
+    # A cold Windows runner spends about 45 minutes compiling and linking the
+    # GPUI binaries before the focused tests finish. Keep enough budget for
+    # workflow lint and cache finalization so a green gate is not reported as
+    # failed during post-job cleanup.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - run: rustup show
