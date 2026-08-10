@@ -1,121 +1,133 @@
 <!-- @author kongweiguang -->
 
 <div align="center">
-  <img src="assets/icon/gmark-icon-256.png" width="80" alt="gmark 图标" />
-  <h1>gmark</h1>
-  <p><strong>本地优先的 Markdown 与结构化文本编辑器。</strong></p>
-  <p>专注写作，也能从容处理代码、数据和大文件。</p>
+  <img src="assets/icon/gmark-icon-256.png" width="80" alt="GMark 图标" />
+  <h1>GMark</h1>
+  <p><strong>把 Markdown 写作、源码控制与结构化数据浏览放进同一个本地工作台。</strong></p>
+  <p>Live 负责流畅编辑，Source 保留精确控制；JSON Graph 和 CSV/TSV 表格让数据文件也能直接读、查、改。</p>
   <p>
-    <a href="https://github.com/kongweiguang/gmark/releases">下载最新版</a>
+    <a href="https://github.com/kongweiguang/gmark/releases">下载</a>
     ·
     <a href="#快速开始">快速开始</a>
     ·
-    <a href="#功能全景">功能全景</a>
+    <a href="gmark-docs/README.md">功能示例</a>
     ·
     <a href="https://github.com/kongweiguang/gmark/issues">问题反馈</a>
   </p>
 </div>
 
-![gmark Live 可视化 Markdown 编辑界面](assets/screenshots/gmark-live.png)
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/gmark-hero-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/gmark-hero-light.png" />
+    <img
+      src="assets/screenshots/gmark-hero-light.png"
+      width="1040"
+      alt="GMark 完整窗口：左侧工作区打开 Markdown 渲染总览，主编辑区以 Live 视图显示标题、行内格式与数学公式"
+    />
+  </picture>
+</div>
 
-gmark 使用 Rust 与 GPUI 构建。文档始终是磁盘上的普通文件，不需要账号，也不会为了编辑而上传内容。你可以用它写一篇临时笔记、维护整个文档工作区，也可以直接查看 JSON、JSONL、CSV、TSV 和超大文本文件。
+GMark 使用 Rust 与 GPUI 构建。文档始终是磁盘上的普通文件：不需要账号，不会为了编辑而上传内容，也不会把 Markdown 转换成专有格式。当前版本为 **v0.1.8**。
 
-当前版本：**v0.1.8**
+## 一份文件，四种视图
 
-## 为什么选择 gmark
-
-- **同一份 Markdown，四种视图**：Live、Source、Split 和 Preview 随时切换。
-- **真正的本地文件工作区**：多标签、文件树、全文搜索、快速打开和文档导航集中在一个窗口。
-- **不只编辑 Markdown**：JSON 提供交互式 Graph，CSV/TSV 提供可编辑表格，JSONL 和代码文件保留精确源码体验。
-- **为大文件准备**：超过阈值后自动使用 Paged Source，只读取当前可见区域附近的内容。
-- **可恢复、可检查**：自动保存可选，保存前检查外部修改，异常退出后保留恢复数据。
-
-## 四种编辑视图
-
-| 视图 | 使用场景 |
+| 视图 | 用途 |
 | --- | --- |
-| **Live** | 直接编辑渲染后的标题、列表、任务、表格、Callout 等内容块。 |
+| **Live** | 直接编辑渲染后的标题、列表、任务、表格、Callout、公式等内容块。 |
 | **Source** | 使用带行号、语法高亮和结构折叠的源码编辑器精确控制文本。 |
-| **Split** | 左侧编辑源码，右侧同步查看只读渲染或结构化结果。 |
-| **Preview** | 隐藏编辑状态，专注阅读、检查和展示。 |
+| **Split** | 同时查看源码与渲染结果，适合校对语法和复杂内容。 |
+| **Preview** | 隐藏编辑状态，专注阅读、检查与展示。 |
 
-![gmark Source 源码编辑界面](assets/screenshots/gmark-source.png)
+四种视图共享同一份文档真值。下面的真实界面打开了 [`gmark-docs/markdown/01-markdown-basics.md`](gmark-docs/markdown/01-markdown-basics.md)，源码中的嵌套列表和任务状态会直接映射到右侧结果。
 
-Live 与 Source 不维护两份内容。四种视图共享同一份文档真值，切换视图不会把 Markdown 转成专有格式；无法直接可视化编辑的语法也会保留在源码中。
+<p align="center">
+  <img
+    src="assets/screenshots/gmark-markdown-split.png"
+    width="1040"
+    alt="GMark Split 视图：左侧 Markdown 源码与右侧列表、任务清单渲染结果同步显示"
+  />
+</p>
 
-## 功能全景
+Markdown 当前支持：
 
-### Markdown 写作
+- 标题、段落、粗体、斜体、删除线、下划线、上标、下标、行内代码、链接和图片。
+- 有序/无序/任务列表、引用、GFM Callout、脚注、定义列表、分隔线和注释。
+- 原生表格、代码块与语法高亮、行内/块数学公式、Mermaid、安全 HTML 子集和本地资源卡片。
+- 选区格式工具栏、块操作区、右键菜单、斜杠菜单、命令面板以及复制为 Markdown。
+- 查找替换、跳转到行、拼写检查、标记与括号自动配对、标题/Callout 折叠、专注和打字机模式。
 
-- 标题、段落、粗体、斜体、删除线、下划线、上标、下标、行内代码和链接。
-- 有序列表、无序列表、任务列表、引用、Callout、脚注、分隔线和注释。
-- 原生表格编辑、代码高亮、图片、数学公式、Mermaid 和安全的 HTML 子集。
-- [渲染示例文档](gmark-docs/README.md) 集中提供 Markdown、代码、公式、Mermaid、JSON、JSONL、CSV、TSV 和 SVG 的本地小型测试样本。
-- 斜杠菜单、选区工具栏、右键菜单、复制为 Markdown 和粘贴为纯文本。
-- 查找替换、跳转到行、拼写检查、括号与 Markdown 标记自动配对。
-- 专注模式与打字机模式，适合长文写作。
+## 结构化数据，直接看清
 
-### 工作区与导航
+### JSON Graph
 
-- 左侧文件/搜索工作区与右侧文档导航可以独立收起和调整宽度。
-- Markdown 显示大纲，JSON/JSONL 显示结构，CSV/TSV 显示列，其它文本显示文档信息。
-- 多窗口、多标签、固定标签、恢复最近关闭标签和上次会话。
-- 快速打开、命令面板、跨文件内容搜索和文档内查找替换。
-- 在工作区中新建任意扩展名文件，打开、定位、复制路径、刷新、移动、重命名、移到回收站或撤销文件操作。
-- 移动 Markdown 文件前预览影响范围，并同步更新受影响文档的相对链接。
+标准 JSON 默认可以显示本地生成的交互式 Graph。可以搜索节点、缩放画布、折叠分支、聚焦子树、查看 JSONPath，并跳转到对应源码；通过校验的编辑会写回同一份 JSON 文本。
 
-### JSON、JSONL 与表格
+<p align="center">
+  <img
+    src="assets/screenshots/gmark-json-graph.png"
+    width="1040"
+    alt="GMark JSON Graph 深色界面：完整窗口内显示根对象、features、workspace、checks 节点与缩放控制"
+  />
+</p>
 
-标准 JSON 默认提供本地生成的交互式 Graph，可搜索、缩放、折叠、聚焦子树并定位源码。Live Graph 支持直接修改标量、对象和数组，校验后再写回同一份源码；Split 可以同时查看源码与结构。
+### CSV 与 TSV
 
-![gmark JSON 交互式 Graph 视图](assets/screenshots/gmark-json-graph.png)
+CSV、TSV 与 TAB 文件进入结构化表格，而不是被当成图片或普通 Markdown。表格支持单元格编辑、行列维护、筛选、列导航、源码/结构切换和大数据量虚拟化。下图直接打开了 [`gmark-docs/data/table/sample.csv`](gmark-docs/data/table/sample.csv)。
 
-- JSONL/NDJSON 提供源码与记录结构视图。
-- CSV、TSV 和 TAB 在 Live 中可编辑单元格、增删行列，在 Preview 中提供筛选与虚拟化表格。
-- Markdown 表格可以投影为表格视图。
-- 图内单次编辑上限为 256 KiB；单次 Graph 投影最多加载 1,500 个项目，超限时可搜索、折叠或聚焦局部子树。
+<p align="center">
+  <img
+    src="assets/screenshots/gmark-csv-table.png"
+    width="1040"
+    alt="GMark CSV 表格浅色界面：12 行示例数据与 id、title、kind、status、score、notes 列导航"
+  />
+</p>
 
-### 源码、大文件与格式化
+JSONL/NDJSON 提供源码与逐条记录结构。JSON Graph 单次投影最多加载 1,500 个项目，图内单次编辑边界为 256 KiB；达到边界后仍可通过搜索、折叠或聚焦子树继续浏览。
 
-gmark 会先进行有界探测，再决定使用完整 Resident 文档还是 Paged Source。大文件模式按可见区域读取，仍支持搜索、定位、编辑、撤销和保存，不会为了生成完整预览而一次性加载全文。
+## 当前能力
 
-Source 会按语言显示结构折叠 gutter。严格 JSON 和 JSONL 使用内置格式化器；Rust、JavaScript/TypeScript、Python、Go、TOML、C/C++、Shell 等语言可以调用已安装的 `rustfmt`、`prettier`、`black`、`gofmt`、`taplo`、`clang-format` 或 `shfmt`。
+| 领域 | 已实现能力 |
+| --- | --- |
+| **Markdown 编辑** | Live / Source / Split / Preview、扩展 Markdown、表格、Callout、任务、脚注、安全 HTML、资源卡片。 |
+| **代码与源码** | 行号、语言感知高亮、结构折叠、查找替换、行尾切换；严格 JSON/JSONL 内置格式化。 |
+| **数学与图表** | LaTeX 源码输入、二维公式编辑、符号/结构面板；Mermaid Source / Preview / Split。 |
+| **结构化数据** | JSON Graph、JSON/JSONL 结构导航、CSV/TSV 虚拟化表格、筛选、编辑和源码定位。 |
+| **工作区** | 文件树、大纲、跨文件搜索、快速打开、命令面板、多标签、多窗口和会话恢复。 |
+| **大文件** | 默认超过 16 MiB 自动进入 Paged Source，按可见区域读取并继续搜索、编辑和保存。 |
+| **资源与预览** | PNG/JPEG/GIF/WebP/BMP 图片缩放预览；SVG Source / Preview / Split；拖放和资源插入。 |
+| **导出** | Markdown 导出完整 HTML、PNG 或 PDF，并处理数学、Mermaid 与可用的本地资源。 |
+| **保存与恢复** | 可选延时自动保存、外部修改检查、原子写回、异常退出恢复和冲突保护。 |
+| **个性化** | 浅色/深色/跟随系统，Xcode/Fleet/Obsidian/Claude 配色，可配置快捷键和无障碍选项。 |
 
-默认格式化快捷键为 `Shift+Alt+F`。保存时格式化默认关闭，可以在偏好设置、用户 `config.toml` 或工作区 `.gmark.toml` 中配置。工作区配置中的自定义命令会在本机执行，因此只应对可信工作区启用。
+## 支持的文件
 
-### 图片、附件与视频
+| 文件类型 | 默认体验 |
+| --- | --- |
+| Markdown | Live / Source / Split / Preview，完整写作、渲染与导出 |
+| JSON | 交互式 Graph、结构编辑、Source 与 Split |
+| JSONL / NDJSON | Source、逐条记录结构、搜索与导航 |
+| CSV / TSV / TAB | 可编辑表格、筛选、列导航、Source 与结构视图 |
+| SVG | 可编辑源码、实时预览与 Split |
+| PNG / JPEG / GIF / WebP / BMP | 图片预览、缩放与适应宽度 |
+| 纯文本与代码 | Source、行号、语法高亮、折叠与查找替换 |
+| 超过 Resident 阈值的文本 | Paged Source，按可见区域读取 |
 
-图片使用标准 Markdown 图片语法。附件和视频使用普通链接的 title 标记，在 Live 中显示为资源卡片：
+Source 内置语言识别覆盖 Rust、JavaScript/TypeScript、JSON/JSONL、Markdown、Bash、C/C++、C#、CSS、Go、HTML、Java、PHP、Python、Ruby、YAML、TOML、SQL、Lua、Swift、PowerShell、Dockerfile/Containerfile、Mermaid 等常见文本格式。
 
-```markdown
-[需求文档](./note.assets/spec.pdf "gmark:resource")
-[演示视频](./note.assets/demo.mp4 "gmark:resource;type=video")
-```
+## 功能示例
 
-资源可以通过文件选择器、拖放、单路径粘贴、斜杠菜单或命令面板插入。远程资源不会被自动下载；`javascript:`、`data:` 和 `blob:` 等危险协议只保留源码并显示为不支持。
+[`gmark-docs/`](gmark-docs/README.md) 是随仓库维护的固定 Demo，截图也直接来自这里：
 
-### 导出、恢复与更新
+- [渲染总览](gmark-docs/markdown/00-rendering-showcase.md)：行内格式、块结构、资源、公式、Mermaid 与安全 HTML。
+- [基础 Markdown](gmark-docs/markdown/01-markdown-basics.md)：段落、列表、任务、表格和链接。
+- [代码示例](gmark-docs/markdown/02-code.md)：多语言代码块与语法高亮。
+- [数学公式](gmark-docs/markdown/03-math.md)：行内公式、块公式、矩阵和结构编辑。
+- [Mermaid 图表](gmark-docs/markdown/04-mermaid.md)：流程、时序、状态、类图等示例。
+- [交互渲染](gmark-docs/markdown/05-interactive-rendering.md)：搜索、折叠和宽表等操作。
+- [结构化数据](gmark-docs/data/README.md)：JSON、JSONL、CSV、TSV 与 SVG 样本。
 
-- 将 Markdown 导出为完整 HTML、PNG 图片或 PDF。
-- HTML 导出会复制可用的本地资源到同名 `.assets` 目录；远程 URL 不会被下载。
-- 保存窗口、工作区、标签、光标和视图状态，重新启动后继续工作。
-- 为未保存内容维护本地恢复数据，并在异常退出后提供恢复。
-- 自动更新只接受 Ed25519 签名清单，并在安装前、helper 接管后分别校验下载文件。
-- “重启并安装”会先复用正常退出流程处理所有窗口；继续编辑或保存失败会取消升级并保留已验证安装包，不会提前启动 helper。
-- Windows 使用 Inno Setup 进度，macOS 与可写 AppImage 使用独立升级代理；安装或新版本启动失败时会尝试恢复完整旧版本。
-
-PDF 导出需要系统中存在 Chrome、Chromium、Edge 或其它兼容 Chromium 浏览器。
-
-### 外观与偏好设置
-
-- 深色、浅色和跟随系统三种外观。
-- Xcode、Fleet、Obsidian 与 Claude 四套内置配色，均提供深色和浅色版本。
-- 正文字体、字号、行高、内容宽度和状态栏项目。
-- 延时自动保存、英文拼写检查和图片/资源插入位置。
-- 可修改的键盘快捷键，并自动检测快捷键冲突。
-- 中文与英文界面，支持本地语言包。
-
-## 安装
+## 快速开始
 
 前往 [GitHub Releases](https://github.com/kongweiguang/gmark/releases) 下载对应平台的安装包。
 
@@ -126,29 +138,10 @@ PDF 导出需要系统中存在 Chrome、Chromium、Edge 或其它兼容 Chromiu
 | macOS Apple Silicon | DMG |
 | macOS Intel | DMG |
 
-macOS 安装包目前未使用 Apple Developer ID 签名和公证。如果确认安装包来自本仓库的 GitHub Releases，但拖入“应用程序”后仍被 Gatekeeper 阻止，可以运行：
-
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/gmark.app
-```
-
-该命令只移除 gmark 的隔离标记，不会全局关闭 Gatekeeper。
-
-### 从旧版过渡到自动更新 v2
-
-旧客户端的退出逻辑无法被新安装包反向修复。第一次升级到包含 updater v2 的版本时，如果界面停在“等待应用关闭”，请正常关闭 GMark，或直接运行已经下载的系统安装器；不要强制结束进程。完成这一次过渡后，后续版本会在所有窗口批准退出后再交接 helper，并自动完成安装、启动确认和必要回滚。
-
-### 同版本更新修复发布
-
-真实更新验收失败时，维护者继续使用相同的 `release_tag` 和 Cargo 版本，并在 `Build and Release Installers` 手动工作流中设置 `rerun_failed_release=true`。该显式修复模式跳过已经通过的 full quality 与 focused updater 门禁，但仍执行版本身份校验、三平台构建与安装 smoke、清单重新签名和资产发布；普通发布默认不能移动已有标签。
-
-## 快速开始
-
-1. 启动 gmark，直接新建文档，或从“文件”菜单打开文件/文件夹。
+1. 启动 GMark，直接新建文档，或从“文件”菜单打开文件/文件夹。
 2. 打开文件夹后，使用左侧文件树浏览工作区，使用右侧导航查看当前文档结构。
 3. 从窗口右下角切换 Live、Source、Split 或 Preview。
-4. 使用保存、另存为或可选的延时自动保存写回普通文件。
-5. 需要分享时，从当前文档菜单导出 HTML、PNG 或 PDF。
+4. 保存后仍然得到普通文件；需要分享时可以导出 HTML、PNG 或 PDF。
 
 常用快捷键：
 
@@ -160,32 +153,29 @@ sudo xattr -rd com.apple.quarantine /Applications/gmark.app
 | 快速打开 | `Ctrl+P` | `Cmd+P` |
 | 命令面板 | `Ctrl+Shift+P` | `Cmd+Shift+P` |
 | 查找 | `Ctrl+F` | `Cmd+F` |
-| 跳转到行 | `Ctrl+G` | `Ctrl+G` |
 | 切换视图 | `Ctrl+Tab` | `Cmd+Tab` |
-| 格式化文档 | `Shift+Alt+F` | `Shift+Alt+F` |
 
-所有快捷键都可以在偏好设置中修改。
+快捷键可以在偏好设置中修改；冲突会在录制时直接提示。
 
-## 支持的文件
+<details>
+<summary>macOS Gatekeeper 提示</summary>
 
-| 类型 | 默认体验 |
-| --- | --- |
-| Markdown | Live / Source / Split / Preview，完整写作与导出能力 |
-| JSON | 交互式 Graph、Live 编辑、源码和分栏 |
-| JSONL / NDJSON | 源码、记录结构与导航 |
-| CSV / TSV / TAB | 可编辑表格、筛选预览和源码分栏 |
-| SVG | 可编辑源码、实时预览和分栏 |
-| 纯文本与代码 | Source、语法高亮、折叠与外部格式化器 |
-| 超过阈值的文件 | Paged Source，按可见区域读取 |
+当前安装包尚未使用 Apple Developer ID 签名和公证。如果确认安装包来自本仓库的 GitHub Releases，但拖入“应用程序”后仍被 Gatekeeper 阻止，可以运行：
 
-如需绕过格式探测并以最保守方式打开内容，可以使用“安全源码打开”。
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/gmark.app
+```
+
+该命令只移除 GMark 的隔离标记，不会全局关闭 Gatekeeper。
+
+</details>
 
 ## 数据与隐私
 
-- 文档、设置、工作区状态和恢复数据默认保存在本机。
-- 使用 gmark 不需要账号，也不需要把文档上传到云端。
-- 你仍然可以使用 Git、同步盘或自己的备份方案管理普通文件。
-- 联网主要用于检查更新，以及在用户确认后打开文档主动引用的网络链接。
+- 文档、设置、工作区状态与恢复数据默认保存在本机。
+- 使用 GMark 不需要账号，也不需要把文档上传到云端。
+- 文档中引用的 HTTP(S) 图片会在渲染时联网获取；请求不会携带 Cookie、Authorization 或 Referer，并受超时、重定向、并发和 20 MiB 响应上限保护。
+- 其他网络链接由用户主动打开；危险 URL 协议只保留源码并显示为不支持。应用也可按偏好设置检查更新。
 - 恢复功能用于处理意外退出，不替代版本控制和长期备份。
 
 ## 从源码构建
@@ -196,12 +186,12 @@ sudo xattr -rd com.apple.quarantine /Applications/gmark.app
 cargo build --release --locked
 ```
 
-生成的可执行文件位于 `target/release`。完整质量检查、平台依赖和打包流程以仓库中的 CI 与 `docs/` 文档为准。
+生成的可执行文件位于 `target/release`。命令行支持直接打开一个或多个文件，以及 `--help`、`--version` 和 `--detach`。完整质量检查、平台依赖和打包流程以仓库中的 CI 与 [`docs/`](docs/) 文档为准。
 
-## 反馈与协议
+## 反馈与许可
 
-问题与建议请提交到 [GitHub Issues](https://github.com/kongweiguang/gmark/issues)，并附上操作系统、gmark 版本、复现步骤和可公开的示例文档。请勿上传包含隐私或机密信息的原始文件。
+问题与建议请提交到 [GitHub Issues](https://github.com/kongweiguang/gmark/issues)，并附上操作系统、GMark 版本、复现步骤和可公开的示例文档。请勿上传包含隐私或机密信息的原始文件。
 
-gmark 以 GNU General Public License v3.0 or later（GPL-3.0-or-later）授权。
+GMark 以 GNU General Public License v3.0 or later（GPL-3.0-or-later）授权。
 
-本项目参考了 Velotype 的代码。
+本项目参考了 Velotype 的部分实现。
