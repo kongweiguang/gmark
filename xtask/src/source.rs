@@ -18,13 +18,6 @@ const ROOT_FILES: &[&str] = &[
     "rust-toolchain.toml",
 ];
 
-/// Optional visual-evidence adapters are kept in the tree for local capture
-/// experiments, but are not part of the production module graph until their
-/// platform capture backend is available. The marker is intentionally narrow
-/// so a source file cannot silently opt out of quality checks.
-pub(crate) const OPTIONAL_BOARD_EVIDENCE_MARKER: &str =
-    "@quality-exempt optional board evidence harness";
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TokenKind {
     Identifier,
@@ -201,13 +194,6 @@ pub(crate) fn is_generated_source(source: &str) -> bool {
         let normalized = line.to_ascii_lowercase();
         normalized.contains("@generated") || normalized.contains("do not edit")
     })
-}
-
-pub(crate) fn is_optional_board_evidence_source(source: &str) -> bool {
-    source
-        .lines()
-        .take(8)
-        .any(|line| line.contains(OPTIONAL_BOARD_EVIDENCE_MARKER))
 }
 
 pub(crate) fn rust_tokens(source: &str) -> Vec<Token> {
