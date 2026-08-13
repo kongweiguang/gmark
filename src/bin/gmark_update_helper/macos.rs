@@ -74,7 +74,8 @@ pub fn install(
     if !same_volume(staging.path(), parent)? {
         return Err(
             "macOS update staging directory must be on the same volume as the installed application"
-                .to_owned(),
+                .to_owned()
+                .into(),
         );
     }
     artifact
@@ -93,9 +94,9 @@ pub fn install(
                 .map_err(PlatformInstallFailure::committed_or_unknown)?;
         }
         Err(error) => {
-            return Err(format!(
-                "failed to atomically exchange macOS application bundle: {error}"
-            ));
+            return Err(
+                format!("failed to atomically exchange macOS application bundle: {error}").into(),
+            );
         }
     }
     // A failed directory sync is reported after the exchange and therefore
