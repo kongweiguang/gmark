@@ -8,13 +8,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Read as _,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 pub(crate) const MAX_CACHED_RESULT_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_DISPLAYED_RESULT_BYTES: usize = 128;
-pub(crate) const HELPER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Restores one terminal result and decorates failures with recovery paths so
+/// the next process can diagnose an installer that ran after the old app quit.
 pub(crate) fn restored_startup_state(updates_root: &Path) -> Option<UpdateState> {
     let mut v2_results = Vec::new();
     collect_v2_result_paths(updates_root, &mut v2_results);
@@ -40,7 +41,10 @@ pub(crate) fn restored_startup_state(updates_root: &Path) -> Option<UpdateState>
         .and_then(|bytes| String::from_utf8(bytes).ok());
         if displayed.as_deref() != Some(fingerprint.as_str()) {
             write_display_fingerprint(&displayed_path, &fingerprint);
-            return Some(state_from_v2_result(&result));
+            return Some(state_from_v2_result_with_diagnostics(
+                &result,
+                Some(&result_path),
+            ));
         }
     }
 
@@ -69,10 +73,27 @@ pub(crate) fn restored_startup_state(updates_root: &Path) -> Option<UpdateState>
     } else {
         UpdateState::Failed {
             release: None,
-            message: result.message,
+            message: format!(
+                "{}; manual download: https://github.com/kongweiguang/gmark/releases; helper log: {}; installer log: {}",
+                result.message,
+                updates_root.join("last-helper.log").display(),
+                updates_root.join("installer.log").display(),
+            ),
             retryable: false,
         }
     })
+}
+
+/// Reads one explicit V2 transaction result without scanning unrelated cache
+/// entries; the relaunched process uses this narrow path to surface the helper
+/// outcome that can be written only after startup acknowledgement succeeds.
+pub(crate) fn restored_transaction_state(transaction_dir: &Path) -> Option<UpdateState> {
+    let result_path = transaction_dir.join(gmark_update_core::ApplyPlanV2::RESULT_FILE_NAME);
+    let bytes =
+        read_bounded_cache_file(&result_path, MAX_CACHED_RESULT_BYTES, "v2 update result").ok()?;
+    let result = gmark_update_core::parse_apply_result_v2(&bytes).ok()?;
+    result_matches_transaction_directory(&result, &result_path)
+        .then(|| state_from_v2_result_with_diagnostics(&result, Some(&result_path)))
 }
 
 fn result_fingerprint(bytes: &[u8]) -> String {
@@ -157,6 +178,15 @@ fn result_matches_transaction_directory(
 }
 
 pub(crate) fn state_from_v2_result(result: &gmark_update_core::ApplyResultV2) -> UpdateState {
+    state_from_v2_result_with_diagnostics(result, None)
+}
+
+/// Keeps the original failure text copyable while adding concrete recovery
+/// locations, because the old process is gone once the helper owns handoff.
+pub(crate) fn state_from_v2_result_with_diagnostics(
+    result: &gmark_update_core::ApplyResultV2,
+    result_path: Option<&Path>,
+) -> UpdateState {
     if result.status == "succeeded" {
         return UpdateState::Succeeded {
             version: result.to_version.clone(),
@@ -171,32 +201,47 @@ pub(crate) fn state_from_v2_result(result: &gmark_update_core::ApplyResultV2) ->
                 | gmark_update_core::RecoveryAction::Recheck
         )
     });
+    let (helper_log, installer_log) = result_path
+        .and_then(Path::parent)
+        .map(|transaction_dir| {
+            (
+                transaction_dir.join(gmark_update_core::ApplyPlanV2::HELPER_LOG_FILE_NAME),
+                transaction_dir.join(gmark_update_core::ApplyPlanV2::INSTALLER_LOG_FILE_NAME),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                PathBuf::from("<transaction>/helper.log"),
+                PathBuf::from("<transaction>/installer.log"),
+            )
+        });
     UpdateState::Failed {
         release: None,
-        message: format_v2_failure(result),
+        message: format_v2_failure_with_diagnostics(result, &helper_log, &installer_log),
         retryable,
     }
 }
 
-pub(crate) fn read_v2_result(
-    plan: &gmark_update_core::ApplyPlanV2,
-) -> Option<gmark_update_core::ApplyResultV2> {
-    let result = gmark_update_core::read_apply_result_v2(&plan.result_path).ok()?;
-    (result.transaction_id == plan.transaction_id).then_some(result)
-}
-
-pub(crate) fn read_v2_progress(
-    plan: &gmark_update_core::ApplyPlanV2,
-) -> Option<gmark_update_core::ApplyProgressV1> {
-    let progress = gmark_update_core::read_apply_progress_v1(&plan.progress_path).ok()?;
-    (progress.transaction_id == plan.transaction_id).then_some(progress)
-}
-
 pub(crate) fn format_v2_failure(result: &gmark_update_core::ApplyResultV2) -> String {
-    result
+    let helper_log = PathBuf::from("<transaction>/helper.log");
+    let installer_log = PathBuf::from("<transaction>/installer.log");
+    format_v2_failure_with_diagnostics(result, &helper_log, &installer_log)
+}
+
+fn format_v2_failure_with_diagnostics(
+    result: &gmark_update_core::ApplyResultV2,
+    helper_log: &Path,
+    installer_log: &Path,
+) -> String {
+    let detail = result
         .failure_code
         .map(|code| format!("{code:?}: {}", result.message))
-        .unwrap_or_else(|| result.message.clone())
+        .unwrap_or_else(|| result.message.clone());
+    format!(
+        "{detail}; manual download: https://github.com/kongweiguang/gmark/releases; helper log: {}; installer log: {}",
+        helper_log.display(),
+        installer_log.display(),
+    )
 }
 
 pub(crate) fn read_bounded_cache_file(
@@ -336,8 +381,4 @@ fn read_terminal_result(transaction_dir: &Path) -> Option<gmark_update_core::App
     result_matches_transaction_directory(&result, &path)
         .then_some(result)
         .filter(|result| matches!(result.status.as_str(), "succeeded" | "failed"))
-}
-
-pub(crate) fn helper_timeout_expired(started_at: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(started_at) >= HELPER_TIMEOUT
 }

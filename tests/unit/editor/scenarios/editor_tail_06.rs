@@ -601,7 +601,7 @@ async fn app_menu_opened_dirty_file_window_prompts_only_that_window(cx: &mut Tes
 #[gpui::test]
 async fn discard_and_close_clears_resident_document_dirty_state(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
-    cx.update(|cx| crate::updater::UpdateCoordinator::init(false, cx));
+    cx.update(|cx| crate::updater::UpdateCoordinator::init(false, None, cx));
     let (editor, visual) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_owned(), None));
 

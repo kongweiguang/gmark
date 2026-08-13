@@ -244,12 +244,15 @@ impl Editor {
         &self,
         cx: &App,
     ) -> crate::accessibility::EditorAccessibilitySnapshot {
-        if let Some(snapshot) = self.focused_pane_accessibility_snapshot(cx) {
+        if let Some(mut snapshot) = self.focused_pane_accessibility_snapshot(cx) {
+            self.attach_global_update_accessibility(&mut snapshot, cx);
             return snapshot;
         }
         let strings = cx.global::<I18nManager>().strings();
         if let Some(document_host) = self.document_host.as_ref() {
-            return document_host.read(cx).accessibility_snapshot(cx);
+            let mut snapshot = document_host.read(cx).accessibility_snapshot(cx);
+            self.attach_global_update_accessibility(&mut snapshot, cx);
+            return snapshot;
         }
         let title = self
             .file_path
@@ -268,7 +271,7 @@ impl Editor {
             .collect();
         let folds = self.accessibility_folds(&lines, cx);
         let update_status = crate::updater::UpdateCoordinator::accessibility_status(cx);
-        crate::accessibility::EditorAccessibilitySnapshot {
+        let mut snapshot = crate::accessibility::EditorAccessibilitySnapshot {
             title,
             mode: match self.view_mode {
                 ViewMode::Rendered => crate::accessibility::AccessibilityMode::Live,
@@ -288,12 +291,44 @@ impl Editor {
                 .external_file_conflict
                 .then(|| strings.large_document_text("file_changed_disk").to_owned()),
             busy: self.save_task.is_some() || self.export_in_progress || update_status.is_some(),
+            update_actions: Vec::new(),
+            close_actions: Vec::new(),
             search_visible: self.find_panel.is_some(),
             navigation_visible: false,
             caret: None,
             lines,
             folds,
             math: self.active_math_accessibility(cx, strings),
+        };
+        self.attach_global_update_accessibility(&mut snapshot, cx);
+        snapshot
+    }
+
+    /// 更新协调器属于应用全局而非具体文档，把状态合并到任意活动画布才能让辅助技术稳定找到恢复动作。
+    fn attach_global_update_accessibility(
+        &self,
+        snapshot: &mut crate::accessibility::EditorAccessibilitySnapshot,
+        cx: &App,
+    ) {
+        let update_status = crate::updater::UpdateCoordinator::accessibility_status(cx);
+        snapshot.update_actions = self
+            .update_accessibility_actions(cx)
+            .into_iter()
+            .map(|action| action.label)
+            .collect();
+        snapshot.close_actions = if self.show_unsaved_changes_dialog {
+            let strings = cx.global::<I18nManager>().strings();
+            vec![
+                strings.unsaved_changes_cancel.to_string(),
+                strings.unsaved_changes_discard_and_close.to_string(),
+                strings.unsaved_changes_save_and_close.to_string(),
+            ]
+        } else {
+            Vec::new()
+        };
+        if let Some(status) = update_status {
+            snapshot.status = status;
+            snapshot.busy = true;
         }
     }
 
@@ -409,10 +444,14 @@ impl Editor {
 
     pub(in crate::editor) fn current_accessibility_revision(&self, cx: &App) -> u64 {
         if let Some(revision) = self.focused_pane_accessibility_revision(cx) {
-            return revision;
+            return revision
+                ^ (update_accessibility_revision(cx) << 5)
+                ^ (u64::from(self.show_unsaved_changes_dialog) << 15);
         }
         if let Some(document_host) = self.document_host.as_ref() {
-            return document_host.read(cx).accessibility_revision();
+            return document_host.read(cx).accessibility_revision()
+                ^ (update_accessibility_revision(cx) << 5)
+                ^ (u64::from(self.show_unsaved_changes_dialog) << 15);
         }
         let math_signature = self.accessibility_math_signature(cx);
         let flags = u64::from(self.is_document_dirty())
@@ -421,6 +460,7 @@ impl Editor {
             | (u64::from(self.save_task.is_some()) << 3)
             | (u64::from(self.export_in_progress) << 4)
             | (update_accessibility_revision(cx) << 5)
+            | (u64::from(self.show_unsaved_changes_dialog) << 15)
             | (match self.view_mode {
                 ViewMode::Source => 0,
                 ViewMode::Rendered => 1,
@@ -515,14 +555,23 @@ fn next_accessibility_fold_line(
     None
 }
 
+/// 更新面板的每一种交互状态都必须拥有独立 revision，避免读屏树停留在上一组按钮。
 fn update_accessibility_revision(cx: &App) -> u64 {
     match crate::updater::UpdateCoordinator::try_state(cx) {
+        None | Some(crate::updater::UpdateState::Idle) => 0,
+        Some(crate::updater::UpdateState::Checking { .. }) => 1,
+        Some(crate::updater::UpdateState::UpToDate { .. }) => 2,
+        Some(crate::updater::UpdateState::Available(_)) => 3,
         Some(crate::updater::UpdateState::Downloading {
             downloaded, total, ..
-        }) if total > 0 => downloaded.saturating_mul(100) / total + 1,
-        Some(crate::updater::UpdateState::Verifying { .. }) => 102,
-        Some(crate::updater::UpdateState::AwaitingQuit { .. }) => 103,
-        Some(crate::updater::UpdateState::Installing { .. }) => 104,
-        _ => 0,
+        }) if total > 0 => downloaded.saturating_mul(100) / total + 10,
+        Some(crate::updater::UpdateState::Downloading { .. }) => 10,
+        Some(crate::updater::UpdateState::Paused { .. }) => 111,
+        Some(crate::updater::UpdateState::Verifying { .. }) => 112,
+        Some(crate::updater::UpdateState::Ready { .. }) => 113,
+        Some(crate::updater::UpdateState::Succeeded { .. }) => 114,
+        Some(crate::updater::UpdateState::Failed {
+            release, retryable, ..
+        }) => 115 + u64::from(retryable) + (u64::from(release.is_some()) << 1),
     }
 }

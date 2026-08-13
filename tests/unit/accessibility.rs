@@ -11,6 +11,8 @@ fn semantic_tree_is_bounded_and_exposes_source_contract() {
         status: "64 MiB · 20,000 lines".to_owned(),
         error: Some("invalid JSON near byte 42".to_owned()),
         busy: false,
+        update_actions: Vec::new(),
+        close_actions: Vec::new(),
         search_visible: true,
         navigation_visible: true,
         caret: Some((0, 2)),
@@ -136,6 +138,58 @@ fn busy_document_exposes_progress_role() {
         .map(|(_, node)| node)
         .expect("status node");
     assert_eq!(status.role(), Role::ProgressIndicator);
+}
+
+/// 更新动作必须进入系统可访问性树，真实平台 driver 才能操作可见流程而无需像素猜测。
+#[test]
+fn updater_actions_expose_stable_secondary_and_primary_buttons() {
+    let tree = build_tree(EditorAccessibilitySnapshot {
+        update_actions: vec!["Later".to_owned(), "Restart and Install".to_owned()],
+        ..EditorAccessibilitySnapshot::default()
+    });
+    let secondary = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == UPDATE_SECONDARY_ID)
+        .map(|(_, node)| node)
+        .expect("secondary updater action");
+    let primary = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == UPDATE_PRIMARY_ID)
+        .map(|(_, node)| node)
+        .expect("primary updater action");
+    assert_eq!(secondary.label(), Some("Later"));
+    assert_eq!(primary.label(), Some("Restart and Install"));
+    assert!(secondary.supports_action(Action::Click));
+    assert!(primary.supports_action(Action::Click));
+}
+
+/// 普通关闭确认也必须通过系统语义树可达，三平台 E2E 才能验证真实退出语义而非坐标点击。
+#[test]
+fn unsaved_close_actions_expose_all_three_decisions() {
+    let tree = build_tree(EditorAccessibilitySnapshot {
+        close_actions: vec![
+            "Continue Editing".to_owned(),
+            "Discard and Close".to_owned(),
+            "Save and Close".to_owned(),
+        ],
+        ..EditorAccessibilitySnapshot::default()
+    });
+    for (id, label) in [
+        (CLOSE_CANCEL_ID, "Continue Editing"),
+        (CLOSE_DISCARD_ID, "Discard and Close"),
+        (CLOSE_SAVE_ID, "Save and Close"),
+    ] {
+        let node = tree
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .map(|(_, node)| node)
+            .expect("close decision");
+        assert_eq!(node.label(), Some(label));
+        assert!(node.supports_action(Action::Click));
+    }
 }
 
 #[test]

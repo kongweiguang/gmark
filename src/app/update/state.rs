@@ -35,15 +35,6 @@ pub(crate) enum UpdateState {
         release: UpdateRelease,
         artifact_path: PathBuf,
     },
-    /// All editor windows are being asked to approve the normal quit flow.
-    /// No apply plan or helper process exists while this state is active.
-    AwaitingQuit {
-        release: UpdateRelease,
-        artifact_path: PathBuf,
-    },
-    Installing {
-        release: UpdateRelease,
-    },
     Succeeded {
         version: String,
         message: String,
@@ -72,9 +63,7 @@ impl UpdateState {
             | Self::Downloading { release, .. }
             | Self::Paused { release, .. }
             | Self::Verifying { release }
-            | Self::Ready { release, .. }
-            | Self::AwaitingQuit { release, .. }
-            | Self::Installing { release } => Some(release),
+            | Self::Ready { release, .. } => Some(release),
             Self::Failed { release, .. } => release.as_ref(),
             Self::Idle | Self::Checking { .. } | Self::UpToDate { .. } | Self::Succeeded { .. } => {
                 None
@@ -87,11 +76,7 @@ impl UpdateState {
         match command {
             UpdateCommand::Check => !matches!(
                 self,
-                Self::Checking { .. }
-                    | Self::Downloading { .. }
-                    | Self::Verifying { .. }
-                    | Self::AwaitingQuit { .. }
-                    | Self::Installing { .. }
+                Self::Checking { .. } | Self::Downloading { .. } | Self::Verifying { .. }
             ),
             UpdateCommand::Download => matches!(self, Self::Available(_)),
             UpdateCommand::Pause => matches!(self, Self::Downloading { .. }),
@@ -104,13 +89,9 @@ impl UpdateState {
                 }
             ),
             UpdateCommand::InstallAndRestart => matches!(self, Self::Ready { .. }),
-            UpdateCommand::Dismiss => !matches!(
-                self,
-                Self::Downloading { .. }
-                    | Self::Verifying { .. }
-                    | Self::AwaitingQuit { .. }
-                    | Self::Installing { .. }
-            ),
+            UpdateCommand::Dismiss => {
+                !matches!(self, Self::Downloading { .. } | Self::Verifying { .. })
+            }
         }
     }
 }

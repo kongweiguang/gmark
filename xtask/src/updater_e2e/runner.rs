@@ -2,6 +2,11 @@
 
 use super::*;
 
+mod environment;
+use environment::runtime_environment;
+
+/// Owns the external N process so the harness can prove that helper installation starts only
+/// after the real process boundary, rather than relying on a PID-table scan.
 pub(super) fn execute(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(), String> {
     preflight(options, paths)?;
     let mut current = spawn_current(options, paths)?;
@@ -9,7 +14,6 @@ pub(super) fn execute(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(
     let initial_status = match current.try_wait() {
         Ok(status) => status,
         Err(error) => {
-            terminate(&mut current);
             return Err(stage_error(
                 "launch-N",
                 "N process",
@@ -20,7 +24,6 @@ pub(super) fn execute(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(
         }
     };
     if let Some(status) = initial_status {
-        terminate(&mut current);
         return Err(stage_error(
             "launch-N",
             "N process",
@@ -30,29 +33,28 @@ pub(super) fn execute(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(
         ));
     }
     let result = run_flow(options, paths, &mut current);
-    if result.is_err() {
-        terminate(&mut current);
-    }
+    // Dropping the child handle deliberately leaves N alive on a timeout or helper failure;
+    // the gate must report the problem without turning a recoverable update into a forced quit.
     result
 }
 
+/// Rejects incomplete or stale fixtures before spawning N so a failed gate cannot be mistaken
+/// for an updater regression or leave a real helper transaction behind.
 fn preflight(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(), String> {
     let mut missing = Vec::new();
     required_file(options.current_binary.as_deref(), "N binary", &mut missing);
-    if options.next_binary.is_none() && options.next_installer.is_none() {
+    if let Some(binary) = options.next_binary.as_deref() {
+        required_file(Some(binary), "N+1 binary", &mut missing);
+    } else if let Some(installer) = options.next_installer.as_deref() {
+        required_file(Some(installer), "N+1 installer", &mut missing);
+    } else {
         missing.push("N+1 binary or installer input".to_owned());
     }
-    required_file(options.next_binary.as_deref(), "N+1 binary", &mut missing);
-    required_file(
-        options.current_installer.as_deref(),
-        "N installer",
-        &mut missing,
-    );
-    required_file(
-        options.next_installer.as_deref(),
-        "N+1 installer",
-        &mut missing,
-    );
+    // N's installer is not needed to exercise an already-installed N -> N+1 handoff;
+    // requiring it made the gate reject valid platform-specific production artifacts.
+    if let Some(installer) = options.current_installer.as_deref() {
+        required_file(Some(installer), "N installer", &mut missing);
+    }
     required_file(
         options.signing_private_key.as_deref(),
         "signing private key",
@@ -68,7 +70,9 @@ fn preflight(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(), String
     );
     required_file(options.driver.as_deref(), "automation driver", &mut missing);
     required_file(options.helper.as_deref(), "helper", &mut missing);
-    required_file(options.agent.as_deref(), "agent", &mut missing);
+    if expects_feedback_agent() {
+        required_file(options.agent.as_deref(), "agent", &mut missing);
+    }
     required_file(options.apply_plan.as_deref(), "apply plan", &mut missing);
     if options.current_version.as_deref().is_none() || options.target_version.as_deref().is_none() {
         missing.push("--current-version and --target-version".to_owned());
@@ -86,17 +90,16 @@ fn preflight(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(), String
         &paths.new_pid,
         &paths.helper_pid,
         &paths.agent_pid,
-        &paths.installer_log,
         &paths.result,
     ] {
         if marker_present(path) {
             missing.push(format!("stale marker must be removed: {}", path.display()));
         }
     }
-    if marker_present(&paths.backup) {
+    if expects_installer_log() && marker_present(&paths.installer_log) {
         missing.push(format!(
-            "backup path must be absent before run: {}",
-            paths.backup.display()
+            "stale marker must be removed: {}",
+            paths.installer_log.display()
         ));
     }
     if !missing.is_empty() {
@@ -108,11 +111,19 @@ fn preflight(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<(), String
     Ok(())
 }
 
+/// Validates supplied artifacts before launch so a link or missing fixture cannot redirect the
+/// production-shaped run outside the intended test inputs.
 fn required_file(value: Option<&Path>, label: &str, missing: &mut Vec<String>) {
-    if let Some(path) = value
-        && !path.is_file()
-    {
-        missing.push(format!("{label} '{}' does not exist", path.display()));
+    let Some(path) = value else {
+        return;
+    };
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => missing.push(format!(
+            "{label} '{}' must be a regular non-link file",
+            path.display()
+        )),
+        Err(_) => missing.push(format!("{label} '{}' does not exist", path.display())),
     }
 }
 
@@ -132,6 +143,8 @@ fn spawn_current(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<Child,
     )
 }
 
+/// Drives the observable N -> N+1 protocol and checks the lock/exit ordering that prevents an
+/// installer from racing a still-running application.
 fn run_flow(
     options: &UpdaterE2eOptions,
     paths: &E2ePaths,
@@ -140,7 +153,7 @@ fn run_flow(
     let plan = decision_plan(options.decision);
     invoke_driver(options, paths, current.id(), "unsaved-decision")?;
     if !plan.continue_install {
-        if paths.helper_pid.exists() || paths.agent_pid.exists() {
+        if paths.helper_pid.exists() || (expects_feedback_agent() && paths.agent_pid.exists()) {
             return Err(stage_error(
                 "unsaved-cancel",
                 "marker assertion",
@@ -162,11 +175,30 @@ fn run_flow(
                 "N exited even though update was cancelled",
             ));
         }
-        terminate(current);
+        clear_cancel_marker(&paths.old_pid, paths)?;
         println!("updater-e2e passed: unsaved decision cancel kept the update helper stopped");
         return Ok(());
     }
     invoke_driver(options, paths, current.id(), "trigger-update")?;
+    // The helper may be launched before N exits, but installation must remain blocked by
+    // lifetime.lock. Seeing installer feedback here proves a platform installer bypassed that
+    // barrier, which is a safety failure rather than a timing nuisance.
+    wait_for_marker(
+        &paths.lifetime_lock,
+        options.timeout,
+        "lifetime lock",
+        paths,
+    )?;
+    assert_lifetime_lock_held(&paths.lifetime_lock, paths)?;
+    if expects_installer_log() && marker_present(&paths.installer_log) {
+        return Err(stage_error(
+            "lifetime-lock",
+            "installer feedback",
+            None,
+            paths,
+            "installer feedback appeared before N released lifetime.lock",
+        ));
+    }
     wait_for_child_exit(current, options.timeout, paths)?;
     wait_for_marker(&paths.helper_pid, options.timeout, "helper PID", paths)?;
     if expects_feedback_agent() {
@@ -185,12 +217,14 @@ fn run_flow(
         "version marker",
         paths,
     )?;
-    wait_for_marker(
-        &paths.installer_log,
-        options.timeout,
-        "installer feedback log",
-        paths,
-    )?;
+    if expects_installer_log() {
+        wait_for_marker(
+            &paths.installer_log,
+            options.timeout,
+            "installer feedback log",
+            paths,
+        )?;
+    }
     assert_pid(&paths.helper_pid, "helper PID", paths)?;
     if expects_feedback_agent() {
         assert_pid(&paths.agent_pid, "agent PID", paths)?;
@@ -210,20 +244,9 @@ fn run_flow(
     let target = options.target_version.as_deref().unwrap_or_default();
     assert_ack_version(&paths.acknowledgement, target, paths)?;
     assert_version_marker(&paths.version_marker, target, paths)?;
-    if marker_present(&paths.backup) {
-        return Err(stage_error(
-            "backup-cleanup",
-            "backup path",
-            None,
-            paths,
-            "update backup remains after startup acknowledgement",
-        ));
-    }
-    if options.result.is_some() {
-        assert_result(&paths.result, target, paths)?;
-    }
+    assert_result(&paths.result, target, paths)?;
     println!(
-        "updater-e2e passed: {} -> {} (helper, platform feedback, PID, ack, version, installer log, backup cleanup)",
+        "updater-e2e passed: {} -> {} (lifetime lock, helper, platform feedback, PID, ack, version, result, logs)",
         options.current_version.as_deref().unwrap_or("N"),
         target
     );
@@ -236,6 +259,90 @@ fn expects_feedback_agent() -> bool {
     !cfg!(windows)
 }
 
+/// Requires Inno's native log only on Windows; Unix/macOS platform adapters report failures via
+/// the V2 result/helper log and intentionally do not invent an installer-specific side channel.
+fn expects_installer_log() -> bool {
+    cfg!(windows)
+}
+
+/// Removes only the harness-owned PID marker after cancellation so the verified artifact can be
+/// retried without making the still-running N process look like a stale handoff.
+fn clear_cancel_marker(path: &Path, paths: &E2ePaths) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            fs::remove_file(path).map_err(|error| {
+                stage_error(
+                    "unsaved-cancel",
+                    &format!("remove marker '{}'", path.display()),
+                    None,
+                    paths,
+                    &error.to_string(),
+                )
+            })?;
+        }
+        Ok(_) => {
+            return Err(stage_error(
+                "unsaved-cancel",
+                &format!("remove marker '{}'", path.display()),
+                None,
+                paths,
+                "old PID marker is not a regular non-link file",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(stage_error(
+                "unsaved-cancel",
+                &format!("inspect marker '{}'", path.display()),
+                None,
+                paths,
+                &error.to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Proves that N still owns the advisory lock instead of merely leaving a stale lock file on
+/// disk; this makes the pre-exit installer assertion exercise the real process boundary.
+fn assert_lifetime_lock_held(path: &Path, paths: &E2ePaths) -> Result<(), String> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| {
+            stage_error(
+                "lifetime-lock",
+                &format!("open lock '{}'", path.display()),
+                None,
+                paths,
+                &error.to_string(),
+            )
+        })?;
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            Err(stage_error(
+                "lifetime-lock",
+                &format!("lock '{}'", path.display()),
+                None,
+                paths,
+                "N exposed lifetime.lock but did not hold it during handoff",
+            ))
+        }
+        Err(std::fs::TryLockError::WouldBlock) => Ok(()),
+        Err(std::fs::TryLockError::Error(error)) => Err(stage_error(
+            "lifetime-lock",
+            &format!("lock '{}'", path.display()),
+            None,
+            paths,
+            &format!("failed to inspect lifetime.lock ownership: {error}"),
+        )),
+    }
+}
+
+/// Runs one UI-driver phase with the same isolated paths as the application so diagnostics and
+/// marker assertions refer to the exact transaction under test.
 fn invoke_driver(
     options: &UpdaterE2eOptions,
     paths: &E2ePaths,
@@ -294,6 +401,10 @@ fn invoke_driver(
             .as_deref()
             .unwrap_or_default()
             .to_owned(),
+        "--lifetime-lock".to_owned(),
+        paths.lifetime_lock.display().to_string(),
+        "--helper-log".to_owned(),
+        paths.helper_log.display().to_string(),
         "--old-pid".to_owned(),
         paths.old_pid.display().to_string(),
         "--new-pid".to_owned(),
@@ -304,6 +415,8 @@ fn invoke_driver(
         paths.agent_pid.display().to_string(),
         "--installer-log".to_owned(),
         paths.installer_log.display().to_string(),
+        "--result".to_owned(),
+        paths.result.display().to_string(),
     ];
     let status = run_logged_program(
         driver,
@@ -323,116 +436,6 @@ fn invoke_driver(
         ));
     }
     Ok(())
-}
-
-fn runtime_environment(
-    options: &UpdaterE2eOptions,
-    paths: &E2ePaths,
-    phase: &str,
-) -> Vec<(OsString, OsString)> {
-    let mut values = vec![
-        ("GMARK_E2E_PHASE".into(), phase.into()),
-        ("GMARK_E2E_PLATFORM".into(), platform_name().into()),
-        (
-            "GMARK_E2E_DECISION".into(),
-            options.decision.as_str().into(),
-        ),
-        (
-            "GMARK_UI_CHECK_ROOT".into(),
-            paths.ui_check_root.clone().into_os_string(),
-        ),
-        (
-            "GMARK_UPDATER_E2E_UPDATE_ROOT".into(),
-            paths.updates_root.clone().into_os_string(),
-        ),
-        (
-            "GMARK_E2E_CURRENT_BINARY".into(),
-            options
-                .current_binary
-                .clone()
-                .unwrap_or_default()
-                .into_os_string(),
-        ),
-        (
-            "GMARK_E2E_NEXT_BINARY".into(),
-            options
-                .next_binary
-                .clone()
-                .unwrap_or_default()
-                .into_os_string(),
-        ),
-        (
-            "GMARK_E2E_ACK_PATH".into(),
-            paths.acknowledgement.clone().into_os_string(),
-        ),
-        (
-            "GMARK_E2E_VERSION_PATH".into(),
-            paths.version_marker.clone().into_os_string(),
-        ),
-        (
-            "GMARK_E2E_BACKUP_PATH".into(),
-            paths.backup.clone().into_os_string(),
-        ),
-        (
-            "GMARK_E2E_HELPER_PID_PATH".into(),
-            paths.helper_pid.clone().into_os_string(),
-        ),
-        (
-            "GMARK_E2E_AGENT_PID_PATH".into(),
-            paths.agent_pid.clone().into_os_string(),
-        ),
-        (
-            "GMARK_E2E_NEW_PID_PATH".into(),
-            paths.new_pid.clone().into_os_string(),
-        ),
-        (
-            "GMARK_E2E_INSTALLER_LOG".into(),
-            paths.installer_log.clone().into_os_string(),
-        ),
-    ];
-    if let Some(version) = &options.target_version {
-        values.push(("GMARK_E2E_TARGET_VERSION".into(), version.clone().into()));
-    }
-    if let Some(url) = &options.manifest_url {
-        values.push(("GMARK_UPDATER_E2E_MANIFEST_URL".into(), url.clone().into()));
-    }
-    if let Some(path) = &options.signing_private_key {
-        values.push((
-            "GMARK_E2E_SIGNING_PRIVATE_KEY".into(),
-            path.clone().into_os_string(),
-        ));
-    }
-    if let Some(path) = &options.signing_public_key {
-        values.push((
-            "GMARK_E2E_SIGNING_PUBLIC_KEY".into(),
-            path.clone().into_os_string(),
-        ));
-    }
-    if let Some(path) = &options.helper {
-        values.push(("GMARK_E2E_HELPER".into(), path.clone().into_os_string()));
-    }
-    if let Some(path) = &options.agent {
-        values.push(("GMARK_E2E_AGENT".into(), path.clone().into_os_string()));
-    }
-    if let Some(path) = &options.apply_plan {
-        values.push(("GMARK_E2E_APPLY_PLAN".into(), path.clone().into_os_string()));
-    }
-    if let Some(path) = &options.current_installer {
-        values.push((
-            "GMARK_E2E_CURRENT_INSTALLER".into(),
-            path.clone().into_os_string(),
-        ));
-    }
-    if let Some(path) = &options.next_installer {
-        values.push((
-            "GMARK_E2E_NEXT_INSTALLER".into(),
-            path.clone().into_os_string(),
-        ));
-    }
-    if let Some(key) = &options.public_key_base64 {
-        values.push(("GMARK_E2E_PUBLIC_KEY_BASE64".into(), key.clone().into()));
-    }
-    values
 }
 
 fn spawn_program(
@@ -773,11 +776,4 @@ fn assert_result(path: &Path, expected: &str, paths: &E2ePaths) -> Result<(), St
         ));
     }
     Ok(())
-}
-
-fn terminate(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
 }

@@ -5,6 +5,8 @@
 use super::*;
 use std::path::Path;
 
+/// Stages a fresh UUID transaction only after quit approval, keeping the
+/// verified source reusable when any pre-handoff validation fails.
 pub(crate) fn write_apply_plan(
     updates_root: &Path,
     release: &UpdateRelease,
@@ -129,17 +131,6 @@ pub(crate) fn write_apply_plan(
             return Err(error);
         }
     };
-    let installed_agent = match installed_agent_path() {
-        Ok(path) => path,
-        Err(error) => {
-            cleanup_failed_prepare(
-                transaction_id,
-                &transaction_dir,
-                Some(&acknowledgement_capability),
-            );
-            return Err(error);
-        }
-    };
     let helper = match stage_update_helper(&transaction_dir, &installed_helper) {
         Ok(helper) => helper,
         Err(error) => {
@@ -151,15 +142,31 @@ pub(crate) fn write_apply_plan(
             return Err(error);
         }
     };
-    let agent = match stage_update_agent(&transaction_dir, &installed_agent) {
-        Ok(agent) => agent,
-        Err(error) => {
-            cleanup_failed_prepare(
-                transaction_id,
-                &transaction_dir,
-                Some(&acknowledgement_capability),
-            );
-            return Err(error);
+    #[cfg(target_os = "windows")]
+    let agent = None;
+    #[cfg(not(target_os = "windows"))]
+    let agent = {
+        let installed_agent = match installed_agent_path() {
+            Ok(path) => path,
+            Err(error) => {
+                cleanup_failed_prepare(
+                    transaction_id,
+                    &transaction_dir,
+                    Some(&acknowledgement_capability),
+                );
+                return Err(error);
+            }
+        };
+        match stage_update_agent(&transaction_dir, &installed_agent) {
+            Ok(agent) => Some(agent),
+            Err(error) => {
+                cleanup_failed_prepare(
+                    transaction_id,
+                    &transaction_dir,
+                    Some(&acknowledgement_capability),
+                );
+                return Err(error);
+            }
         }
     };
     if let Err(error) = gmark_update_core::write_apply_plan_v2(&plan_path, &plan_v2) {
@@ -194,7 +201,6 @@ pub(crate) fn write_apply_plan(
         plan_path,
         helper,
         agent,
-        plan,
         plan_v2,
         acknowledgement_capability,
     })

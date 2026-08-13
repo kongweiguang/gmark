@@ -99,6 +99,11 @@ pub struct UpdaterE2eOptions {
     pub apply_plan: Option<PathBuf>,
     pub acknowledgement: Option<PathBuf>,
     pub version_marker: Option<PathBuf>,
+    /// Optional explicit lock path for drivers that expose the V2 handoff lock.
+    pub lifetime_lock: Option<PathBuf>,
+    /// Optional helper log override so a failed handoff remains diagnosable.
+    pub helper_log: Option<PathBuf>,
+    /// Kept as a wire-compatibility path; the harness never treats it as an installation copy.
     pub backup: Option<PathBuf>,
     pub installer_log: Option<PathBuf>,
     pub old_pid: Option<PathBuf>,
@@ -134,6 +139,8 @@ impl Default for UpdaterE2eOptions {
             apply_plan: None,
             acknowledgement: None,
             version_marker: None,
+            lifetime_lock: None,
+            helper_log: None,
             backup: None,
             installer_log: None,
             old_pid: None,
@@ -228,6 +235,12 @@ pub fn parse_args(arguments: &[String]) -> Result<ParsedUpdaterE2eArgs, String> 
             }
             "--version-marker" | "--version-path" => {
                 options.version_marker = Some(path_value(arguments, &mut index, argument)?)
+            }
+            "--lifetime-lock" | "--lifecycle-lock" | "--lifetime-lock-path" => {
+                options.lifetime_lock = Some(path_value(arguments, &mut index, argument)?)
+            }
+            "--helper-log" | "--helper-log-path" => {
+                options.helper_log = Some(path_value(arguments, &mut index, argument)?)
             }
             "--backup" | "--backup-path" => {
                 options.backup = Some(path_value(arguments, &mut index, argument)?)
@@ -338,6 +351,9 @@ pub struct E2ePaths {
     pub logs_root: PathBuf,
     pub acknowledgement: PathBuf,
     pub version_marker: PathBuf,
+    pub lifetime_lock: PathBuf,
+    pub helper_log: PathBuf,
+    /// V2 retains this field for wire compatibility; no E2E assertion treats it as an installation copy.
     pub backup: PathBuf,
     pub installer_log: PathBuf,
     pub old_pid: PathBuf,
@@ -370,17 +386,9 @@ pub fn resolve_paths(
             .unwrap_or(default);
         ensure_inside(&updates_root, &path, label)
     };
-    let current = options
-        .current_binary
-        .as_deref()
-        .map(|path| absolutize(workspace_root, path))
-        .unwrap_or_else(|| updates_root.join("gmark-n"));
-    let backup_default = current
-        .file_name()
-        .map(|name| {
-            current.with_file_name(format!("{}.gmark-update-backup", name.to_string_lossy()))
-        })
-        .unwrap_or_else(|| control_root.join("gmark-n.gmark-update-backup"));
+    // The protocol still carries a backup path for compatibility, but the simplified
+    // production flow no longer creates a complete installation copy or restores it.
+    let backup_default = control_root.join("compatibility-backup-path");
     let resolved = (|| {
         Ok(E2ePaths {
             temporary_root: temporary_root.clone(),
@@ -397,6 +405,16 @@ pub fn resolve_paths(
                 options.version_marker.as_deref(),
                 control_root.join("version"),
                 "version marker",
+            )?,
+            lifetime_lock: marker(
+                options.lifetime_lock.as_deref(),
+                transaction.join("lifetime.lock"),
+                "lifetime lock",
+            )?,
+            helper_log: marker(
+                options.helper_log.as_deref(),
+                transaction.join("helper.log"),
+                "helper log",
             )?,
             backup: options
                 .backup
@@ -553,7 +571,9 @@ pub fn run_at(workspace_root: &Path, arguments: &[String]) -> Result<(), String>
         ))
     } else if options.dry_run {
         println!(
-            "updater-e2e dry-run: platform={}, decision={}, ui-check-root={}, updates-root={}",
+            "updater-e2e dry-run: platform={}, decision={}, ui-check-root={}, updates-root={}, \
+             protocol=v2-only, legacy-manifest=required-for-discovery, \
+             install-gate=lifetime-lock, diagnostics=result/helper/installer logs",
             platform_name(),
             options.decision.as_str(),
             paths.ui_check_root.display(),
@@ -564,7 +584,17 @@ pub fn run_at(workspace_root: &Path, arguments: &[String]) -> Result<(), String>
         runner::execute(&options, &paths)
     };
     if result.is_ok() {
-        workspace.cleanup()?;
+        if !options.dry_run && options.decision == UnsavedDecision::Cancel {
+            // A cancelled handoff must leave the downloaded artifact available for retry; an
+            // owned temporary root is therefore retained until the operator inspects it.
+            workspace.preserve_for_retry();
+            println!(
+                "updater-e2e retained cancelled update root for retry: {}",
+                paths.updates_root.display()
+            );
+        } else {
+            workspace.cleanup()?;
+        }
     }
     result
 }
@@ -608,6 +638,12 @@ impl RuntimeWorkspace {
         }
         Ok(())
     }
+
+    /// Keeps an owned sandbox alive after cancellation because deleting it would discard the
+    /// already verified update that the user is expected to retry.
+    fn preserve_for_retry(&mut self) {
+        self.keep_temp = true;
+    }
 }
 
 fn platform_name() -> &'static str {
@@ -622,14 +658,18 @@ fn platform_name() -> &'static str {
     }
 }
 
+/// Reports preflight failures with the transaction evidence needed to retry safely instead of
+/// hiding a missing artifact behind a generic command error.
 fn contract_error(paths: &E2ePaths, detail: &str) -> String {
     format!(
-        "updater-e2e [preflight] {detail}; platform={}; logs={}",
+        "updater-e2e [preflight] {detail}; platform={}; {}",
         platform_name(),
-        paths.logs_root.display()
+        diagnostic_context(paths)
     )
 }
 
+/// Formats a phase failure without discarding logs, because installer and helper failures often
+/// occur after the child process has already disappeared.
 fn stage_error(
     stage: &str,
     command: &str,
@@ -639,8 +679,22 @@ fn stage_error(
 ) -> String {
     let exit = code.map_or_else(|| "n/a".to_owned(), |code| code.to_string());
     format!(
-        "updater-e2e [{stage}] command={command}; exit-code={exit}; logs={}; {detail}",
-        paths.logs_root.display()
+        "updater-e2e [{stage}] command={command}; exit-code={}; {}; {detail}",
+        exit,
+        diagnostic_context(paths)
+    )
+}
+
+/// Keeps failed runs actionable when a helper or installer exits before writing a structured
+/// result; operators can inspect the preserved paths and retry the signed artifact manually.
+fn diagnostic_context(paths: &E2ePaths) -> String {
+    format!(
+        "logs={}; result={}; helper-log={}; installer-log={}; manual-download=download the \
+         signed N+1 artifact from the release/channel and retry",
+        paths.logs_root.display(),
+        paths.result.display(),
+        paths.helper_log.display(),
+        paths.installer_log.display(),
     )
 }
 
@@ -658,24 +712,30 @@ pub fn print_help() {
     println!(
         "Gmark updater E2E harness\n\
          Usage: cargo run -p xtask -- updater-e2e [OPTIONS]\n\
-         Required for a production run: --current-binary PATH --next-binary PATH (or --next-installer PATH),\n\
+         Required for a production run: --current-binary PATH and either --next-binary PATH or --next-installer PATH,\n\
          --current-version SEMVER --target-version SEMVER --driver PATH, --signing-private-key PATH,\n\
          and --signing-public-key PATH (or --public-key-base64 VALUE).\n\
          The driver contract receives --phase unsaved-decision then trigger-update and isolated paths\n\
-         through arguments and GMARK_E2E_* environment variables. It must write helper.pid,\n\
-         new.pid, startup-ack (exactly '<target>\\n'), version, and installer.log for save/discard;\n\
-         macOS/Linux drivers also write agent.pid, while Windows verifies Inno Setup feedback.\n\
+         through arguments and GMARK_E2E_* environment variables. It must expose lifetime.lock\n\
+         before handoff, then write helper.pid, new.pid, startup-ack (exactly '<target>\\n'),\n\
+         version and result.json for save/discard; helper.log is retained on helper failures, and\n\
+         Windows additionally writes installer.log from Inno Setup. installer.log must not appear\n\
+         while lifetime.lock is held\n\
+         by N; macOS/Linux drivers also write agent.pid, while Windows verifies Inno Setup's native\n\
+         progress feedback without an agent.\n\
          Platform launchers: Windows .ps1/.cmd use PowerShell/cmd; macOS and Linux use executable or .sh.\n\
          Options:\n\
          --ui-check-root PATH --updates-root PATH --current-binary PATH --next-binary PATH\n\
          --current-installer PATH --next-installer PATH --signing-private-key PATH\n\
          --signing-public-key PATH --public-key-base64 VALUE --current-version SEMVER\n\
          --target-version SEMVER --manifest-url LOOPBACK_URL --driver PATH --helper PATH --agent PATH --apply-plan PATH\n\
-         --ack-path PATH --version-path PATH --backup-path PATH --installer-log PATH\n\
+         --ack-path PATH --version-path PATH --lifetime-lock PATH --helper-log PATH\n\
+         --backup-path PATH --installer-log PATH\n\
          --old-pid-file PATH --new-pid-file PATH --helper-pid-file PATH --agent-pid-file PATH\n\
          --result PATH --decision cancel|save|discard --timeout 90s --dry-run --fixture --keep-temp\n\
          A missing artifact, stale marker, or absent automation driver is reported as environment not ready;\n\
          no unexecuted fixture is reported as a production pass. Failure output always includes stage,\n\
-         command, exit code when available, and the preserved log directory."
+         command, exit code when available, result/helper/installer log paths, and a manual download\n\
+         instruction. New clients exercise V2 only; the legacy manifest remains a discovery artifact."
     );
 }

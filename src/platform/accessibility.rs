@@ -28,6 +28,11 @@ pub(crate) const GO_TO_LINE_ID: NodeId = NodeId(8);
 pub(crate) const ERROR_ID: NodeId = NodeId(9);
 const SEARCH_INPUT_ID: NodeId = NodeId(10);
 const NAVIGATION_INPUT_ID: NodeId = NodeId(11);
+pub(crate) const UPDATE_SECONDARY_ID: NodeId = NodeId(19);
+pub(crate) const UPDATE_PRIMARY_ID: NodeId = NodeId(20);
+pub(crate) const CLOSE_CANCEL_ID: NodeId = NodeId(21);
+pub(crate) const CLOSE_DISCARD_ID: NodeId = NodeId(22);
+pub(crate) const CLOSE_SAVE_ID: NodeId = NodeId(23);
 pub(crate) const MATH_ID: NodeId = NodeId(12);
 pub(crate) const MATH_INPUT_ID: NodeId = NodeId(13);
 pub(crate) const MATH_TAB_LIST_ID: NodeId = NodeId(14);
@@ -166,6 +171,8 @@ pub(crate) struct EditorAccessibilitySnapshot {
     pub status: String,
     pub error: Option<String>,
     pub busy: bool,
+    pub update_actions: Vec<String>,
+    pub close_actions: Vec<String>,
     pub search_visible: bool,
     pub navigation_visible: bool,
     pub caret: Option<(u64, usize)>,
@@ -417,6 +424,17 @@ fn build_tree(snapshot: EditorAccessibilitySnapshot) -> TreeUpdate {
     root.push_child(SAVE_ID);
     root.push_child(FIND_ID);
     root.push_child(GO_TO_LINE_ID);
+    if !snapshot.update_actions.is_empty() {
+        root.push_child(UPDATE_SECONDARY_ID);
+        if snapshot.update_actions.len() > 1 {
+            root.push_child(UPDATE_PRIMARY_ID);
+        }
+    }
+    if !snapshot.close_actions.is_empty() {
+        root.push_child(CLOSE_CANCEL_ID);
+        root.push_child(CLOSE_DISCARD_ID);
+        root.push_child(CLOSE_SAVE_ID);
+    }
     if snapshot.error.is_some() {
         root.push_child(ERROR_ID);
     }
@@ -653,6 +671,18 @@ fn build_tree(snapshot: EditorAccessibilitySnapshot) -> TreeUpdate {
     nodes.push((SAVE_ID, action_button("Save")));
     nodes.push((FIND_ID, action_button("Find")));
     nodes.push((GO_TO_LINE_ID, action_button("Go to line")));
+    if let Some(label) = snapshot.update_actions.first() {
+        nodes.push((UPDATE_SECONDARY_ID, action_button(label)));
+    }
+    if let Some(label) = snapshot.update_actions.get(1) {
+        nodes.push((UPDATE_PRIMARY_ID, action_button(label)));
+    }
+    for (id, label) in [CLOSE_CANCEL_ID, CLOSE_DISCARD_ID, CLOSE_SAVE_ID]
+        .into_iter()
+        .zip(snapshot.close_actions.iter())
+    {
+        nodes.push((id, action_button(label)));
+    }
 
     if let Some(error) = snapshot.error {
         let mut node = Node::new(Role::Alert);

@@ -30,10 +30,33 @@ fn run_from_args(args: &[OsString]) -> ExitCode {
         Err(V2RunError::Trusted { plan, failure }) => {
             eprintln!("Gmark update failed:{}", failure.message);
             report_v2_failure(plan.as_ref(), &failure);
+            show_update_failure(&failure.message);
             ExitCode::FAILURE
         }
     }
 }
+
+/// Shows post-handoff failures on Windows because the helper intentionally has
+/// no console and the updated application may be unable to start far enough to
+/// render its persisted result. The standard dialog supports Ctrl+C copying.
+#[cfg(target_os = "windows")]
+// Reason: MessageBoxW is the synchronous post-handoff fallback; remove when a safe Rust dialog preserves Ctrl+C diagnostics.
+#[allow(unsafe_code)]
+fn show_update_failure(message: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+    use windows::core::HSTRING;
+
+    let text = HSTRING::from(message);
+    let title = HSTRING::from("Gmark update needs attention");
+    // SAFETY: both immutable UTF-16 strings remain alive for the synchronous
+    // call, and a null owner is valid for a process-modal diagnostic dialog.
+    let _ = unsafe { MessageBoxW(None, &text, &title, MB_OK | MB_ICONERROR | MB_SETFOREGROUND) };
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_update_failure(_message: &str) {}
 
 // These helpers only support the legacy protocol fixtures that still live in
 // the unit-test module. They are deliberately not reachable from the binary

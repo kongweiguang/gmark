@@ -2,7 +2,7 @@
 
 //! Helper-launch plan construction and cache recovery.
 
-use std::{path::PathBuf, time::Instant};
+use std::path::PathBuf;
 
 use super::*;
 
@@ -29,40 +29,12 @@ pub(super) enum WorkerEvent {
     Failed { message: String, retryable: bool },
 }
 
-pub(super) struct PendingInstall {
-    pub(super) release: UpdateRelease,
-    pub(super) artifact_path: PathBuf,
-    pub(super) plan: ApplyPlanV1,
-}
-
 pub(super) struct PreparedInstall {
     pub(super) plan_path: PathBuf,
     pub(super) helper: StagedHelper,
-    pub(super) agent: StagedAgent,
-    pub(super) plan: ApplyPlanV1,
+    /// Windows uses Inno Setup's own progress surface, so no feedback agent
+    /// is staged there; other platforms keep the existing lightweight agent.
+    pub(super) agent: Option<StagedAgent>,
     pub(super) plan_v2: gmark_update_core::ApplyPlanV2,
     pub(super) acknowledgement_capability: String,
-}
-
-/// Metadata kept outside the GPUI entity so a dropped entity cannot release
-/// the process lifetime lock while the OS process is still alive.
-#[derive(Clone)]
-pub(super) struct InstallAttempt {
-    pub(super) release: UpdateRelease,
-    pub(super) artifact_path: PathBuf,
-    pub(super) plan_path: PathBuf,
-    pub(super) plan: gmark_update_core::ApplyPlanV2,
-    pub(super) helper: StagedHelper,
-    pub(super) agent: StagedAgent,
-    pub(super) acknowledgement_capability: String,
-    pub(super) started_at: Instant,
-}
-
-/// A retry is deliberately independent from a previous transaction.  The
-/// source artifact and signed envelope remain in `v<version>`; preparing the
-/// retry allocates a new UUID transaction directory.
-#[derive(Clone)]
-pub(super) struct RetryPayload {
-    pub(super) release: UpdateRelease,
-    pub(super) artifact_path: PathBuf,
 }
