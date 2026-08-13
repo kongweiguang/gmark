@@ -52,13 +52,11 @@ pub fn install(
         copy_verified_artifact(artifact, &temporary, current_mode, plan.artifact_size)
     {
         remove_owned_temp(&temporary);
-        return Err(error);
+        return Err(error.into());
     }
     if let Err(error) = fs::rename(&temporary, target) {
         remove_owned_temp(&temporary);
-        return Err(format!(
-            "failed to atomically install new AppImage: {error}"
-        ));
+        return Err(format!("failed to atomically install new AppImage: {error}").into());
     }
     sync_directory(parent).map_err(PlatformInstallFailure::committed_or_unknown)
 }

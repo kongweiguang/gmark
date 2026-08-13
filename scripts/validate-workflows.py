@@ -218,6 +218,31 @@ def validate_release_contract(
         fail(path, "release job must explicitly allow skipped non-release gates")
 
 
+def validate_quality_contract(path: Path, jobs: dict[str, object]) -> None:
+    """锁定非 Windows 平台编译门禁，避免 cfg 专属代码直到正式发布才暴露类型错误。"""
+
+    platform_compile = jobs.get("platform-compile")
+    if not isinstance(platform_compile, dict):
+        fail(path, "quality workflow requires Linux and macOS platform compile gates")
+    strategy = platform_compile.get("strategy")
+    matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+    include = matrix.get("include") if isinstance(matrix, dict) else None
+    if not isinstance(include, list):
+        fail(path, "platform compile gate requires an explicit runner matrix")
+    runners = {
+        entry.get("os")
+        for entry in include
+        if isinstance(entry, dict) and isinstance(entry.get("os"), str)
+    }
+    if not any(runner.startswith("ubuntu-") for runner in runners) or not any(
+        runner.startswith("macos-") for runner in runners
+    ):
+        fail(path, "platform compile gate must cover Linux and macOS runners")
+    scripts = joined_run_scripts(platform_compile.get("steps"))
+    if "cargo check --workspace --all-targets --all-features --locked" not in scripts:
+        fail(path, "platform compile gate must type-check every target with all features")
+
+
 def main() -> None:
     workflows = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
     if not workflows:
@@ -241,6 +266,8 @@ def main() -> None:
                 fail(path, f"job {job_name} requires steps or reusable-workflow uses")
         if path.name == "build-release.yml":
             validate_release_contract(path, document, jobs)
+        if path.name == "quality.yml":
+            validate_quality_contract(path, jobs)
     print(f"parsed and validated {len(workflows)} GitHub Actions workflows")
 
 
