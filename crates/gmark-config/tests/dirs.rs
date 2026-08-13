@@ -9,7 +9,9 @@ use gmark_config::{
     read_recent_files_with_dirs,
 };
 #[cfg(unix)]
-use gmark_config::{WorkspaceSession, WorkspaceSessionTab, record_recent_file_with_dirs};
+use gmark_config::{
+    WorkspaceSession, WorkspaceSessionPane, WorkspaceSessionTab, record_recent_file_with_dirs,
+};
 use tempfile::TempDir;
 #[cfg(unix)]
 use uuid::Uuid;
@@ -172,12 +174,14 @@ fn sensitive_state_files_are_created_with_mode_0600() -> Result<()> {
     assert_eq!(installation_mode, 0o600);
 
     let store = WorkspaceSessionStore::new(dirs.clone());
-    store.upsert(&WorkspaceSession::new(
-        Uuid::new_v4(),
-        vec![WorkspaceSessionTab::new("session.md".into(), false)],
-        0,
-        None,
-    ))?;
+    let mut session = WorkspaceSession::single_pane(Uuid::new_v4(), None);
+    let pane_id = session.focused_pane;
+    let tab = WorkspaceSessionTab::new("session.md".into(), false);
+    let tab_id = tab.id;
+    session
+        .panes
+        .insert(pane_id, WorkspaceSessionPane::new(vec![tab], Some(tab_id)));
+    store.upsert(&session)?;
     let session_mode = fs::metadata(dirs.workspace_session_file())?
         .permissions()
         .mode()

@@ -40,3 +40,31 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check PyYAML==6.0.3
           python scripts/validate-workflows.py
+
+  platform-compile:
+    name: ${{ matrix.name }} platform compile
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-22.04
+          - name: macOS
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake clang libssl-dev \
+            libfontconfig1-dev libfreetype6-dev libx11-dev libxcb1-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxdamage-dev libxfixes-dev libxrender-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev \
+            libvulkan-dev
+      - name: Compile platform-specific binaries and tests
+        run: cargo check --workspace --all-targets --all-features --locked
