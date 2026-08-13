@@ -8,38 +8,43 @@ use std::{
 
 use anyhow::Result;
 use gmark_config::{
-    AccessibilityOverride, AppPreferences, AutoSavePreference, ConfigDirs,
-    DocumentLoadingPreferences, ResourceInsertBehavior, StartupOpenPreference, StatusBarButton,
-    StatusBarPreferences, SystemVisualPreferences, ThemeAppearance, ThemePalette,
-    VisualAccessibilityPreferences, load_or_create_app_preferences_with_dirs,
-    load_or_create_installation_id_with_dirs, read_app_preferences_with_dirs,
-    read_recent_files_with_dirs, record_recent_file_with_dirs, remove_recent_file_with_dirs,
-    save_app_preferences_with_dirs,
+    AccessibilityOverride, AppDirs, AppPreferences, AutoSavePreference, DocumentLoadingPreferences,
+    ResourceInsertBehavior, StartupOpenPreference, StatusBarButton, StatusBarPreferences,
+    SystemVisualPreferences, ThemeAppearance, ThemePalette, VisualAccessibilityPreferences,
+    load_or_create_app_preferences_with_dirs, load_or_create_installation_id_with_dirs,
+    read_app_preferences_with_dirs, read_recent_files_with_dirs, record_recent_file_with_dirs,
+    remove_recent_file_with_dirs, save_app_preferences_with_dirs,
 };
 use tempfile::TempDir;
 
-fn temporary_dirs() -> Result<(TempDir, ConfigDirs)> {
+fn temporary_dirs() -> Result<(TempDir, AppDirs)> {
     let temporary = TempDir::new()?;
-    let dirs = ConfigDirs::from_root(temporary.path());
+    let dirs = AppDirs::from_root(temporary.path());
     Ok((temporary, dirs))
 }
 
 #[test]
 fn config_paths_preserve_the_existing_contract() -> Result<()> {
     let (_temporary, dirs) = temporary_dirs()?;
-    assert_eq!(dirs.languages_dir(), dirs.root().join("languages"));
-    assert_eq!(dirs.history_file(), dirs.root().join(".history"));
-    assert_eq!(dirs.app_config_file(), dirs.root().join("config.toml"));
-    assert_eq!(dirs.recovery_dir(), dirs.root().join("recovery"));
-    assert_eq!(dirs.crash_reports_dir(), dirs.root().join("crash-reports"));
-    assert_eq!(dirs.updates_dir(), dirs.root().join("updates"));
+    assert_eq!(dirs.languages_dir(), dirs.config_root().join("languages"));
+    assert_eq!(dirs.history_file(), dirs.state_root().join(".history"));
+    assert_eq!(
+        dirs.app_config_file(),
+        dirs.config_root().join("config.toml")
+    );
+    assert_eq!(dirs.recovery_dir(), dirs.state_root().join("recovery"));
+    assert_eq!(
+        dirs.crash_reports_dir(),
+        dirs.state_root().join("crash-reports")
+    );
+    assert_eq!(dirs.updates_dir(), dirs.cache_root().join("updates"));
     assert_eq!(
         dirs.installation_id_file(),
-        dirs.root().join("installation-id")
+        dirs.state_root().join("installation-id")
     );
     assert_eq!(
         dirs.workspace_session_file(),
-        dirs.root().join("workspace-session.json")
+        dirs.state_root().join("workspace-session.json")
     );
     Ok(())
 }
@@ -105,7 +110,7 @@ fn preferences_round_trip_with_stable_toml_keys() -> Result<()> {
 #[test]
 fn visual_accessibility_invalid_values_fall_back_independently() -> Result<()> {
     let (_temporary, dirs) = temporary_dirs()?;
-    fs::create_dir_all(dirs.root())?;
+    fs::create_dir_all(dirs.config_root())?;
     fs::write(
         dirs.app_config_file(),
         r#"
@@ -154,7 +159,7 @@ fn preferences_default_and_invalid_values_follow_compatibility_rules() -> Result
         AppPreferences::default()
     );
 
-    fs::create_dir_all(dirs.root())?;
+    fs::create_dir_all(dirs.config_root())?;
     fs::write(dirs.app_config_file(), "this is not valid = [")?;
     assert_eq!(
         read_app_preferences_with_dirs(&dirs)?,

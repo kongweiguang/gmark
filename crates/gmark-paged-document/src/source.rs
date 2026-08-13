@@ -1,6 +1,7 @@
 // @author kongweiguang
 
 use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -65,6 +66,15 @@ pub enum PagedDocumentError {
     },
     #[error("large-document recovery failed: {0}")]
     Recovery(String),
+}
+
+impl PagedDocumentError {
+    /// Whether the failure crossed the atomic replacement boundary and the
+    /// caller must refresh its disk baseline before offering another save.
+    #[must_use]
+    pub fn target_may_have_changed(&self) -> bool {
+        matches!(self, Self::Persist { .. })
+    }
 }
 
 const CACHE_PAGE_BYTES: u64 = 256 * 1024;
@@ -218,6 +228,16 @@ impl FileSource {
         &self.path
     }
 
+    /// Open an independent sequential reader with the same sharing contract.
+    /// A `File::try_clone` would share the seek cursor on Windows, so scanners
+    /// use a fresh handle while retaining FILE_SHARE_DELETE.
+    pub(crate) fn try_clone_file(&self) -> Result<File, PagedDocumentError> {
+        open_shared(&self.path).map_err(|source| PagedDocumentError::Io {
+            path: self.path.clone(),
+            source,
+        })
+    }
+
     pub fn cache_stats(&self) -> FileCacheStats {
         let cache = self
             .cache
@@ -288,9 +308,11 @@ fn open_shared(path: &Path) -> std::io::Result<File> {
 
     // 允许日志写入方追加、轮转或替换文件；当前句柄仍稳定指向打开时的文件对象。
     const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+    const FILE_FLAG_POSIX_SEMANTICS: u32 = 0x0100_0000;
     OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ_WRITE_DELETE)
+        .custom_flags(FILE_FLAG_POSIX_SEMANTICS)
         .open(path)
 }
 
@@ -318,20 +340,130 @@ pub(crate) fn sync_parent_directory(_parent: &Path) -> Result<(), PagedDocumentE
 /// 把同目录、已 fsync 的临时文件原子替换为目标文件。
 ///
 /// Windows 的通用 rename/persist 在目标仍被另一个编辑快照持有时会返回 AccessDenied；
-/// MoveFileExW 明确支持 replace-existing + write-through；通过安全封装调用，避免业务
-/// crate 引入 unsafe 边界。
+/// 已有目标改用安全的 ReplaceFileW 封装，Save As 新目标再回退到 MoveFileExW。
 #[cfg(windows)]
 pub(crate) fn persist_temporary(
     temporary: tempfile::NamedTempFile,
     path: &Path,
 ) -> Result<(), PagedDocumentError> {
     let temporary_path = temporary.into_temp_path();
-    atomicwrites::replace_atomic(&temporary_path, path).map_err(|source| {
-        PagedDocumentError::Persist {
-            path: path.to_path_buf(),
-            source,
-        }
+    replace_existing_windows(&temporary_path, path).map_err(|source| PagedDocumentError::Persist {
+        path: path.to_path_buf(),
+        source,
     })
+}
+
+/// Replace an existing destination through the winsafe wrapper around
+/// ReplaceFileW.  This permits replacement while the destination is held by a
+/// FILE_SHARE_DELETE reader.  A missing destination (or a non-Unicode Windows
+/// path that the `&str` wrapper cannot represent) keeps the atomicwrites
+/// MoveFileEx fallback used by Save As.
+#[cfg(windows)]
+fn replace_existing_windows(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let source_path = source;
+    let destination_path = destination;
+    let destination_exists = match std::fs::metadata(destination) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    let (Some(source), Some(destination)) = (source_path.to_str(), destination_path.to_str())
+    else {
+        return atomicwrites::replace_atomic(source_path, destination_path);
+    };
+    if !destination_exists {
+        return atomicwrites::replace_atomic(source_path, destination_path);
+    }
+
+    winsafe::ReplaceFile(
+        destination,
+        source,
+        None,
+        winsafe::co::REPLACEFILE::WRITE_THROUGH,
+    )
+    .map_err(|error| std::io::Error::from_raw_os_error(error.raw() as i32))
+}
+
+/// Stream an immutable snapshot into an atomic replacement without retaining
+/// the complete encoded output in memory.  The optional identity is checked
+/// both before staging and immediately before replacement; a missing file or
+/// identity mismatch leaves the existing target untouched.
+pub fn atomic_write_stream(
+    path: impl AsRef<Path>,
+    expected_identity: Option<&FileIdentity>,
+    cancellation: &crate::SearchCancellation,
+    writer: impl FnOnce(&mut dyn Write, &crate::SearchCancellation) -> Result<(), PagedDocumentError>,
+) -> Result<FileIdentity, PagedDocumentError> {
+    let path = path.as_ref();
+    if cancellation.is_cancelled() {
+        return Err(PagedDocumentError::Cancelled);
+    }
+    if let Some(expected) = expected_identity {
+        let current = FileSource::open(path)?.identity()?;
+        if !identity_matches(expected, &current) {
+            return Err(PagedDocumentError::SourceChanged);
+        }
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|source| PagedDocumentError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    writer(&mut temporary, cancellation)?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|source| PagedDocumentError::Io {
+            path: temporary.path().to_path_buf(),
+            source,
+        })?;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        temporary
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .map_err(|source| PagedDocumentError::Io {
+                path: temporary.path().to_path_buf(),
+                source,
+            })?;
+    }
+    if let Some(expected) = expected_identity {
+        let current = FileSource::open(path)?.identity()?;
+        if !identity_matches(expected, &current) {
+            return Err(PagedDocumentError::SourceChanged);
+        }
+    }
+    if cancellation.is_cancelled() {
+        return Err(PagedDocumentError::Cancelled);
+    }
+    persist_temporary(temporary, path)?;
+    sync_parent_directory(parent).map_err(|error| post_persist_error(path, error))?;
+    FileSource::open(path)
+        .and_then(|source| source.identity())
+        .map_err(|error| post_persist_error(path, error))
+}
+
+fn post_persist_error(path: &Path, error: PagedDocumentError) -> PagedDocumentError {
+    let source = match error {
+        PagedDocumentError::Io { source, .. } | PagedDocumentError::Persist { source, .. } => {
+            source
+        }
+        error => std::io::Error::other(error.to_string()),
+    };
+    PagedDocumentError::Persist {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+fn identity_matches(expected: &FileIdentity, current: &FileIdentity) -> bool {
+    expected.path == current.path
+        && expected.len == current.len
+        && expected.modified_nanos == current.modified_nanos
+        && expected
+            .os_file_id
+            .as_ref()
+            .is_none_or(|file_id| current.os_file_id.as_ref() == Some(file_id))
 }
 
 #[cfg(not(windows))]
@@ -347,7 +479,7 @@ pub(crate) fn persist_temporary(
         })?;
     persisted
         .sync_all()
-        .map_err(|source| PagedDocumentError::Io {
+        .map_err(|source| PagedDocumentError::Persist {
             path: path.to_path_buf(),
             source,
         })

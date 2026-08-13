@@ -1,12 +1,12 @@
 <!-- @author kongweiguang -->
 
-# GMark 渲染总览
+# Gmark 渲染总览
 
-这是一页用于快速观察 GMark 渲染效果的混合样板。它把常见的行内格式、块结构、资源、公式、Mermaid 和安全 HTML 放在同一份普通 Markdown 中。
+这是一页用于快速观察 Gmark 渲染效果的混合样板。它把常见的行内格式、块结构、资源、公式、Mermaid 和安全 HTML 放在同一份普通 Markdown 中。
 
 ## 1. 标题、段落与行内格式
 
-GMark 支持从一级到六级标题，并保留原始 Markdown 源码。普通段落可以混合 **粗体**、*斜体*、***粗斜体***、~~删除线~~、<u>下划线</u>、上标 x^2^、下标 H~2~O、`inline code` 和 [普通链接](https://example.com)。
+Gmark 支持从一级到六级标题，并保留原始 Markdown 源码。普通段落可以混合 **粗体**、*斜体*、***粗斜体***、~~删除线~~、<u>下划线</u>、上标 x^2^、下标 H~2~O、`inline code` 和 [普通链接](https://example.com)。
 
 行内数学公式适合短表达式，例如 $E = mc^2$、$S = \pi r^2$ 和 $y = \beta_0 + \beta_1x + \varepsilon$。
 
@@ -27,9 +27,9 @@ GMark 支持从一级到六级标题，并保留原始 Markdown 源码。普通�
 
 标准 Markdown 图片使用本地相对路径：
 
-![GMark 图标](../../assets/icon/gmark-icon-256.png "GMark icon")
+![Gmark 图标](../../assets/icon/gmark-icon-256.png "Gmark icon")
 
-链接可以带标题。GMark 资源卡片使用链接标题声明资源类型，例如下面的 JSON 文件仍然是普通文件引用：
+链接可以带标题。Gmark 资源卡片使用链接标题声明资源类型，例如下面的 JSON 文件仍然是普通文件引用：
 
 [查看示例配置](../../assets/custom-language.example.jsonc "gmark:resource")
 
@@ -68,9 +68,9 @@ GMark 支持从一级到六级标题，并保留原始 Markdown 源码。普通�
 
 > 好的渲染样板既展示能力，也保留足够简单的源码。
 >
-> —— GMark 文档笔记
+> —— Gmark 文档笔记
 
-GMark 使用 GFM 风格的 Callout：
+Gmark 使用 GFM 风格的 Callout：
 
 > [!NOTE]
 > 这是一个 Note，适合补充背景信息。
@@ -95,7 +95,7 @@ GMark 使用 GFM 风格的 Callout：
 | :--- | :---: | ---: |
 | 文本 | **粗体** | 说明内容 |
 | 代码 | `cargo test` | 命令与路径 |
-| 链接 | [GMark](https://github.com/kongweiguang/gmark) | 相关项目 |
+| 链接 | [Gmark](https://github.com/kongweiguang/gmark) | 相关项目 |
 | 状态 | ✅ / ⏳ | 进度速查 |
 
 ## 6. 代码、公式与图表
@@ -136,7 +136,7 @@ flowchart TD
 
 <!-- 这条注释只存在于源码中，不应出现在渲染正文。 -->
 
-[^gmark]: GMark 的脚注定义会保留在源文件中，并在渲染时与引用关联。
+[^gmark]: Gmark 的脚注定义会保留在源文件中，并在渲染时与引用关联。
 
 ## 8. 混合内容检查清单
 

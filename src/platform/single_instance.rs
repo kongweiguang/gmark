@@ -3,12 +3,11 @@
 //! Windows single-instance ownership and bounded local file-open forwarding.
 //!
 //! Windows AF_UNIX endpoints must fit in the 108-byte `sun_path` buffer, including its NUL
-//! terminator. We validate that `SUN_LEN` invariant before binding and fall back from an
-//! overlong `%TEMP%` path to the per-user LocalAppData known folder.
+//! terminator. We validate that `SUN_LEN` invariant before binding the endpoint under
+//! `~/.gmark/runtime`.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -18,10 +17,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
-use directories::BaseDirs;
 use fs4::fs_std::FileExt as _;
 use futures::channel::mpsc;
-use gmark_config::{GmarkConfigDirs, load_or_create_installation_id};
+use gmark_config::{AppDirs, load_or_create_installation_id_with_dirs};
 use sha2::{Digest as _, Sha256};
 use uds_windows::{UnixListener, UnixStream};
 
@@ -68,98 +66,35 @@ impl Drop for InstanceGuard {
 }
 
 pub(crate) fn acquire(paths: &[PathBuf]) -> anyhow::Result<InstanceLaunch> {
-    let dirs = GmarkConfigDirs::from_system()?;
-    let installation_id = load_or_create_installation_id()?;
-    let ui_check_root = std::env::var_os("GMARK_UI_CHECK_CONFIG_ROOT").map(PathBuf::from);
-    let socket_path = instance_socket_path(installation_id, ui_check_root.as_deref())?;
+    // 运行时根目录承载敏感的实例锁；不能回退到配置目录，也不能读取旧验收
+    // 环境变量，否则验收实例会与真实进程共享锁语义。
+    let dirs = AppDirs::from_system()?;
+    dirs.ensure_runtime_root()?;
+    let installation_id = load_or_create_installation_id_with_dirs(&dirs)?;
+    let socket_path = instance_socket_path(dirs.runtime_root(), installation_id)?;
     acquire_with_paths(&dirs.instance_lock_file(), &socket_path, paths)
 }
 
 fn instance_socket_path(
+    runtime_root: &Path,
     installation_id: uuid::Uuid,
-    ui_check_root: Option<&Path>,
 ) -> anyhow::Result<PathBuf> {
-    let temporary_root = std::env::temp_dir();
-    // `BaseDirs` resolves Windows' per-user LocalAppData known folder rather than another
-    // environment-controlled temporary location. It is stable across launches and user-writable.
-    let local_app_data_root = BaseDirs::new().map(|dirs| dirs.data_local_dir().to_path_buf());
-    select_instance_socket_path(
-        &temporary_root,
-        local_app_data_root.as_deref(),
-        installation_id,
-        ui_check_root,
-    )
-}
-
-fn select_instance_socket_path(
-    temporary_root: &Path,
-    local_app_data_root: Option<&Path>,
-    installation_id: uuid::Uuid,
-    ui_check_root: Option<&Path>,
-) -> anyhow::Result<PathBuf> {
-    let temporary_path =
-        temporary_root.join(instance_socket_file_name(installation_id, ui_check_root));
-    let temporary_error = match validate_socket_path(&temporary_path) {
-        Ok(()) => return Ok(temporary_path),
-        Err(error) => error,
-    };
-
-    let local_app_data_root = local_app_data_root.ok_or_else(|| {
-        anyhow::anyhow!(
-            "cannot select a Windows AF_UNIX IPC endpoint: %TEMP% candidate '{}' is unusable \
-             ({temporary_error:#}); the per-user LocalAppData fallback is unavailable. Shorten \
-             TEMP or restore LocalAppData.",
-            temporary_path.display()
-        )
-    })?;
-    let fallback_path =
-        local_app_data_root.join(fallback_socket_file_name(installation_id, ui_check_root));
-    validate_socket_path(&fallback_path).with_context(|| {
+    let socket_path = runtime_root.join(instance_socket_file_name(installation_id));
+    validate_socket_path(&socket_path).with_context(|| {
         format!(
-            "cannot select a Windows AF_UNIX IPC endpoint: %TEMP% candidate '{}' is unusable \
-             ({temporary_error:#}); LocalAppData fallback '{}' is unusable",
-            temporary_path.display(),
-            fallback_path.display()
+            "cannot use Gmark runtime root '{}' for the Windows AF_UNIX IPC endpoint",
+            runtime_root.display()
         )
     })?;
-    Ok(fallback_path)
+    Ok(socket_path)
 }
 
-fn instance_socket_file_name(installation_id: uuid::Uuid, ui_check_root: Option<&Path>) -> String {
-    let suffix = ui_check_root
-        .filter(|root| !root.as_os_str().is_empty())
-        .map(|root| format!("-{}", ui_check_root_hash(root)))
-        .unwrap_or_default();
-    format!("gmi-{}{suffix}.sock", installation_id.simple())
-}
-
-fn fallback_socket_file_name(installation_id: uuid::Uuid, ui_check_root: Option<&Path>) -> String {
+fn instance_socket_file_name(installation_id: uuid::Uuid) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"gmark-instance-socket-v1\0");
     hasher.update(installation_id.as_bytes());
-    match ui_check_root.filter(|root| !root.as_os_str().is_empty()) {
-        Some(root) => {
-            hasher.update([1]);
-            update_windows_path_hash(&mut hasher, root);
-        }
-        None => hasher.update([0]),
-    }
     let digest = hasher.finalize();
     format!("gmi-{}.sock", hash_prefix(&digest))
-}
-
-fn ui_check_root_hash(root: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"gmark-ui-check-root-v1\0");
-    update_windows_path_hash(&mut hasher, root);
-    let digest = hasher.finalize();
-    hash_prefix(&digest)
-}
-
-fn update_windows_path_hash(hasher: &mut Sha256, path: &Path) {
-    for code_unit in path.as_os_str().encode_wide() {
-        hasher.update(code_unit.to_le_bytes());
-    }
 }
 
 fn hash_prefix(digest: &[u8]) -> String {
@@ -199,18 +134,32 @@ fn acquire_with_paths(
     socket_path: &Path,
     paths: &[PathBuf],
 ) -> anyhow::Result<InstanceLaunch> {
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("failed to create instance directory '{}'", parent.display())
-        })?;
-    }
-    let lock_file = OpenOptions::new()
+    let mut lock_options = OpenOptions::new();
+    lock_options
         .read(true)
         .write(true)
         .create(true)
-        .truncate(false)
+        .truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        lock_options.mode(0o600);
+    }
+    let lock_file = lock_options
         .open(lock_path)
         .with_context(|| format!("failed to open instance lock '{}'", lock_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = lock_file
+            .metadata()
+            .with_context(|| format!("failed to inspect instance lock '{}'", lock_path.display()))?
+            .permissions();
+        permissions.set_mode(0o600);
+        lock_file.set_permissions(permissions).with_context(|| {
+            format!("failed to protect instance lock '{}'", lock_path.display())
+        })?;
+    }
     let deadline = Instant::now() + ACQUIRE_TIMEOUT;
 
     loop {

@@ -22,13 +22,40 @@ impl DocumentHost {
         };
         let probe = self.probe.clone();
         #[cfg(not(test))]
-        let recovery_dir = gmark_config::GmarkConfigDirs::from_system()
-            .ok()
-            .map(|dirs| dirs.recovery_dir());
+        let recovery_dir = match gmark_config::AppDirs::from_system() {
+            Ok(dirs) => {
+                let recovery_dir = dirs.recovery_dir();
+                match dirs.ensure_state_parent(&recovery_dir.join(".gmark-recovery-root")) {
+                    Ok(()) => Some(recovery_dir),
+                    Err(error) => {
+                        eprintln!("recovery persistence disabled: {error:#}");
+                        None
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("recovery persistence disabled: {error:#}");
+                None
+            }
+        };
         #[cfg(test)]
         let recovery_dir: Option<PathBuf> = None;
-        let index_cache_dir = ProjectDirs::from("com", "kongweiguang", "gmark")
-            .map(|dirs| dirs.cache_dir().join("large-document-indexes"));
+        let index_cache_dir = match gmark_config::AppDirs::from_system() {
+            Ok(dirs) => {
+                let cache_dir = dirs.large_document_indexes_dir();
+                match dirs.ensure_cache_parent(&cache_dir.join(".gmark-index-root")) {
+                    Ok(()) => Some(cache_dir),
+                    Err(error) => {
+                        eprintln!("large-document index cache disabled: {error:#}");
+                        None
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("large-document index cache disabled: {error:#}");
+                None
+            }
+        };
         let index_cancellation = SearchCancellation::default();
         let index_worker_cancellation = index_cancellation.clone();
         self.coordinator.index_cancellation = Some(index_cancellation);
@@ -65,11 +92,23 @@ impl DocumentHost {
                             let source = prepared.source().clone();
                             let index = if direct_utf8 {
                                 if let Some(cache_dir) = index_cache_dir.as_ref() {
-                                    LineIndex::build_cached_cancellable(
+                                    match LineIndex::build_cached_cancellable(
                                         &source,
                                         cache_dir,
                                         &index_worker_cancellation,
-                                    )?
+                                    ) {
+                                        Ok(index) => index,
+                                        Err(PagedDocumentError::Io { .. }) => {
+                                            eprintln!(
+                                                "large-document line-index cache write failed; using uncached build"
+                                            );
+                                            LineIndex::build_cancellable(
+                                                &source,
+                                                &index_worker_cancellation,
+                                            )?
+                                        }
+                                        Err(error) => return Err(error),
+                                    }
                                 } else {
                                     LineIndex::build_cancellable(
                                         &source,
@@ -79,17 +118,17 @@ impl DocumentHost {
                             } else {
                                 LineIndex::build_cancellable(&source, &index_worker_cancellation)?
                             };
-                            let document = build_document_session(
+                            let document = build_document_session_from_prepared(
                                 &probe,
                                 &recovery_source,
-                                source,
+                                prepared,
                                 index.clone(),
                                 false,
                             )?;
                             let (structure_source, structure_index, structure_bytes) =
                                 structure_input_for_session(
                                     &document,
-                                    &prepared,
+                                    &source,
                                     &index,
                                     &index_worker_cancellation,
                                 )?;
@@ -105,7 +144,6 @@ impl DocumentHost {
                                 probe,
                                 index,
                                 document,
-                                prepared,
                                 recovery,
                                 structure_source,
                                 structure_index,
@@ -133,7 +171,6 @@ impl DocumentHost {
                         probe,
                         index,
                         document,
-                        prepared,
                         recovery,
                         structure_source,
                         structure_index,
@@ -152,7 +189,6 @@ impl DocumentHost {
                             .and_then(|line| usize::try_from(line).ok());
                         view.index = Some(index);
                         view.install_document_session(document);
-                        view.prepared_source = Some(prepared);
                         view.provisional_source = None;
                         view.provisional_anchor = None;
                         view.invalidate_source_rows();
@@ -225,7 +261,7 @@ impl DocumentHost {
                             let _ = this.update(cx, |view, cx| {
                                 if !structured_task_stamp
                                     .accepts_strict(view, view.structured_generation)
-                                    || document_dirty_state(&view.document, &view.pending_dirty)
+                                    || document_dirty_state(&view.document)
                                 {
                                     return;
                                 }

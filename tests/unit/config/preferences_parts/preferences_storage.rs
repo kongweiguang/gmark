@@ -10,7 +10,7 @@ use super::{
     parse_numeric_input, read_app_preferences_with_dirs, save_app_preferences_with_dirs,
     save_preferences_from_window_with_dirs,
 };
-use crate::config::GmarkConfigDirs;
+use crate::config::AppDirs;
 use crate::i18n::I18nManager;
 use crate::theme::{ThemeAppearance, ThemeManager, ThemePalette};
 use gpui::{KeyDownEvent, Keystroke, Modifiers, TestAppContext, VisualTestContext, px, size};
@@ -48,7 +48,7 @@ fn missing_preferences_file_returns_defaults() {
         "gmark-preferences-missing-{}",
         uuid::Uuid::new_v4()
     ));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let preferences =
         read_app_preferences_with_dirs(&dirs).expect("missing preferences should load");
     assert_eq!(preferences, AppPreferences::default());
@@ -61,7 +61,7 @@ fn partial_or_invalid_preferences_fall_back_by_field() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(
         dirs.app_config_file(),
         r#"
@@ -93,7 +93,7 @@ fn legacy_workspace_sidebar_position_is_ignored_and_not_written_back() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(
         dirs.app_config_file(),
         "[editor]\nworkspace_sidebar_position = \"right\"\n",
@@ -115,7 +115,7 @@ fn invalid_theme_pair_falls_back_to_system_xcode() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(
         dirs.app_config_file(),
         r#"
@@ -140,7 +140,7 @@ fn invalid_image_paste_behavior_falls_back_to_none() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(
         dirs.app_config_file(),
         r#"
@@ -162,7 +162,7 @@ fn resource_insert_behavior_migrates_legacy_key_and_new_key_wins() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
 
     std::fs::write(
         dirs.app_config_file(),
@@ -212,7 +212,7 @@ fn resource_insert_behavior_round_trips_all_modes_and_dual_writes() {
         "gmark-preferences-resource-round-trip-{}",
         uuid::Uuid::new_v4()
     ));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
 
     for behavior in [
         ResourceInsertBehavior::None,
@@ -253,7 +253,7 @@ fn unknown_auto_save_value_falls_back_to_off() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(
         dirs.app_config_file(),
         r#"
@@ -275,7 +275,7 @@ fn editor_typography_preferences_are_bounded_and_quantized() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(
         dirs.app_config_file(),
         r#"
@@ -303,7 +303,7 @@ fn damaged_preferences_file_returns_defaults() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(dirs.app_config_file(), "not = [valid").expect("preferences should be written");
 
     let preferences =
@@ -316,7 +316,7 @@ fn damaged_preferences_file_returns_defaults() {
 fn saves_and_reads_preferences() {
     let root =
         std::env::temp_dir().join(format!("gmark-preferences-save-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let preferences = AppPreferences {
         startup_open: StartupOpenPreference::LastOpenedFile,
         auto_check_updates: false,
@@ -407,7 +407,7 @@ fn loading_preferences_apply_valid_overrides_and_ignore_invalid_values() {
 fn missing_preferences_file_is_created_with_detected_language() {
     let root =
         std::env::temp_dir().join(format!("gmark-preferences-create-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let preferences = load_or_create_app_preferences_with_dirs_and_locales(&dirs, ["zh-HK"])
         .expect("preferences should be created");
     assert_eq!(preferences.default_language_id, "zh-CN");
@@ -423,7 +423,7 @@ fn legacy_preferences_are_normalized_with_language() {
     let root =
         std::env::temp_dir().join(format!("gmark-preferences-legacy-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).expect("temp root should exist");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::write(
         dirs.app_config_file(),
         r#"

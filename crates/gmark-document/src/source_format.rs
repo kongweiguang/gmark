@@ -83,15 +83,15 @@ pub(crate) struct SourceFormat {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FormatPatch {
-    operations: Vec<FormatOperation>,
-    dominant_override: Option<(LineEnding, LineEnding)>,
+    pub(crate) operations: Vec<FormatOperation>,
+    pub(crate) dominant_override: Option<(LineEnding, LineEnding)>,
 }
 
 #[derive(Clone, Debug)]
-struct FormatOperation {
-    newline_index: usize,
-    removed: Vec<LineEnding>,
-    inserted: Vec<LineEnding>,
+pub(crate) struct FormatOperation {
+    pub(crate) newline_index: usize,
+    pub(crate) removed: Vec<LineEnding>,
+    pub(crate) inserted: Vec<LineEnding>,
 }
 
 impl SourceFormat {

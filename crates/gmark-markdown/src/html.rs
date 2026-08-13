@@ -2,7 +2,7 @@
 
 //! HTML policy, sanitization, and renderer-neutral projection for Markdown.
 //!
-//! This module deliberately owns the only HTML safety boundary in GMark.  The
+//! This module deliberately owns the only HTML safety boundary in Gmark.  The
 //! editor and exporters consume the resulting value; they do not parse raw
 //! HTML independently or execute anything from it.
 

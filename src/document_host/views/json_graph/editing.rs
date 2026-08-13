@@ -61,7 +61,7 @@ impl DocumentHost {
             return;
         };
         let replacement = self.graph_edit_input.read(cx).display_text().to_owned();
-        let current_revision = self.document.as_ref().map(DocumentSession::revision);
+        let current_revision = self.document.as_ref().map(SharedDocument::revision);
         if target.document_epoch != self.document_epoch
             || current_revision != Some(target.base_revision)
         {

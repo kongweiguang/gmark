@@ -13,16 +13,15 @@ impl Editor {
     ) -> bool {
         match key {
             "escape" => {
-                self.workspace.keyboard_zone = WorkspaceKeyboardZone::Tabs;
-                self.ensure_workspace_focus_handle(cx).focus(window);
+                self.cancel_workspace_search(window, cx);
             }
             "tab" => {
-                self.workspace.keyboard_zone = if shift {
-                    WorkspaceKeyboardZone::Tabs
+                if shift {
+                    self.cancel_workspace_search(window, cx);
                 } else {
-                    WorkspaceKeyboardZone::SearchOptions
-                };
-                self.ensure_workspace_focus_handle(cx).focus(window);
+                    self.workspace.keyboard_zone = WorkspaceKeyboardZone::SearchOptions;
+                    self.ensure_workspace_focus_handle(cx).focus(window);
+                }
             }
             "up" | "down" => {
                 if self.workspace.search_results.is_empty() {
@@ -53,72 +52,16 @@ impl Editor {
     pub(super) fn handle_workspace_tabs_key(
         &mut self,
         key: &str,
-        shift: bool,
+        _shift: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let index = match self.workspace.active_tab {
-            WorkspaceTab::Files => 0usize,
-            WorkspaceTab::Outline => 0,
-            WorkspaceTab::Search => 1,
-        };
-        let next = match key {
-            "left" => Some(index.saturating_sub(1)),
-            "right" => Some((index + 1).min(1)),
-            "home" => Some(0),
-            "end" => Some(1),
-            "tab" if shift => {
-                self.enter_workspace_body(window, cx, true);
-                return true;
-            }
-            "tab" | "down" | "enter" => {
-                self.enter_workspace_body(window, cx, false);
-                return true;
-            }
-            "escape" => {
-                self.workspace.is_open = false;
-                self.focus_editor_after_workspace(window, cx);
-                return true;
-            }
-            _ => return false,
-        };
-        let tab = match next.expect("tab navigation must produce an index") {
-            0 => WorkspaceTab::Files,
-            _ => WorkspaceTab::Search,
-        };
-        self.set_workspace_tab(tab, cx);
-        true
-    }
-
-    pub(super) fn enter_workspace_body(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        from_end: bool,
-    ) {
-        if self.workspace.active_tab == WorkspaceTab::Search {
-            if from_end && !self.workspace.search_results.is_empty() {
-                self.workspace.keyboard_zone = WorkspaceKeyboardZone::SearchResults;
-                self.workspace.search_selected = self.workspace.search_results.len() - 1;
-                return;
-            }
-            self.ensure_workspace_search_input(cx)
-                .read(cx)
-                .focus_handle
-                .focus(window);
-            return;
-        }
+        // The former workspace header is no longer rendered. If a restored
+        // focus state still points at the old tab zone, continue in the
+        // visible body rather than routing keyboard navigation through hidden
+        // controls.
         self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;
-        let nodes = self.visible_workspace_keyboard_nodes();
-        if self.selected_workspace_node_index(&nodes).is_none()
-            && let Some(node) = if from_end {
-                nodes.last()
-            } else {
-                nodes.first()
-            }
-        {
-            self.select_workspace_keyboard_node(node);
-        }
+        self.handle_workspace_body_key(key, window, cx)
     }
 
     pub(super) fn handle_workspace_body_key(
@@ -131,7 +74,7 @@ impl Editor {
         if nodes.is_empty() {
             return match key {
                 "tab" => {
-                    self.workspace.keyboard_zone = WorkspaceKeyboardZone::Tabs;
+                    self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;
                     true
                 }
                 "escape" => {
@@ -176,7 +119,7 @@ impl Editor {
             "enter" | "space" => {
                 self.activate_workspace_keyboard_node(nodes[current].clone(), window, cx)
             }
-            "tab" => self.workspace.keyboard_zone = WorkspaceKeyboardZone::Tabs,
+            "tab" => self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body,
             "escape" => {
                 self.workspace.is_open = false;
                 self.focus_editor_after_workspace(window, cx);
@@ -219,14 +162,14 @@ impl Editor {
             }
             "tab" => {
                 self.workspace.keyboard_zone = if self.workspace.search_results.is_empty() {
-                    WorkspaceKeyboardZone::Tabs
+                    WorkspaceKeyboardZone::SearchOptions
                 } else {
                     self.workspace.search_selected = 0;
                     self.ensure_workspace_keyboard_item_visible(0, 58.0, 80.0);
                     WorkspaceKeyboardZone::SearchResults
                 };
             }
-            "escape" => self.workspace.keyboard_zone = WorkspaceKeyboardZone::Tabs,
+            "escape" => self.cancel_workspace_search(window, cx),
             _ => return false,
         }
         true
@@ -251,7 +194,7 @@ impl Editor {
             "end" => self.workspace.search_selected = last,
             "enter" | "space" => self.open_selected_workspace_search_result(window, cx),
             "tab" if shift => self.workspace.keyboard_zone = WorkspaceKeyboardZone::SearchOptions,
-            "tab" => self.workspace.keyboard_zone = WorkspaceKeyboardZone::Tabs,
+            "tab" => self.workspace.keyboard_zone = WorkspaceKeyboardZone::SearchOptions,
             "escape" => {
                 self.ensure_workspace_search_input(cx)
                     .read(cx)
@@ -560,18 +503,6 @@ impl Editor {
                 self.schedule_workspace_search(cx);
             }
             cx.notify();
-        }
-    }
-
-    pub(super) fn on_workspace_tab_key_down(
-        &mut self,
-        tab: WorkspaceTab,
-        event: &KeyDownEvent,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-            self.set_workspace_tab(tab, cx);
-            cx.stop_propagation();
         }
     }
 

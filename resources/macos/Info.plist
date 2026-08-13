@@ -7,7 +7,7 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>gmark</string>
+  <string>Gmark</string>
   <key>CFBundleExecutable</key>
   <string>gmark</string>
   <key>CFBundleIconFile</key>
@@ -15,7 +15,7 @@
   <key>CFBundleIdentifier</key>
   <string>com.kongweiguang.gmark</string>
   <key>CFBundleName</key>
-  <string>gmark</string>
+  <string>Gmark</string>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © 2026 kongweiguang</string>
   <key>CFBundlePackageType</key>

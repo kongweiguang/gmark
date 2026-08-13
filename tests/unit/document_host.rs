@@ -474,8 +474,10 @@ async fn provisional_source_row_is_read_only_until_piece_document_is_installed(
                 .expect("exact Source probe");
         let index = LineIndex::build(&source).expect("exact Source index");
         let piece = PieceDocument::open(source, index).expect("exact PieceTree document");
+        let document = build_paged_session(&probe, piece, identity).expect("exact Paged session");
+        let controller = DocumentController::new(DocumentId::new(), document);
         view.document =
-            Some(build_paged_session(&probe, piece, identity).expect("exact Paged session"));
+            Some(SharedDocument::from_controller(controller).expect("exact shared Paged session"));
         view.ensure_source_row_block(0, cx)
             .expect("editable Source block")
     });

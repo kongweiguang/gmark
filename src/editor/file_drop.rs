@@ -315,7 +315,34 @@ impl Editor {
             self.clear_pending_drop_replace_state(cx);
             return;
         };
-        let (markdown, source_format, bytes) = self.serialized_document_bytes(cx);
+        let (save_snapshot, source_format) = match self.prepare_background_save(cx) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                self.save_queued = true;
+                return;
+            }
+            Err(error) => {
+                self.clear_pending_drop_replace_state(cx);
+                self.show_drop_open_failed_prompt(error, window, cx);
+                return;
+            }
+        };
+        let markdown = save_snapshot
+            .resident_baseline
+            .as_ref()
+            .map(gmark_document::DocumentSnapshot::text)
+            .or_else(|| {
+                save_snapshot
+                    .read_all()
+                    .ok()
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            })
+            .unwrap_or_default();
+        let saved_format = save_snapshot
+            .source_format
+            .clone()
+            .unwrap_or_else(|| source_format.clone());
+        let saved_revision = gmark_document::Revision::from_u64(save_snapshot.revision.0);
         let (default_dir, suggested_name) = self.save_dialog_defaults();
         let document_kind = self.document_kind;
         let prompt = cx.prompt_for_new_path(&default_dir, suggested_name.as_deref());
@@ -330,12 +357,20 @@ impl Editor {
                 Ok(Ok(Some(path))) => path,
                 Ok(Ok(None)) | Err(_) => {
                     let _ = weak_editor_for_cancel.update(cx, |this, cx| {
+                        let _ = this.source_document.try_save_failed(
+                            saved_revision,
+                            gmark_document_runtime::SaveFailureCode::Cancelled,
+                        );
                         this.abort_pending_drop_replace_after_save(cx);
                     });
                     return;
                 }
                 Ok(Err(err)) => {
                     let _ = weak_editor_for_error.update(cx, |this, cx| {
+                        let _ = this.source_document.try_save_failed(
+                            saved_revision,
+                            gmark_document_runtime::SaveFailureCode::Other,
+                        );
                         this.abort_pending_drop_replace_after_save(cx);
                     });
                     let detail = err.to_string();
@@ -359,31 +394,118 @@ impl Editor {
 
             document_kind.apply_default_extension(&mut save_path);
 
-            if let Err(err) = gmark_document::atomic_write(&save_path, &bytes) {
-                let _ = weak_editor_for_write_error.update(cx, |this, cx| {
-                    this.abort_pending_drop_replace_after_save(cx);
-                });
-                let detail = err.to_string();
-                let _ = cx.update_window(
-                    window_handle,
-                    move |_view: AnyView, window: &mut Window, cx: &mut App| {
-                        let strings = cx.global::<I18nManager>().strings().clone();
-                        let buttons = [strings.info_dialog_ok.as_str()];
-                        let _ = window.prompt(
-                            PromptLevel::Critical,
-                            &strings.save_failed_title,
-                            Some(&detail),
-                            &buttons,
-                            cx,
-                        );
-                    },
-                );
-                return;
-            }
+            let reservation = match weak_editor
+                .update(cx, |this, cx| this.reserve_save_as_target(&save_path, cx))
+            {
+                Ok(Ok(crate::app::document_service::SaveAsTargetReservation::Reserved(
+                    reservation,
+                ))) => reservation,
+                Ok(Ok(crate::app::document_service::SaveAsTargetReservation::Occupied(target))) => {
+                    let prompt = cx.update_window(
+                        window_handle,
+                        move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                            let strings = cx.global::<I18nManager>().strings().clone();
+                            let buttons = [
+                                strings.menu_open_file.as_str(),
+                                strings.external_change_cancel.as_str(),
+                            ];
+                            window.prompt(
+                                PromptLevel::Warning,
+                                &strings.save_failed_title,
+                                Some("目标文档已在其他视图打开；是否切换到现有文档？"),
+                                &buttons,
+                                cx,
+                            )
+                        },
+                    );
+                    let choice = match prompt {
+                        Ok(receiver) => receiver.await.unwrap_or(1),
+                        Err(_) => 1,
+                    };
+                    if choice == 0 {
+                        let _ = weak_editor.update(cx, |this, cx| {
+                            let _ = this.switch_to_shared_save_as_target(target, cx);
+                            this.abort_pending_drop_replace_after_save(cx);
+                        });
+                    }
+                    return;
+                }
+                Ok(Err(detail)) => {
+                    let _ = weak_editor_for_write_error.update(cx, |this, cx| {
+                        this.abort_pending_drop_replace_after_save(cx);
+                    });
+                    let _ = cx.update_window(
+                        window_handle,
+                        move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                            let strings = cx.global::<I18nManager>().strings().clone();
+                            let buttons = [strings.info_dialog_ok.as_str()];
+                            let _ = window.prompt(
+                                PromptLevel::Critical,
+                                &strings.save_failed_title,
+                                Some(&detail),
+                                &buttons,
+                                cx,
+                            );
+                        },
+                    );
+                    return;
+                }
+                Err(_) => {
+                    let _ = weak_editor_for_write_error.update(cx, |this, cx| {
+                        this.abort_pending_drop_replace_after_save(cx);
+                    });
+                    return;
+                }
+            };
 
+            let cancellation = gmark_paged_document::SearchCancellation::default();
+            let identity = match save_snapshot.save_as_atomic_cancellable(&save_path, &cancellation)
+            {
+                Ok(identity) => identity,
+                Err(err) => {
+                    let _ = weak_editor_for_write_error.update(cx, |this, cx| {
+                        let code = if matches!(
+                            &err,
+                            gmark_paged_document::PagedDocumentError::SourceChanged
+                                | gmark_paged_document::PagedDocumentError::Persist { .. }
+                        ) {
+                            gmark_document_runtime::SaveFailureCode::Uncertain
+                        } else {
+                            gmark_document_runtime::SaveFailureCode::Other
+                        };
+                        let _ = this.source_document.try_save_failed(saved_revision, code);
+                        this.abort_pending_drop_replace_after_save(cx);
+                    });
+                    let detail = err.to_string();
+                    let _ = cx.update_window(
+                        window_handle,
+                        move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                            let strings = cx.global::<I18nManager>().strings().clone();
+                            let buttons = [strings.info_dialog_ok.as_str()];
+                            let _ = window.prompt(
+                                PromptLevel::Critical,
+                                &strings.save_failed_title,
+                                Some(&detail),
+                                &buttons,
+                                cx,
+                            );
+                        },
+                    );
+                    return;
+                }
+            };
             let saved_path = save_path.clone();
             let replace_result = weak_editor.update(cx, move |this, cx| {
-                this.apply_successful_save(saved_path, markdown, source_format, cx);
+                if let Err(error) = reservation.commit() {
+                    return Err(anyhow::anyhow!(error.to_string()));
+                }
+                let completion = this
+                    .source_document
+                    .try_save_succeeded(saved_revision, identity);
+                if let Err(error) = completion {
+                    return Err(anyhow::anyhow!(error.to_string()));
+                }
+                this.apply_successful_save(saved_path, markdown, saved_format, cx);
                 this.pending_drop_replace_path = Some(drop_path);
                 this.replace_after_successful_save_async(cx)
             });

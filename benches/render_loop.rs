@@ -1,7 +1,7 @@
 //! @author kongweiguang
 //! Bench: render loop
 //!
-//! Higher-level benchmark that simulates one frame of gmark's editor
+//! Higher-level benchmark that simulates one frame of Gmark's editor
 //! re-rendering a document of N visible blocks. Every commit on
 //! `perf/editor-render` (theme/i18n Arc clone, SharedString display text,
 //! GraphemeCursor, blink throttle, projection cache, monotonic build text

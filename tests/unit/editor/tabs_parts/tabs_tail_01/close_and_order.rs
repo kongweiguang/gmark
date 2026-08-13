@@ -45,9 +45,10 @@ async fn window_close_activates_background_dirty_tab(cx: &mut gpui::TestAppConte
         add_inactive_tab(editor, "dirty", "dirty.md");
         editor.tabs.records[1]
             .snapshot
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .document_dirty = true;
+            .source_document
+            .set_dirty_for_test(true);
 
         assert!(editor.activate_dirty_tab_for_window_close(cx));
         assert_eq!(editor.tabs.active, 1);
@@ -67,9 +68,10 @@ async fn window_close_save_advances_to_next_dirty_tab(cx: &mut gpui::TestAppCont
         add_inactive_tab(editor, "second dirty", "second.md");
         editor.tabs.records[1]
             .snapshot
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .document_dirty = true;
+            .source_document
+            .set_dirty_for_test(true);
 
         assert!(!editor.prepare_window_close_save());
         assert!(editor.tabs.continue_window_close_after_save);
@@ -94,8 +96,13 @@ async fn window_close_discard_clears_every_dirty_tab_in_one_action(cx: &mut gpui
         editor.set_document_dirty_for_test(true);
         add_inactive_tab(editor, "second dirty", "second.md");
         add_inactive_tab(editor, "third dirty", "third.md");
-        for record in &mut editor.tabs.records[1..] {
-            record.snapshot.as_mut().unwrap().document_dirty = true;
+        for record in &editor.tabs.records[1..] {
+            record
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .source_document
+                .set_dirty_for_test(true);
         }
 
         assert!(editor.discard_all_document_changes_for_window_close(cx));
@@ -104,7 +111,7 @@ async fn window_close_discard_clears_every_dirty_tab_in_one_action(cx: &mut gpui
             record
                 .snapshot
                 .as_ref()
-                .is_none_or(|snapshot| !snapshot.document_dirty)
+                .is_none_or(|snapshot| !snapshot.source_document.is_dirty())
         }));
     });
 }
@@ -150,9 +157,10 @@ async fn close_other_tabs_prompts_dirty_tabs_and_keeps_requested_tab(
         add_inactive_tab(editor, "dirty", "dirty.md");
         editor.tabs.records[2]
             .snapshot
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .document_dirty = true;
+            .source_document
+            .set_dirty_for_test(true);
         let keep_id = editor.tabs.records[1].id;
         editor.request_close_other_tabs(1, cx);
         assert_eq!(editor.tabs.records.len(), 2);

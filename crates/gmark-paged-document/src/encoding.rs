@@ -5,8 +5,10 @@
 use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use encoding_rs::{CoderResult, Encoding, UTF_16BE, UTF_16LE};
+use gmark_document_core::DocumentSnapshot;
 
 use crate::{FileIdentity, FileSource, PagedDocumentError, PieceDocument, TextEncoding};
 
@@ -14,11 +16,12 @@ const TRANSCODE_BLOCK_BYTES: u64 = 8 * 1024 * 1024;
 
 pub struct PreparedUtf8Source {
     source: FileSource,
+    encoding: TextEncoding,
     _shadow: Option<tempfile::NamedTempFile>,
     save_plan: Option<EncodedSavePlan>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EncodedSavePlan {
     encoding: TextEncoding,
     original_identity: FileIdentity,
@@ -33,14 +36,57 @@ impl PreparedUtf8Source {
         self.save_plan.clone()
     }
 
+    pub fn encoding(&self) -> &TextEncoding {
+        &self.encoding
+    }
+
     pub fn mark_original_saved(&mut self, identity: FileIdentity) {
         if let Some(plan) = self.save_plan.as_mut() {
             plan.original_identity = identity;
         }
     }
+
+    pub(crate) fn into_backend_parts(
+        self,
+    ) -> (
+        FileSource,
+        TextEncoding,
+        Option<Arc<tempfile::NamedTempFile>>,
+        Option<EncodedSavePlan>,
+    ) {
+        (
+            self.source,
+            self.encoding,
+            self._shadow.map(Arc::new),
+            self.save_plan,
+        )
+    }
 }
 
 impl EncodedSavePlan {
+    pub fn encoding(&self) -> &TextEncoding {
+        &self.encoding
+    }
+
+    pub fn original_identity(&self) -> &FileIdentity {
+        &self.original_identity
+    }
+
+    pub(crate) fn new(encoding: TextEncoding, original_identity: FileIdentity) -> Self {
+        Self {
+            encoding,
+            original_identity,
+        }
+    }
+
+    pub(crate) fn set_encoding(&mut self, encoding: TextEncoding) {
+        self.encoding = encoding;
+    }
+
+    pub(crate) fn mark_original_saved(&mut self, identity: FileIdentity) {
+        self.original_identity = identity;
+    }
+
     pub fn save_atomic(
         &self,
         document: &PieceDocument,
@@ -61,6 +107,38 @@ impl EncodedSavePlan {
             return Err(PagedDocumentError::SourceChanged);
         }
         self.save_atomic_inner(document, path, Some(&self.original_identity), cancellation)
+    }
+
+    /// Stream an immutable UTF-8 snapshot through this plan's encoding and
+    /// atomically replace the original target.  The snapshot is the only
+    /// source consulted after the call starts; no mutable PieceDocument or
+    /// Controller state is read by the writer.
+    pub fn save_snapshot_atomic_cancellable(
+        &self,
+        snapshot: &dyn DocumentSnapshot,
+        path: impl AsRef<Path>,
+        cancellation: &crate::SearchCancellation,
+    ) -> Result<FileIdentity, PagedDocumentError> {
+        let expected = self.original_identity.clone();
+        crate::source::atomic_write_stream(
+            path,
+            Some(&expected),
+            cancellation,
+            |output, cancellation| self.write_snapshot(snapshot, output, cancellation),
+        )
+    }
+
+    /// Stream an immutable snapshot to a Save As target without checking the
+    /// source identity.  Existing target contents are replaced atomically.
+    pub fn save_snapshot_atomic_as_cancellable(
+        &self,
+        snapshot: &dyn DocumentSnapshot,
+        path: impl AsRef<Path>,
+        cancellation: &crate::SearchCancellation,
+    ) -> Result<FileIdentity, PagedDocumentError> {
+        crate::source::atomic_write_stream(path, None, cancellation, |output, cancellation| {
+            self.write_snapshot(snapshot, output, cancellation)
+        })
     }
 
     pub fn save_atomic_as(
@@ -204,6 +282,42 @@ impl EncodedSavePlan {
         Ok(())
     }
 
+    fn write_snapshot(
+        &self,
+        snapshot: &dyn DocumentSnapshot,
+        output: &mut dyn Write,
+        cancellation: &crate::SearchCancellation,
+    ) -> Result<(), PagedDocumentError> {
+        write_bom(output, &self.encoding)?;
+        match &self.encoding {
+            TextEncoding::Utf16Le => stream_snapshot_utf8(snapshot, cancellation, |text, _| {
+                write_utf16(output, text.as_bytes(), true)
+            }),
+            TextEncoding::Utf16Be => stream_snapshot_utf8(snapshot, cancellation, |text, _| {
+                write_utf16(output, text.as_bytes(), false)
+            }),
+            TextEncoding::Utf8 { .. } => stream_snapshot_utf8(snapshot, cancellation, |text, _| {
+                output
+                    .write_all(text.as_bytes())
+                    .map_err(|source| PagedDocumentError::Io {
+                        path: std::env::temp_dir(),
+                        source,
+                    })
+            }),
+            TextEncoding::Legacy(label) => {
+                let mut encoder =
+                    EncodingWriter::new(output, resolve_encoding(&self.encoding)?, label.clone());
+                stream_snapshot_utf8(snapshot, cancellation, |text, last| {
+                    if cancellation.is_cancelled() {
+                        return Err(PagedDocumentError::Cancelled);
+                    }
+                    encoder.encode(text, last)
+                })?;
+                Ok(())
+            }
+        }
+    }
+
     pub fn encoding_name(&self) -> String {
         match &self.encoding {
             TextEncoding::Utf16Le => "UTF-16LE".to_owned(),
@@ -214,13 +328,62 @@ impl EncodedSavePlan {
     }
 }
 
+/// Visit a snapshot as valid UTF-8 chunks while carrying at most one codepoint
+/// across read boundaries.  This keeps encoders streaming even when a backend
+/// returns ranges that split a multibyte character.
+fn stream_snapshot_utf8(
+    snapshot: &dyn DocumentSnapshot,
+    cancellation: &crate::SearchCancellation,
+    mut visit: impl FnMut(&str, bool) -> Result<(), PagedDocumentError>,
+) -> Result<(), PagedDocumentError> {
+    let mut offset = 0_u64;
+    let mut carry = Vec::new();
+    let len = snapshot.len();
+    while offset < len {
+        if cancellation.is_cancelled() {
+            return Err(PagedDocumentError::Cancelled);
+        }
+        let end = offset.saturating_add(TRANSCODE_BLOCK_BYTES).min(len);
+        let bytes = snapshot
+            .read_range(offset..end)
+            .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))?;
+        offset = end;
+        carry.extend_from_slice(&bytes);
+        match std::str::from_utf8(&carry) {
+            Ok(text) => {
+                visit(text, false)?;
+                carry.clear();
+            }
+            Err(error) if error.error_len().is_none() => {
+                let valid_up_to = error.valid_up_to();
+                if valid_up_to > 0 {
+                    let text = std::str::from_utf8(&carry[..valid_up_to])
+                        .map_err(|_| PagedDocumentError::InvalidUtf8Boundary)?;
+                    visit(text, false)?;
+                    carry.drain(..valid_up_to);
+                }
+            }
+            Err(_) => return Err(PagedDocumentError::InvalidUtf8Boundary),
+        }
+    }
+    if !carry.is_empty() {
+        let text =
+            std::str::from_utf8(&carry).map_err(|_| PagedDocumentError::InvalidUtf8Boundary)?;
+        visit(text, true)?;
+    } else {
+        visit("", true)?;
+    }
+    Ok(())
+}
+
 pub fn prepare_utf8_source(
     original: FileSource,
     encoding: TextEncoding,
 ) -> Result<PreparedUtf8Source, PagedDocumentError> {
-    if matches!(encoding, TextEncoding::Utf8 { .. }) {
+    if matches!(&encoding, TextEncoding::Utf8 { .. }) {
         return Ok(PreparedUtf8Source {
             source: original,
+            encoding,
             _shadow: None,
             save_plan: None,
         });
@@ -257,6 +420,7 @@ pub fn prepare_utf8_source(
     let source = FileSource::open(shadow.path())?;
     Ok(PreparedUtf8Source {
         source,
+        encoding: encoding.clone(),
         _shadow: Some(shadow),
         save_plan: Some(EncodedSavePlan {
             encoding,
@@ -301,10 +465,14 @@ fn decode_block(
     }
 }
 
-fn write_bom(output: &mut impl Write, encoding: &TextEncoding) -> Result<(), PagedDocumentError> {
+fn write_bom<W: Write + ?Sized>(
+    output: &mut W,
+    encoding: &TextEncoding,
+) -> Result<(), PagedDocumentError> {
     let bom: &[u8] = match encoding {
         TextEncoding::Utf16Le => &[0xff, 0xfe],
         TextEncoding::Utf16Be => &[0xfe, 0xff],
+        TextEncoding::Utf8 { bom: true } => &[0xef, 0xbb, 0xbf],
         _ => &[],
     };
     output
@@ -315,8 +483,8 @@ fn write_bom(output: &mut impl Write, encoding: &TextEncoding) -> Result<(), Pag
         })
 }
 
-fn write_utf16(
-    output: &mut impl Write,
+fn write_utf16<W: Write + ?Sized>(
+    output: &mut W,
     bytes: &[u8],
     little_endian: bool,
 ) -> Result<(), PagedDocumentError> {
@@ -338,13 +506,13 @@ fn write_utf16(
         })
 }
 
-struct EncodingWriter<'a, W> {
+struct EncodingWriter<'a, W: ?Sized> {
     output: &'a mut W,
     encoder: encoding_rs::Encoder,
     encoding_name: String,
 }
 
-impl<'a, W: Write> EncodingWriter<'a, W> {
+impl<'a, W: Write + ?Sized> EncodingWriter<'a, W> {
     fn new(output: &'a mut W, encoding: &'static Encoding, encoding_name: String) -> Self {
         Self {
             output,

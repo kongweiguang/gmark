@@ -1,6 +1,6 @@
 # @author kongweiguang
 
-"""Import generated pulldown-cmark spec tests into gmark's pinned JSON corpus."""
+"""Import generated pulldown-cmark spec tests into Gmark's pinned JSON corpus."""
 
 from __future__ import annotations
 

@@ -5,16 +5,16 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gmark_document::{LineEnding, LineEndingStatus, Revision, SourceFormatSummary};
+use gmark_document::Revision;
 use gpui::*;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{Editor, ViewMode};
 use crate::i18n::I18nStrings;
-use crate::preferences::{StatusBarButton, StatusBarPreferences};
 use crate::theme::Theme;
 
 const SIDEBAR_ICON: &str = "icon/ui/panel-left.svg";
+const SEARCH_ICON: &str = "icon/ui/search.svg";
 const DOCUMENT_SIDEBAR_ICON: &str = "icon/ui/panel-right.svg";
 const LIVE_MODE_ICON: &str = "icon/ui/live.svg";
 const SOURCE_MODE_ICON: &str = "icon/ui/source.svg";
@@ -23,6 +23,7 @@ const PREVIEW_MODE_ICON: &str = "icon/ui/preview.svg";
 const MORE_ICON: &str = "icon/ui/more-horizontal.svg";
 const RECOVERY_ICON: &str = "icon/ui/refresh.svg";
 const CONFLICT_ICON: &str = "icon/ui/triangle-alert.svg";
+const SHARED_DOCUMENT_ICON: &str = "icon/ui/link.svg";
 const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 const FORMAT_OVERFLOW_BREAKPOINT: f32 = 900.0;
 const METADATA_OVERFLOW_BREAKPOINT: f32 = 760.0;
@@ -44,6 +45,7 @@ const SVG_STATUS_VIEW_MODES: [super::ViewMode; 3] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusTooltip {
     Sidebar,
+    Search,
     DocumentSidebar,
     Mode(super::ViewMode),
 }
@@ -51,6 +53,7 @@ enum StatusTooltip {
 #[derive(Default)]
 pub(super) struct StatusBarState {
     pub sidebar_hovered: bool,
+    pub search_hovered: bool,
     pub document_sidebar_hovered: bool,
     pub mode_hovered: Option<super::ViewMode>,
     custom_button_hovered: Option<String>,
@@ -69,6 +72,7 @@ pub(super) struct StatusBarState {
     pub(super) line_ending_button_focus_handle: Option<FocusHandle>,
     pub(super) line_ending_focus_handles: Option<[FocusHandle; 3]>,
     pub(super) sidebar_focus_handle: Option<FocusHandle>,
+    pub(super) search_focus_handle: Option<FocusHandle>,
     pub(super) document_sidebar_focus_handle: Option<FocusHandle>,
     pub(super) overflow_focus_handle: Option<FocusHandle>,
     pub(super) conflict_focus_handle: Option<FocusHandle>,
@@ -170,6 +174,15 @@ impl Editor {
         self.set_status_tooltip_hover(StatusTooltip::Sidebar, hovered, cx);
     }
 
+    pub(super) fn set_status_search_tooltip_hover(
+        &mut self,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.status_bar.search_hovered = hovered;
+        self.set_status_tooltip_hover(StatusTooltip::Search, hovered, cx);
+    }
+
     pub(super) fn set_status_document_sidebar_tooltip_hover(
         &mut self,
         hovered: bool,
@@ -225,6 +238,74 @@ impl Editor {
                 strings,
                 cx,
             ));
+            let search_active = self.workspace.is_open && self.workspace_search_active();
+            left_items.push(render_workspace_search_toggle(
+                &mut self.status_bar,
+                search_active,
+                theme,
+                strings,
+                cx,
+            ));
+        }
+
+        if let Some(view_count) = self.current_shared_view_count(cx) {
+            let label = format!(
+                "{} · {}",
+                strings.status_bar_shared_document,
+                strings
+                    .status_bar_shared_views_template
+                    .replace("{count}", &view_count.to_string()),
+            );
+            let tooltip = label.clone();
+            left_items.push(
+                div()
+                    .id("status-bar-shared-document")
+                    .debug_selector(|| "status-bar-shared-document".to_owned())
+                    .h(px(d.status_bar_height))
+                    .max_w(px(220.0))
+                    .px(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .rounded(px(4.0))
+                    .text_size(px(d.status_bar_text_size))
+                    .text_color(c.workbench.text_secondary)
+                    .tooltip(move |_window, cx| crate::ui::ui_tooltip(tooltip.clone(), cx))
+                    .child(
+                        svg()
+                            .path(SHARED_DOCUMENT_ICON)
+                            .size(px(13.0))
+                            .text_color(c.workbench.accent),
+                    )
+                    .child(label)
+                    .into_any_element(),
+            );
+        }
+
+        if let Some(notice) = self.pane_notice.clone() {
+            left_items.push(
+                div()
+                    .id("status-bar-pane-notice")
+                    .debug_selector(|| "status-bar-pane-notice".to_owned())
+                    .h(px(d.status_bar_height))
+                    .max_w(px(420.0))
+                    .px(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .overflow_hidden()
+                    .truncate()
+                    .text_size(px(d.status_bar_text_size))
+                    .text_color(c.workbench.text_secondary)
+                    .child(
+                        svg()
+                            .path(CONFLICT_ICON)
+                            .size(px(13.0))
+                            .text_color(c.workbench.accent),
+                    )
+                    .child(notice)
+                    .into_any_element(),
+            );
         }
 
         let mut right_items: Vec<AnyElement> = Vec::new();
@@ -651,10 +732,6 @@ impl Editor {
             }));
     }
 
-    fn status_bar_preferences(&self, cx: &App) -> StatusBarPreferences {
-        crate::preferences::EditorSettings::status_bar_preferences(cx)
-    }
-
     /// Returns (line, col), both 1-based, from the source-mode selection snapshot.
     pub(super) fn compute_source_cursor_position(&self, cx: &App) -> (usize, usize) {
         let snapshot = self.capture_source_selection_snapshot(cx);
@@ -673,43 +750,12 @@ impl Editor {
     }
 }
 
-fn viewport_width_for_status(window: &Window) -> f32 {
-    f32::from(window.viewport_size().width)
-}
+#[path = "status_bar_parts/format.rs"]
+mod format;
+use format::{render_source_format_label, source_format_labels, viewport_width_for_status};
+#[path = "status_bar_parts/context.rs"]
+mod context;
 
-fn source_format_labels(
-    format: &SourceFormatSummary,
-    source_encoding: &crate::document_io::DocumentEncoding,
-    strings: &I18nStrings,
-) -> (String, String) {
-    let encoding = if !source_encoding.is_utf8() {
-        source_encoding.label().to_owned()
-    } else if format.utf8_bom {
-        strings.status_bar_encoding_utf8_bom.clone()
-    } else {
-        strings.status_bar_encoding_utf8.clone()
-    };
-    let line_ending = match format.line_endings {
-        LineEndingStatus::None => match format.dominant {
-            LineEnding::Lf => "LF".to_owned(),
-            LineEnding::CrLf => "CRLF".to_owned(),
-            LineEnding::Cr => "CR".to_owned(),
-        },
-        LineEndingStatus::Uniform(LineEnding::Lf) => "LF".to_owned(),
-        LineEndingStatus::Uniform(LineEnding::CrLf) => "CRLF".to_owned(),
-        LineEndingStatus::Uniform(LineEnding::Cr) => "CR".to_owned(),
-        LineEndingStatus::Mixed => strings.status_bar_line_ending_mixed.clone(),
-    };
-    (encoding, line_ending)
-}
-
-fn render_source_format_label(label: String, theme: &Theme) -> AnyElement {
-    div()
-        .text_size(px(theme.dimensions.status_bar_text_size))
-        .text_color(theme.colors.workbench.text_tertiary)
-        .child(label)
-        .into_any_element()
-}
 #[cfg(test)]
 #[path = "../../tests/unit/editor/status_bar.rs"]
 mod tests;
@@ -722,5 +768,6 @@ use view::{
     render_character_count, render_cursor, render_custom_button, render_document_sidebar_toggle,
     render_large_overflow_action, render_line_ending_picker, render_mode_switch,
     render_overflow_text, render_recovery_status, render_sidebar_toggle,
-    render_source_format_overflow_button, should_render_file_status,
+    render_source_format_overflow_button, render_workspace_search_toggle,
+    should_render_file_status,
 };

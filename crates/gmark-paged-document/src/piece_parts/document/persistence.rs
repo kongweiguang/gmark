@@ -86,6 +86,7 @@ impl PieceDocument {
             newlines: index.newline_count(),
         }));
         self.additions = AppendStore::default();
+        self.persisted_pieces = None;
         self.undo.clear();
         self.redo.clear();
         Ok(())

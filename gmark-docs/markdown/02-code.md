@@ -15,7 +15,7 @@ function greet(name) {
   return `Hello, ${name}!`;
 }
 
-console.log(greet("GMark"));
+console.log(greet("Gmark"));
 ```
 
 ## TypeScript 与 TSX
@@ -114,7 +114,7 @@ ORDER BY latest_update DESC;
 
 ```html
 <section class="hero">
-  <h1>GMark Docs</h1>
+  <h1>Gmark Docs</h1>
   <p>Write, inspect, and render Markdown locally.</p>
 </section>
 ```
@@ -168,7 +168,7 @@ package main
 import "fmt"
 
 func main() {
-    fmt.Println("Hello, GMark")
+    fmt.Println("Hello, Gmark")
 }
 ```
 

@@ -410,6 +410,45 @@ async fn spelling_diagnostic_uses_wavy_danger_underline(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+async fn text_runs_reject_stale_non_utf8_composition_boundaries(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(cx, BlockRecord::paragraph("中文".to_owned()));
+        block.marked_range = Some(1..2);
+        block
+    });
+
+    block.read_with(cx, |block, _cx| {
+        let display_text: SharedString = block.display_text().to_string().into();
+        let base_run = TextRun {
+            len: display_text.len(),
+            font: font(".SystemUIFont"),
+            color: Hsla::from(rgba(0xffffffff)),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = super::build_text_runs(
+            block,
+            &display_text,
+            &base_run,
+            px(1.0),
+            Hsla::from(rgba(0x0066ccff)),
+            Hsla::from(rgba(0x111111ff)),
+            Hsla::from(rgba(0xdc2626ff)),
+            true,
+        );
+
+        let mut boundary = 0usize;
+        for run in runs {
+            boundary += run.len;
+            assert!(display_text.is_char_boundary(boundary));
+        }
+        assert_eq!(boundary, display_text.len());
+    });
+}
+
+#[gpui::test]
 async fn soft_wrapped_range_segments_stay_within_wrap_width(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     let text = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";

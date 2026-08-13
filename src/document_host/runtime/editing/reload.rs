@@ -15,7 +15,7 @@ impl DocumentHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if document_dirty_state(&self.document, &self.pending_dirty) {
+        if document_dirty_state(&self.document) {
             self.error = Some(
                 cx.global::<I18nManager>()
                     .strings()
@@ -39,6 +39,24 @@ impl DocumentHost {
             return;
         }
         self.cancel_selection_transfers();
+        let Some(current_document) = self.document.as_ref() else {
+            return;
+        };
+        let expected_revision = current_document.revision_doc();
+        let expected_identity = match current_document.identity() {
+            Ok(identity) => identity,
+            Err(error) => {
+                self.error = Some(localized_document_error(
+                    &gmark_paged_document::PagedDocumentError::InvalidTransaction(
+                        error.to_string(),
+                    ),
+                    cx,
+                ));
+                cx.emit(DocumentHostEvent::StateChanged);
+                cx.notify();
+                return;
+            }
+        };
         let path = self.path.clone();
         #[cfg(test)]
         let configured_loading = gmark_document_core::LoadingPolicy::default();
@@ -56,9 +74,22 @@ impl DocumentHost {
         };
         let loading_limits = loading.effective_limits();
         #[cfg(not(test))]
-        let recovery_dir = gmark_config::GmarkConfigDirs::from_system()
-            .ok()
-            .map(|dirs| dirs.recovery_dir());
+        let recovery_dir = match gmark_config::AppDirs::from_system() {
+            Ok(dirs) => {
+                let recovery_dir = dirs.recovery_dir();
+                match dirs.ensure_state_parent(&recovery_dir.join(".gmark-recovery-root")) {
+                    Ok(()) => Some(recovery_dir),
+                    Err(error) => {
+                        eprintln!("recovery persistence disabled: {error:#}");
+                        None
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("recovery persistence disabled: {error:#}");
+                None
+            }
+        };
         #[cfg(test)]
         let recovery_dir: Option<PathBuf> = None;
         let window_handle = window.window_handle();
@@ -100,11 +131,12 @@ impl DocumentHost {
                     let reopened_encoding = text_encoding_label(&probe.encoding);
                     let original_for_session = original.clone();
                     let prepared = prepare_utf8_source(original, probe.encoding.clone())?;
-                    let index = LineIndex::build_cancellable(prepared.source(), &cancellation)?;
-                    let document = build_document_session(
+                    let prepared_source = prepared.source().clone();
+                    let index = LineIndex::build_cancellable(&prepared_source, &cancellation)?;
+                    let document = build_document_session_from_prepared(
                         &probe,
                         &original_for_session,
-                        prepared.source().clone(),
+                        prepared,
                         index.clone(),
                         false,
                     )?;
@@ -117,7 +149,12 @@ impl DocumentHost {
                         )
                     });
                     let (structure_source, structure_index, structure_bytes) =
-                        structure_input_for_session(&document, &prepared, &index, &cancellation)?;
+                        structure_input_for_session(
+                            &document,
+                            &prepared_source,
+                            &index,
+                            &cancellation,
+                        )?;
                     let structured = if derived_views_enabled(probe.strategy) {
                         build_structured_index(
                             &structure_source,
@@ -131,7 +168,6 @@ impl DocumentHost {
                     };
                     Ok::<_, gmark_paged_document::PagedDocumentError>((
                         probe,
-                        prepared,
                         index,
                         document,
                         structured,
@@ -149,43 +185,60 @@ impl DocumentHost {
                 view.coordinator.index_cancellation = None;
                 view.reloading = false;
                 match result {
-                    Ok((
-                        probe,
-                        prepared,
-                        index,
-                        document,
-                        structured,
-                        recovery,
-                        reopened_encoding,
-                    )) => {
+                    Ok((probe, index, document, structured, recovery, reopened_encoding)) => {
+                        let Some(current_document) = view.document.as_ref() else {
+                            view.error = Some(localized_document_error(
+                                &gmark_paged_document::PagedDocumentError::InvalidTransaction(
+                                    "shared document disappeared during reload".to_owned(),
+                                ),
+                                cx,
+                            ));
+                            return;
+                        };
+                        if let Err(error) = current_document.reload_prepared_document(
+                            expected_revision,
+                            expected_identity.clone(),
+                            document,
+                        ) {
+                            view.error = Some(localized_document_error(
+                                &gmark_paged_document::PagedDocumentError::InvalidTransaction(
+                                    error.to_string(),
+                                ),
+                                cx,
+                            ));
+                            view.coordinator.pending_external_change =
+                                Some(ExternalChange::Modified);
+                            return;
+                        }
                         let (replacement, recovery_creation_error) = match recovery {
                             Some(Ok(journal)) => (Some(journal), None),
                             Some(Err(error)) => (None, Some(error)),
                             None => (None, None),
                         };
                         let cleanup_error = view
-                            .coordinator
-                            .replace_recovery_journal_after_persistence(replacement, &document)
-                            .err();
+                            .document
+                            .as_ref()
+                            .map(|current| {
+                                view.coordinator
+                                    .replace_recovery_journal_after_persistence(
+                                        replacement,
+                                        current,
+                                    )
+                                    .err()
+                            })
+                            .and_then(|value| value);
                         view.coordinator.recovery_error = match recovery_creation_error {
                             Some(error) => Some(localized_document_error(&error, cx)),
                             None => cleanup_error.map(|error| localized_document_error(&error, cx)),
                         };
                         view.probe = probe;
                         view.document_epoch = view.document_epoch.wrapping_add(1);
-                        view.prepared_source = Some(prepared);
                         view.provisional_source = None;
                         view.index = Some(index);
-                        view.install_document_session(document);
                         view.invalidate_source_rows();
                         view.structured_index = structured;
                         view.invalidate_structured_runtime();
                         view.active_edit = None;
-                        set_document_dirty_state(
-                            &mut view.document,
-                            &mut view.pending_dirty,
-                            false,
-                        );
                         view.coordinator.pending_external_change = None;
                         view.coordinator.external_monitor_paused = false;
                         view.coordinator.external_status = Some(

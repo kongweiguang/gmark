@@ -16,8 +16,7 @@ mod source;
 pub use backend::{
     DEFAULT_VIEWPORT_COLUMN_BYTES, MAX_SYSTEM_CLIPBOARD_BYTES, MAX_VIEWPORT_OVERSCAN_ROWS,
     MAX_VIEWPORT_ROWS, PagedDocument, PagedDocumentBackend, SelectionTransfer, SourceAffinity,
-    SourceAnchor, SourceSelection, ViewportLine, ViewportRequest, ViewportSnapshot,
-    selection_transfer_for_len,
+    SourceAnchor, ViewportLine, ViewportRequest, ViewportSnapshot, selection_transfer_for_len,
 };
 pub use delimited::{
     DelimitedEdit, DelimitedFilterOptions, DelimitedIndex, DelimitedIndexOptions, DelimitedRecord,
@@ -44,4 +43,6 @@ pub use recovery::{
     PagedRecoverySelection, RecoveredPagedDocument, inspect_paged_recovery_base,
     list_paged_recovery_journals, paged_recovery_has_edits, replay_paged_recovery,
 };
-pub use source::{FileCacheStats, FileIdentity, FileSource, PagedDocumentError};
+pub use source::{
+    FileCacheStats, FileIdentity, FileSource, PagedDocumentError, atomic_write_stream,
+};

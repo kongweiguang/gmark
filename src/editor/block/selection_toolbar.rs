@@ -28,6 +28,7 @@ const VIEWPORT_INSET: f32 = 8.0;
 // Windows 的菜单标题栏与文档标签栏都在 GPUI client viewport 内；附着浮层
 // 必须为标签栏预留这一层高度，不能只按整个窗口的 y=0 做碰撞判断。
 const DOCUMENT_TAB_STRIP_RESERVE: f32 = 36.0;
+const WINDOW_CHROME_RESERVE: f32 = 70.0;
 const CODE_ICON: &str = "icon/ui/code.svg";
 const LINK_ICON: &str = "icon/ui/link.svg";
 const MORE_ICON: &str = "icon/ui/more-horizontal.svg";

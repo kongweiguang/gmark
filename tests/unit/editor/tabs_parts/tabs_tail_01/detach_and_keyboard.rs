@@ -151,7 +151,7 @@ async fn tab_strip_keyboard_navigation_closes_clean_tabs_and_protects_dirty_tabs
         assert_eq!(editor.source_document.text(), "");
     });
 
-    editor.update(visual, |editor, _cx| editor.document_dirty = true);
+    editor.update(visual, |editor, _cx| editor.set_document_dirty_for_test(true));
     editor.update_in(visual, |editor, window, _cx| {
         let active_id = editor.tabs.records[editor.tabs.active].id;
         editor

@@ -297,9 +297,6 @@ pub(super) struct WorkspaceState {
     operation_error: Option<String>,
     quick_open: Option<QuickOpenState>,
     focus_handle: Option<FocusHandle>,
-    /// Header controls keep stable handles across renders so pointer and Tab
-    /// navigation share one visual order instead of recreating focus identity.
-    header_focus_handles: Option<[FocusHandle; 3]>,
     keyboard_zone: WorkspaceKeyboardZone,
     search_selected: usize,
     panel_scroll: ScrollHandle,

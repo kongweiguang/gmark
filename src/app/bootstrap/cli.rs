@@ -39,7 +39,7 @@ pub(crate) fn parse(arguments: &[String]) -> CliCommand {
 
 pub(crate) fn help_text(version: &str) -> String {
     format!(
-        "gmark {version} - A block-based Markdown editor\n\n\
+        "Gmark {version} - A block-based Markdown editor\n\n\
          USAGE:\n\
              gmark [OPTIONS] [FILES...]\n\n\
          OPTIONS:\n\

@@ -12,11 +12,11 @@ app="$(realpath "$1")"
 fixture="$(realpath "$2")"
 output="$(realpath -m "$3")"
 output_dir="$(dirname "$output")"
-config_root="$output_dir/config"
+sandbox_root="$output_dir"
 
 [[ -x "$app" ]] || { echo "gmark binary is not executable: $app" >&2; exit 2; }
 [[ -f "$fixture" ]] || { echo "fixture is not a file: $fixture" >&2; exit 2; }
-mkdir -p "$output_dir" "$config_root"
+mkdir -p "$output_dir"
 [[ ! -e "$output" ]] || { echo "refusing to overwrite: $output" >&2; exit 2; }
 
 gdbus call --session \
@@ -25,7 +25,7 @@ gdbus call --session \
     --method org.freedesktop.DBus.Properties.Set \
     org.a11y.Status IsEnabled '<true>' >/dev/null
 
-GMARK_UI_CHECK_CONFIG_ROOT="$config_root" \
+GMARK_UI_CHECK_ROOT="$sandbox_root" \
 GMARK_SOAK_READY_PATH="$output_dir/ready.json" \
 GMARK_SOAK_MODE="linux-at-spi-check" \
 "$app" "$fixture" \

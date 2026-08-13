@@ -412,7 +412,7 @@ fn build_tree(snapshot: EditorAccessibilitySnapshot) -> TreeUpdate {
     let mut nodes =
         Vec::with_capacity(snapshot.lines.len() * 2 + snapshot.folds.len() + 12 + math_node_count);
     let mut root = Node::new(Role::Window);
-    root.set_label("gmark");
+    root.set_label("Gmark");
     root.set_children(vec![TAB_LIST_ID, DOCUMENT_ID, MODE_ID, STATUS_ID]);
     root.push_child(SAVE_ID);
     root.push_child(FIND_ID);

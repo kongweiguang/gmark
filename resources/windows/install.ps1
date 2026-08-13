@@ -31,7 +31,7 @@ function Stop-GmarkProcessesInDirectory {
     $processes = @(Get-GmarkProcessesInDirectory -Directory $Directory)
     if ($processes.Count -eq 0) { return }
     if (-not $Force) {
-        throw 'gmark is running from the install directory. Close it or pass -ForceClose.'
+        throw 'Gmark is running from the install directory. Close it or pass -ForceClose.'
     }
     $processes | Stop-Process -Force
     $processes | Wait-Process -Timeout 10 -ErrorAction Stop
@@ -49,7 +49,7 @@ function New-GmarkShortcut {
     $shortcut.TargetPath = $ExecutablePath
     $shortcut.WorkingDirectory = Split-Path -Parent $ExecutablePath
     $shortcut.IconLocation = "$ExecutablePath,0"
-    $shortcut.Description = 'gmark Markdown Editor'
+    $shortcut.Description = 'Gmark Markdown Editor'
     $shortcut.Save()
 }
 
@@ -86,7 +86,7 @@ New-Item -ItemType Directory -Path $parent -Force | Out-Null
 $nonce = [Guid]::NewGuid().ToString('N')
 $stage = Join-Path $parent "$leaf.stage-$nonce"
 $backup = Join-Path $parent "$leaf.backup-$nonce"
-$shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'gmark.lnk'
+$shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'Gmark.lnk'
 $swapped = $false
 $hadPrevious = Test-Path -LiteralPath $install
 $installedExecutable = Join-Path $install 'gmark.exe'
@@ -140,7 +140,7 @@ try {
     }
 
     Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "gmark $version installed to $install"
+    Write-Host "Gmark $version installed to $install"
 }
 catch {
     $installError = $_

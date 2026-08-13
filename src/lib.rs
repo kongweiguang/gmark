@@ -1,7 +1,17 @@
-#![recursion_limit = "256"]
 // @author kongweiguang
 
-//! gmark - a block-based Markdown editor built with GPUI.
+#![recursion_limit = "256"]
+// Reason: platform, recovery, and pane extension points compile across feature targets; remove when every feature-specific path has dedicated coverage.
+#![allow(dead_code)]
+// Reason: shared imports support mutually exclusive feature targets; remove when each target owns its imports.
+#![allow(unused_imports)]
+// Reason: public constructors expose private implementation state to crate-local callers; remove when those callers use opaque adapters.
+#![allow(private_interfaces)]
+// Reason: typed errors preserve recovery details across the app boundary; remove when the public error contract is boxed without losing them.
+#![allow(clippy::result_large_err)]
+// Reason: callback and adapter signatures keep trait-object guarantees at the boundary; remove when named aliases replace the complex types.
+#![allow(clippy::type_complexity)]
+//! Gmark - a block-based Markdown editor built with GPUI.
 //!
 //! Reads file paths from command-line arguments and opens one GPUI window per
 //! file. With no arguments, a single empty window is created.

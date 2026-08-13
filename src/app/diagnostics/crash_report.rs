@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, bail};
 use serde::Serialize;
 
-use crate::config::GmarkConfigDirs;
+use crate::config::AppDirs;
 
 const REPORT_SCHEMA: u32 = 1;
 const REPORT_LIMIT: usize = 20;
@@ -53,13 +53,17 @@ struct ReportInput<'a> {
 /// 报告默认只保存在本地，不含 panic 文本与 backtrace。两者都可能嵌入文档片段或用户路径，
 /// 因此不能在用户审阅前进入持久化诊断数据。
 pub(crate) fn install() -> anyhow::Result<()> {
-    let report_dir = GmarkConfigDirs::from_system()?.crash_reports_dir();
-    install_with_dir(report_dir)
+    let dirs = AppDirs::from_system()?;
+    install_with_dirs(dirs)
 }
 
 /// Creates the local report directory and opens it with the platform file manager.
 pub(crate) fn open_reports_directory() -> anyhow::Result<()> {
-    let report_dir = GmarkConfigDirs::from_system()?.crash_reports_dir();
+    let dirs = AppDirs::from_system()?;
+    let report_dir = dirs.crash_reports_dir();
+    // Opening the directory is an explicit write-side effect. Validate and
+    // create its state-root parent through the secure directory adapter first.
+    dirs.ensure_state_parent(&report_dir.join(".gmark-crash-reports"))?;
     open_reports_directory_at(&report_dir)
 }
 
@@ -107,7 +111,19 @@ fn folder_open_command(report_dir: &Path) -> Command {
 }
 
 fn install_with_dir(report_dir: PathBuf) -> anyhow::Result<()> {
-    prune_reports(&report_dir, REPORT_LIMIT)?;
+    install_with_target(report_dir, None)
+}
+
+fn install_with_dirs(dirs: AppDirs) -> anyhow::Result<()> {
+    install_with_target(dirs.crash_reports_dir(), Some(dirs))
+}
+
+fn install_with_target(report_dir: PathBuf, dirs: Option<AppDirs>) -> anyhow::Result<()> {
+    // Tests and explicit legacy adapters retain their eager pruning behavior;
+    // the production path defers root creation until the first panic write.
+    if dirs.is_none() {
+        prune_reports(&report_dir, REPORT_LIMIT)?;
+    }
 
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -137,6 +153,13 @@ fn install_with_dir(report_dir: PathBuf) -> anyhow::Result<()> {
             column: location.map(std::panic::Location::column),
             thread_class,
         };
+        if let Some(dirs) = &dirs {
+            if let Err(error) = dirs.ensure_state_parent(&report_dir.join(".gmark-crash-report")) {
+                eprintln!("crash report persistence disabled: {error:#}");
+                previous_hook(info);
+                return;
+            }
+        }
         let _ = write_report(&report_dir, input);
         previous_hook(info);
     }));

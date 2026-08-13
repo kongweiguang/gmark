@@ -22,7 +22,7 @@ impl DocumentHost {
         if self
             .document
             .as_ref()
-            .and_then(DocumentSession::resident_growth_reason)
+            .and_then(SharedDocument::resident_growth_reason)
             .is_some()
         {
             return strings
@@ -98,7 +98,7 @@ impl DocumentHost {
                 DocumentHostViewMode::Structure => crate::accessibility::AccessibilityMode::Preview,
                 DocumentHostViewMode::Split => crate::accessibility::AccessibilityMode::Split,
             },
-            dirty: document_dirty_state(&self.document, &self.pending_dirty),
+            dirty: document_dirty_state(&self.document),
             status: self
                 .status_text(cx.global::<I18nManager>().strings())
                 .to_string(),
@@ -116,7 +116,7 @@ impl DocumentHost {
     pub(crate) fn accessibility_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
 
-        let flags = u64::from(document_dirty_state(&self.document, &self.pending_dirty))
+        let flags = u64::from(document_dirty_state(&self.document))
             | (u64::from(self.saving) << 1)
             | (u64::from(self.reloading) << 2)
             | (u64::from(self.search_running) << 3)

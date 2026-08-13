@@ -40,7 +40,7 @@ pub(super) fn build_menus(
         // match standard macOS conventions.
         vec![
             Menu {
-                name: "gmark".into(),
+                name: "Gmark".into(),
                 items: vec![
                     MenuItem::action(strings.menu_preferences.clone(), OpenPreferences),
                     MenuItem::separator(),
@@ -75,7 +75,7 @@ pub(super) fn build_menus(
         vec![
             // 客户端标题栏把这个应用菜单渲染为图标；名称只作平台菜单契约，不显示在界面上。
             Menu {
-                name: "gmark".into(),
+                name: "Gmark".into(),
                 items: vec![
                     MenuItem::action(strings.menu_preferences.clone(), OpenPreferences),
                     MenuItem::separator(),

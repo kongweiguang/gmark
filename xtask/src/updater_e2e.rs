@@ -3,7 +3,7 @@
 //! Production update harness.
 //!
 //! The application and updater are deliberately treated as external programs here. The
-//! harness only owns an isolated configuration/update root and a small marker protocol;
+//! harness only owns an isolated UI-check sandbox/update root and a small marker protocol;
 //! this keeps the test usable while the in-process updater API evolves.
 
 mod runner;
@@ -81,7 +81,7 @@ pub fn decision_plan(decision: UnsavedDecision) -> DecisionPlan {
 /// workspace-relative resolution and isolation checks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpdaterE2eOptions {
-    pub config_root: Option<PathBuf>,
+    pub ui_check_root: Option<PathBuf>,
     pub updates_root: Option<PathBuf>,
     pub current_binary: Option<PathBuf>,
     pub next_binary: Option<PathBuf>,
@@ -116,7 +116,7 @@ pub struct UpdaterE2eOptions {
 impl Default for UpdaterE2eOptions {
     fn default() -> Self {
         Self {
-            config_root: None,
+            ui_check_root: None,
             updates_root: None,
             current_binary: None,
             next_binary: None,
@@ -173,8 +173,10 @@ pub fn parse_args(arguments: &[String]) -> Result<ParsedUpdaterE2eArgs, String> 
             "--dry-run" => options.dry_run = true,
             "--fixture" => options.fixture = true,
             "--keep-temp" => options.keep_temp = true,
-            "--config-root" | "--config-dir" => {
-                options.config_root = Some(path_value(arguments, &mut index, argument)?)
+            // Deprecated harness-only aliases are accepted for existing invocations. The
+            // canonical contract and all emitted diagnostics use --ui-check-root.
+            "--ui-check-root" | "--config-root" | "--config-dir" => {
+                options.ui_check_root = Some(path_value(arguments, &mut index, "--ui-check-root")?)
             }
             "--updates-root" | "--update-root" | "--updates-dir" => {
                 options.updates_root = Some(path_value(arguments, &mut index, argument)?)
@@ -330,7 +332,7 @@ pub fn version_is_newer(current: &str, target: &str) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct E2ePaths {
     pub temporary_root: Option<PathBuf>,
-    pub config_root: PathBuf,
+    pub ui_check_root: PathBuf,
     pub updates_root: PathBuf,
     pub control_root: PathBuf,
     pub logs_root: PathBuf,
@@ -351,10 +353,12 @@ pub fn resolve_paths(
     options: &UpdaterE2eOptions,
     workspace_root: &Path,
 ) -> Result<E2ePaths, String> {
-    let (config_root, updates_root, temporary_root) = resolve_roots(options, workspace_root)?;
-    if paths_overlap(&config_root, &updates_root) {
+    let (ui_check_root, updates_root, temporary_root) = resolve_roots(options, workspace_root)?;
+    if paths_overlap(&ui_check_root, &updates_root) {
         cleanup_temporary_root(temporary_root.as_deref());
-        return Err("config root and update root must be distinct and non-overlapping".to_owned());
+        return Err(
+            "ui-check root and update root must be distinct and non-overlapping".to_owned(),
+        );
     }
     let control_root = updates_root.join(E2E_DIR);
     let logs_root = control_root.join("logs");
@@ -380,7 +384,7 @@ pub fn resolve_paths(
     let resolved = (|| {
         Ok(E2ePaths {
             temporary_root: temporary_root.clone(),
-            config_root,
+            ui_check_root,
             updates_root: updates_root.clone(),
             control_root: control_root.clone(),
             logs_root: logs_root.clone(),
@@ -441,24 +445,24 @@ fn resolve_roots(
     options: &UpdaterE2eOptions,
     workspace_root: &Path,
 ) -> Result<(PathBuf, PathBuf, Option<PathBuf>), String> {
-    let temporary_root = (options.config_root.is_none() || options.updates_root.is_none())
+    let temporary_root = (options.ui_check_root.is_none() || options.updates_root.is_none())
         .then(unique_temp_root)
         .transpose()?;
     let generated = temporary_root.as_deref().unwrap_or_else(|| Path::new(""));
-    let config = options
-        .config_root
+    let ui_check = options
+        .ui_check_root
         .as_deref()
         .map(|path| absolutize(workspace_root, path))
-        .unwrap_or_else(|| generated.join("config"));
+        .unwrap_or_else(|| generated.join("ui-check"));
     let updates = options
         .updates_root
         .as_deref()
         .map(|path| absolutize(workspace_root, path))
         .unwrap_or_else(|| generated.join("updates"));
-    if is_filesystem_root(&config) || is_filesystem_root(&updates) {
-        return Err("configuration and update roots may not be filesystem roots".to_owned());
+    if is_filesystem_root(&ui_check) || is_filesystem_root(&updates) {
+        return Err("ui-check root and update root may not be filesystem roots".to_owned());
     }
-    Ok((config, updates, temporary_root))
+    Ok((ui_check, updates, temporary_root))
 }
 
 fn unique_temp_root() -> Result<PathBuf, String> {
@@ -549,10 +553,10 @@ pub fn run_at(workspace_root: &Path, arguments: &[String]) -> Result<(), String>
         ))
     } else if options.dry_run {
         println!(
-            "updater-e2e dry-run: platform={}, decision={}, config-root={}, updates-root={}",
+            "updater-e2e dry-run: platform={}, decision={}, ui-check-root={}, updates-root={}",
             platform_name(),
             options.decision.as_str(),
-            paths.config_root.display(),
+            paths.ui_check_root.display(),
             paths.updates_root.display()
         );
         Ok(())
@@ -572,10 +576,10 @@ struct RuntimeWorkspace {
 
 impl RuntimeWorkspace {
     fn new(options: &UpdaterE2eOptions, paths: &E2ePaths) -> Result<Self, String> {
-        fs::create_dir_all(&paths.config_root).map_err(|error| {
+        fs::create_dir_all(&paths.ui_check_root).map_err(|error| {
             format!(
-                "failed to create config root '{}': {error}",
-                paths.config_root.display()
+                "failed to create ui-check sandbox root '{}': {error}",
+                paths.ui_check_root.display()
             )
         })?;
         fs::create_dir_all(&paths.logs_root).map_err(|error| {
@@ -652,7 +656,7 @@ fn display_command(program: &Path, arguments: &[String]) -> String {
 /// The platform-specific command and marker contract printed by updater-e2e --help.
 pub fn print_help() {
     println!(
-        "GMark updater E2E harness\n\
+        "Gmark updater E2E harness\n\
          Usage: cargo run -p xtask -- updater-e2e [OPTIONS]\n\
          Required for a production run: --current-binary PATH --next-binary PATH (or --next-installer PATH),\n\
          --current-version SEMVER --target-version SEMVER --driver PATH, --signing-private-key PATH,\n\
@@ -663,7 +667,7 @@ pub fn print_help() {
          macOS/Linux drivers also write agent.pid, while Windows verifies Inno Setup feedback.\n\
          Platform launchers: Windows .ps1/.cmd use PowerShell/cmd; macOS and Linux use executable or .sh.\n\
          Options:\n\
-         --config-root PATH --updates-root PATH --current-binary PATH --next-binary PATH\n\
+         --ui-check-root PATH --updates-root PATH --current-binary PATH --next-binary PATH\n\
          --current-installer PATH --next-installer PATH --signing-private-key PATH\n\
          --signing-public-key PATH --public-key-base64 VALUE --current-version SEMVER\n\
          --target-version SEMVER --manifest-url LOOPBACK_URL --driver PATH --helper PATH --agent PATH --apply-plan PATH\n\

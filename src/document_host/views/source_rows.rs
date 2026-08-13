@@ -59,7 +59,7 @@ impl DocumentHost {
             document_revision: self
                 .document
                 .as_ref()
-                .map(DocumentSession::revision)
+                .map(SharedDocument::revision)
                 .unwrap_or_default(),
             source_range: row.content_range.clone(),
             column_window_start: self.displayed_screen_lines.column_window_start,
@@ -85,7 +85,7 @@ impl DocumentHost {
         let previous = self
             .document
             .as_ref()
-            .map(DocumentSession::source_selection)
+            .map(SharedDocument::source_selection)
             .unwrap_or_default();
 
         if event.click_count >= 3 {

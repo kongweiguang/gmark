@@ -45,7 +45,7 @@ impl ClipboardSelection {
 
 /// Creates a safe HTML + Markdown clipboard payload from one already selected
 /// semantic fragment. The source is never reparsed by a second Markdown
-/// implementation; GMark's value model supplies the fallback text.
+/// implementation; Gmark's value model supplies the fallback text.
 pub fn export_clipboard_fragment(
     selection: ClipboardSelection,
     theme: &ExportTheme,

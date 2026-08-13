@@ -396,7 +396,7 @@ impl DocumentHost {
                 .await;
             let _ = this.update(cx, |view, cx| {
                 if view.structured_generation != generation
-                    || view.document.as_ref().map(DocumentSession::revision) != Some(base_revision)
+                    || view.document.as_ref().map(SharedDocument::revision) != Some(base_revision)
                     || view.coordinator.pending_external_change.is_some()
                 {
                     view.structured_column_progress = None;
@@ -405,7 +405,7 @@ impl DocumentHost {
                 view.structured_cancellation = None;
                 view.structured_column_progress = None;
                 match result {
-                    Ok(document) => view.install_delimited_transformation(document, cx),
+                    Ok(replacement) => view.install_delimited_transformation(replacement, cx),
                     Err(PagedDocumentError::Cancelled) => {}
                     Err(error) => view.set_structure_error(error, cx),
                 }
@@ -423,15 +423,16 @@ impl DocumentHost {
         cx.notify();
     }
 
-    fn install_delimited_transformation(
-        &mut self,
-        mut next_document: DocumentSession,
-        cx: &mut Context<Self>,
-    ) {
+    fn install_delimited_transformation(&mut self, replacement: String, cx: &mut Context<Self>) {
         self.active_edit = None;
         self.structured_cell_edit = None;
-        next_document.dirty = !next_document.is_pristine();
-        self.install_document_session(next_document);
+        let Some(document) = self.document.as_ref() else {
+            return;
+        };
+        if let Err(error) = document.replace_range(0..document.len(), replacement) {
+            self.set_structure_error(error, cx);
+            return;
+        }
         self.tail_enabled = false;
         let preserve_live_table = matches!(
             self.view_mode,

@@ -136,6 +136,28 @@ impl PreferencesWindow {
                 strings.preferences_shortcut_toggle_workspace.clone()
             }
             ShortcutCommand::ToggleDocumentSidebar => strings.menu_toggle_document_sidebar.clone(),
+            ShortcutCommand::SplitRight => strings.preferences_shortcut_split_right.clone(),
+            ShortcutCommand::SplitDown => strings.preferences_shortcut_split_down.clone(),
+            ShortcutCommand::ClosePane => strings.preferences_shortcut_close_pane.clone(),
+            ShortcutCommand::FocusPaneLeft => strings.preferences_shortcut_focus_pane_left.clone(),
+            ShortcutCommand::FocusPaneRight => {
+                strings.preferences_shortcut_focus_pane_right.clone()
+            }
+            ShortcutCommand::FocusPaneUp => strings.preferences_shortcut_focus_pane_up.clone(),
+            ShortcutCommand::FocusPaneDown => strings.preferences_shortcut_focus_pane_down.clone(),
+            ShortcutCommand::MoveTabToPaneLeft => {
+                strings.preferences_shortcut_move_tab_to_pane_left.clone()
+            }
+            ShortcutCommand::MoveTabToPaneRight => {
+                strings.preferences_shortcut_move_tab_to_pane_right.clone()
+            }
+            ShortcutCommand::MoveTabToPaneUp => {
+                strings.preferences_shortcut_move_tab_to_pane_up.clone()
+            }
+            ShortcutCommand::MoveTabToPaneDown => {
+                strings.preferences_shortcut_move_tab_to_pane_down.clone()
+            }
+            ShortcutCommand::BalancePanes => strings.preferences_shortcut_balance_panes.clone(),
             ShortcutCommand::QuickOpen => strings.preferences_shortcut_quick_open.clone(),
             ShortcutCommand::CommandPalette => strings.preferences_shortcut_command_palette.clone(),
             ShortcutCommand::GoToLine => strings.preferences_shortcut_go_to_line.clone(),

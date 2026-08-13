@@ -11,7 +11,7 @@ fn builtins_preserve_the_complete_ui_key_set() {
     let english = I18nCatalog::new_with_language_id(BUILTIN_LANGUAGE_EN_US_ID).strings_clone();
     let chinese = I18nCatalog::new_with_language_id(BUILTIN_LANGUAGE_ZH_CN_ID).strings_clone();
 
-    assert_eq!(english.scalars().len(), 405);
+    assert_eq!(english.scalars().len(), 425);
     assert_eq!(
         english.scalars().keys().collect::<Vec<_>>(),
         chinese.scalars().keys().collect::<Vec<_>>()
@@ -53,6 +53,168 @@ fn builtins_preserve_the_complete_ui_key_set() {
     );
     assert_eq!(english.get("slash_commands.table"), Some("Table"));
     assert_eq!(chinese.get("slash_commands.table"), Some("表格"));
+    assert_eq!(
+        english.get("preferences_shortcut_split_right"),
+        Some("Split Right")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_split_right"),
+        Some("向右拆分")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_split_down"),
+        Some("Split Down")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_split_down"),
+        Some("向下拆分")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_close_pane"),
+        Some("Close Pane")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_close_pane"),
+        Some("关闭窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_focus_pane_left"),
+        Some("Focus Pane Left")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_focus_pane_left"),
+        Some("聚焦左侧窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_focus_pane_right"),
+        Some("Focus Pane Right")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_focus_pane_right"),
+        Some("聚焦右侧窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_focus_pane_up"),
+        Some("Focus Pane Up")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_focus_pane_up"),
+        Some("聚焦上方窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_focus_pane_down"),
+        Some("Focus Pane Down")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_focus_pane_down"),
+        Some("聚焦下方窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_move_tab_to_pane_left"),
+        Some("Move Tab to Pane Left")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_move_tab_to_pane_left"),
+        Some("将标签页移至左侧窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_move_tab_to_pane_right"),
+        Some("Move Tab to Pane Right")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_move_tab_to_pane_right"),
+        Some("将标签页移至右侧窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_move_tab_to_pane_up"),
+        Some("Move Tab to Pane Up")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_move_tab_to_pane_up"),
+        Some("将标签页移至上方窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_move_tab_to_pane_down"),
+        Some("Move Tab to Pane Down")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_move_tab_to_pane_down"),
+        Some("将标签页移至下方窗格")
+    );
+    assert_eq!(
+        english.get("preferences_shortcut_balance_panes"),
+        Some("Balance Panes")
+    );
+    assert_eq!(
+        chinese.get("preferences_shortcut_balance_panes"),
+        Some("平衡窗格")
+    );
+    assert_eq!(
+        english.get("status_bar_mode_split"),
+        Some("Source & Preview")
+    );
+    assert_eq!(chinese.get("status_bar_mode_split"), Some("源码与预览"));
+    assert_eq!(
+        english.get("pane_notice_duplicate_document_label"),
+        Some("Duplicate Document")
+    );
+    assert_eq!(
+        chinese.get("pane_notice_duplicate_document_label"),
+        Some("文档已存在")
+    );
+    assert_eq!(
+        english.get("pane_notice_duplicate_document_description"),
+        Some("This document is already open in the target pane.")
+    );
+    assert_eq!(
+        chinese.get("pane_notice_duplicate_document_description"),
+        Some("目标窗格中已打开此文档。")
+    );
+    assert_eq!(
+        english.get("pane_notice_pane_limit_label"),
+        Some("Pane Limit Reached")
+    );
+    assert_eq!(
+        chinese.get("pane_notice_pane_limit_label"),
+        Some("已达到窗格上限")
+    );
+    assert_eq!(
+        english.get("pane_notice_pane_limit_description"),
+        Some("A workspace can contain at most 8 panes.")
+    );
+    assert_eq!(
+        chinese.get("pane_notice_pane_limit_description"),
+        Some("一个工作区最多包含 8 个窗格。")
+    );
+    assert_eq!(
+        english.get("pane_notice_insufficient_space_label"),
+        Some("Insufficient Space")
+    );
+    assert_eq!(
+        chinese.get("pane_notice_insufficient_space_label"),
+        Some("空间不足")
+    );
+    assert_eq!(
+        english.get("pane_notice_insufficient_space_description"),
+        Some("There is not enough space to create another pane.")
+    );
+    assert_eq!(
+        chinese.get("pane_notice_insufficient_space_description"),
+        Some("没有足够的空间创建新窗格。")
+    );
+    assert_eq!(
+        english.get("status_bar_shared_document"),
+        Some("Shared document")
+    );
+    assert_eq!(chinese.get("status_bar_shared_document"), Some("共享文档"));
+    assert_eq!(
+        english.get("status_bar_shared_views_template"),
+        Some("{count} views")
+    );
+    assert_eq!(
+        chinese.get("status_bar_shared_views_template"),
+        Some("{count} 个视图")
+    );
 
     for value in english.scalars().values().chain(chinese.scalars().values()) {
         assert!(!value.trim().is_empty());

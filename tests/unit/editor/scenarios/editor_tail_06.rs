@@ -1,5 +1,7 @@
 // @author kongweiguang
 
+use super::DocumentKind;
+
 #[gpui::test]
 async fn split_projection_coalesces_revisions_and_rejects_stale_work(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
@@ -255,7 +257,7 @@ async fn dropped_markdown_opens_new_tab_without_replacing_current(cx: &mut TestA
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "old".to_string(), None));
 
     editor.update(cx, |editor, cx| {
-        editor.mark_dirty(cx);
+        editor.set_document_dirty_for_test(true);
         editor.open_dropped_markdown_in_tab(dropped_path.clone(), cx);
     });
     cx.run_until_parked();
@@ -577,7 +579,7 @@ async fn app_menu_opened_dirty_file_window_prompts_only_that_window(cx: &mut Tes
 
     second_window
         .update(cx, |editor, window, cx| {
-            editor.mark_dirty(cx);
+            editor.set_document_dirty_for_test(true);
             assert!(!editor.on_window_should_close(window, cx));
         })
         .expect("second editor window should be open");
@@ -603,7 +605,9 @@ async fn discard_and_close_clears_resident_document_dirty_state(cx: &mut TestApp
     let (editor, visual) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_owned(), None));
 
-    editor.update(visual, |editor, cx| editor.mark_dirty(cx));
+    editor.update(visual, |editor, _cx| {
+        editor.set_document_dirty_for_test(true)
+    });
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             assert!(!editor.on_window_should_close(window, cx));
@@ -634,7 +638,7 @@ async fn app_menu_opened_dirty_window_close_guard_prompts_only_that_window(
 
     second_window
         .update(cx, |editor, window, cx| {
-            editor.mark_dirty(cx);
+            editor.set_document_dirty_for_test(true);
             assert!(!editor.on_window_should_close(window, cx));
         })
         .expect("second editor window should be open");
@@ -715,3 +719,6 @@ async fn window_close_action_closes_current_editor_before_global_menu_route(
     assert_eq!(remaining[0].window_id(), first_window.window_id());
     assert_ne!(remaining[0].window_id(), second_window.window_id());
 }
+
+#[path = "editor_tail_06_parts/pane_window.rs"]
+mod pane_window;

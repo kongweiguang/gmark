@@ -84,7 +84,7 @@ impl Editor {
     ///
     /// 仅在视口已进入文末留白时启用，避免把长文档中间的虚拟占位区
     /// 误判成文档结尾；块自身范围内的点击仍由 Block 精确命中字符位置。
-    pub(super) fn focus_document_end_from_blank_area(
+    pub(crate) fn focus_document_end_from_blank_area(
         &mut self,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
@@ -157,7 +157,7 @@ impl Editor {
     }
 
     /// 为没有块内文末插入点的尾部创建根级空段落；该事务必须可独立撤销。
-    pub(super) fn ensure_editable_document_tail(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn ensure_editable_document_tail(&mut self, cx: &mut Context<Self>) -> bool {
         if self.view_mode != super::ViewMode::Rendered || self.document.root_count() == 0 {
             return false;
         }

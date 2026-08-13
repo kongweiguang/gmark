@@ -125,9 +125,9 @@ fn build_menus_uses_english_fallback_by_default() {
         .collect::<Vec<_>>();
 
     #[cfg(target_os = "macos")]
-    assert_eq!(menu_names, vec!["gmark", "File", "Edit", "View", "Help"]);
+    assert_eq!(menu_names, vec!["Gmark", "File", "Edit", "View", "Help"]);
     #[cfg(not(target_os = "macos"))]
-    assert_eq!(menu_names, vec!["gmark", "File", "Edit", "View", "Help"]);
+    assert_eq!(menu_names, vec!["Gmark", "File", "Edit", "View", "Help"]);
 
     // New Tab is the primary document action; New Window remains adjacent.
     #[cfg(target_os = "macos")]
@@ -210,7 +210,7 @@ fn navigation_keeps_only_global_non_editor_capabilities() {
         .map(|menu| menu.name.as_ref())
         .collect::<Vec<_>>();
 
-    assert_eq!(menu_names, vec!["gmark", "File", "Edit", "View", "Help"]);
+    assert_eq!(menu_names, vec!["Gmark", "File", "Edit", "View", "Help"]);
     let edit_menu = &menus[EDIT_IDX];
     assert!(edit_menu.items.iter().all(
         |item| !matches!(item, MenuItem::Action { action, .. } if action.as_any().is::<CopyAsMarkdown>())
@@ -246,9 +246,9 @@ fn build_menus_uses_chinese_language_when_selected() {
         .collect::<Vec<_>>();
 
     #[cfg(target_os = "macos")]
-    assert_eq!(menu_names, vec!["gmark", "文件", "编辑", "视图", "帮助"]);
+    assert_eq!(menu_names, vec!["Gmark", "文件", "编辑", "视图", "帮助"]);
     #[cfg(not(target_os = "macos"))]
-    assert_eq!(menu_names, vec!["gmark", "文件", "编辑", "视图", "帮助"]);
+    assert_eq!(menu_names, vec!["Gmark", "文件", "编辑", "视图", "帮助"]);
 
     #[cfg(target_os = "macos")]
     assert_eq!(action_name(&menus[1].items[0]), "新建标签页");

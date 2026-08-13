@@ -15,13 +15,13 @@ use super::super::Editor;
 
 const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 
-pub(in crate::editor) enum FileWatchSignal {
+pub(crate) enum FileWatchSignal {
     Changed,
     Error(String),
 }
 
 /// Drop 时只发停止信号，不在 GPUI 线程等待 debouncer thread 的 tick。
-pub(in crate::editor) struct FileWatchGuard {
+pub(crate) struct FileWatchGuard {
     debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
 }
 
@@ -33,7 +33,7 @@ impl Drop for FileWatchGuard {
     }
 }
 
-pub(in crate::editor) fn start_file_watch(
+pub(crate) fn start_file_watch(
     path: PathBuf,
 ) -> anyhow::Result<(FileWatchGuard, UnboundedReceiver<FileWatchSignal>)> {
     let directory = path
@@ -109,6 +109,9 @@ impl Editor {
             // fingerprint watcher 会把合法 tail 追加误报成冲突，因此同一 Tab 只能保留
             // 大文档监控这一条事实来源。
             self.external_file_conflict = false;
+            return;
+        }
+        if self.shared_document {
             return;
         }
         if cfg!(test) {

@@ -46,7 +46,7 @@ pub(crate) fn is_root_comment_start(line: &str) -> bool {
     trimmed.starts_with("<!--") && line.len() - trimmed.len() <= 3
 }
 
-/// Sanitizes raw HTML events before later passes add GMark-owned markup.
+/// Sanitizes raw HTML events before later passes add Gmark-owned markup.
 pub(crate) fn rewrite_unsafe_html_blocks(
     markdown: &str,
     base_dir: Option<&Path>,

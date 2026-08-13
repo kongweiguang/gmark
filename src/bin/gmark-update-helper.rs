@@ -24,11 +24,11 @@ fn run_from_args(args: &[OsString]) -> ExitCode {
     match run_v2(&plan_path) {
         Ok(()) => ExitCode::SUCCESS,
         Err(V2RunError::Untrusted(error)) => {
-            eprintln!("gmark update failed: {error}");
+            eprintln!("Gmark update failed:{error}");
             ExitCode::FAILURE
         }
         Err(V2RunError::Trusted { plan, failure }) => {
-            eprintln!("gmark update failed: {}", failure.message);
+            eprintln!("Gmark update failed:{}", failure.message);
             report_v2_failure(plan.as_ref(), &failure);
             ExitCode::FAILURE
         }

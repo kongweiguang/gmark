@@ -579,7 +579,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.close_menu_bar(cx);
-        if let Some(host) = self.document_host.clone() {
+        if !self.pane_canvas
+            && let Some(host) = self.focused_pane_entities(cx).1
+        {
+            host.update(cx, |host, cx| host.show_structure_view(cx));
+        } else if let Some(host) = self.document_host.clone() {
             host.update(cx, |host, cx| host.show_structure_view(cx));
         }
     }
@@ -591,7 +595,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.close_menu_bar(cx);
-        if let Some(host) = self.document_host.clone() {
+        if !self.pane_canvas
+            && let Some(host) = self.focused_pane_entities(cx).1
+        {
+            host.update(cx, |host, cx| host.focus_json_inspector(window, cx));
+        } else if let Some(host) = self.document_host.clone() {
             host.update(cx, |host, cx| host.focus_json_inspector(window, cx));
         }
     }
@@ -603,7 +611,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.close_menu_bar(cx);
-        if let Some(host) = self.document_host.clone() {
+        if !self.pane_canvas
+            && let Some(host) = self.focused_pane_entities(cx).1
+        {
+            host.update(cx, |host, cx| host.focus_structured_filter(window, cx));
+        } else if let Some(host) = self.document_host.clone() {
             host.update(cx, |host, cx| host.focus_structured_filter(window, cx));
         }
     }
@@ -615,7 +627,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.close_menu_bar(cx);
-        if let Some(host) = self.document_host.clone() {
+        if !self.pane_canvas
+            && let Some(host) = self.focused_pane_entities(cx).1
+        {
+            host.update(cx, |host, cx| host.focus_structured_columns(window, cx));
+        } else if let Some(host) = self.document_host.clone() {
             host.update(cx, |host, cx| host.focus_structured_columns(window, cx));
         }
     }
@@ -636,7 +652,17 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.close_menu_bar(cx);
-        if let Some(host) = self.document_host.clone() {
+        if !self.pane_canvas
+            && let Some(host) = self.focused_pane_entities(cx).1
+        {
+            host.update(cx, |host, cx| host.export_selection_from_menu(window, cx));
+        } else if !self.pane_canvas
+            && let Some(editor) = self.focused_pane_entities(cx).0
+        {
+            editor.update(cx, |editor, cx| {
+                editor.export_selection_via_prompt(window, cx)
+            });
+        } else if let Some(host) = self.document_host.clone() {
             host.update(cx, |host, cx| host.export_selection_from_menu(window, cx));
         } else {
             self.export_selection_via_prompt(window, cx);

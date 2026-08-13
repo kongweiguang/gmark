@@ -381,6 +381,7 @@ jobs:
           PACKAGE_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_TITLE: ${{ inputs.release_title }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
           RELEASE_CHANNEL: ${{ inputs.channel }}
           ROLLOUT_PERCENT: ${{ inputs.rollout_percent }}
           PAUSED: ${{ inputs.paused }}
@@ -397,7 +398,10 @@ jobs:
           common=(--version "$PACKAGE_VERSION" --release-tag "$RELEASE_TAG" --dist dist)
           update=("${common[@]}" --private-key "$private_key" --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" --output dist/update-manifest.json --rollout-percent "$ROLLOUT_PERCENT")
           if [[ "$RELEASE_CHANNEL" == stable ]]; then
-            update+=(--v2-output dist/update-manifest-v2.json --notes "$RELEASE_TITLE")
+            # The updater reads signed notes, so GitHub detail must not collapse to the title.
+            manifest_notes="$RELEASE_NOTES"
+            if [[ -z "$manifest_notes" ]]; then manifest_notes="$RELEASE_TITLE"; fi
+            update+=(--v2-output dist/update-manifest-v2.json --notes "$manifest_notes")
           fi
           release=(create "${common[@]}" --channel "$RELEASE_CHANNEL" --private-key "$private_key" --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" --output dist/release-artifacts.json --rollout-percent "$ROLLOUT_PERCENT")
           if [[ "$PAUSED" == true ]]; then update+=(--paused); release+=(--paused); fi

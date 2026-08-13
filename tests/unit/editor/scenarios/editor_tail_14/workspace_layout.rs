@@ -64,7 +64,7 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
                 .is_none()
         );
         if let Some(titlebar) = titlebar {
-            assert_eq!(f32::from(titlebar.size.height), 38.0);
+            assert_eq!(f32::from(titlebar.size.height), 34.0);
             assert!(titlebar.bottom() <= content.top());
             assert!(titlebar.bottom() <= workspace.top());
             assert!(
@@ -136,16 +136,7 @@ async fn split_workspace_uses_compact_overlay_at_two_x_scale(cx: &mut TestAppCon
         assert!(preview.right() <= content.right());
         assert!(source.right() <= preview.left());
 
-        for selector in [
-            "workspace-tab-files",
-            "workspace-tab-search",
-        ] {
-            let control = visual_cx.debug_bounds(selector).unwrap();
-            assert_eq!(f32::from(control.size.width), 32.0, "{selector}");
-            assert_eq!(f32::from(control.size.height), 32.0, "{selector}");
-            assert!(control.left() >= workspace.left(), "{selector}");
-            assert!(control.right() <= workspace.right(), "{selector}");
-        }
+        assert!(visual_cx.debug_bounds("workspace-panel-header").is_none());
         for selector in [
             "status-bar-sidebar-toggle",
             "status-bar-mode-switch",

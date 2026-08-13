@@ -121,8 +121,7 @@ fn source_selection_exports_atomically_without_changing_the_document() {
     fs::write(&path, "alpha\n世界\nomega\n").unwrap();
     let source = FileSource::open(&path).unwrap();
     let index = LineIndex::build(&source).unwrap();
-    let mut document = PagedDocument::new(PieceDocument::open(source, index).unwrap());
-    document.set_selection(6.."alpha\n世界\n".len() as u64, false);
+    let document = PagedDocument::new(PieceDocument::open(source, index).unwrap());
 
     document
         .save_range_atomic_cancellable(
@@ -135,10 +134,6 @@ fn source_selection_exports_atomically_without_changing_the_document() {
     assert_eq!(fs::read_to_string(exported).unwrap(), "世界\n");
     assert!(document.is_pristine());
     assert_eq!(document.len(), "alpha\n世界\nomega\n".len() as u64);
-    assert_eq!(
-        document.selection(),
-        (6.."alpha\n世界\n".len() as u64, false)
-    );
 
     let missing_parent = dir.path().join("missing").join("selection.txt");
     assert!(
@@ -151,10 +146,6 @@ fn source_selection_exports_atomically_without_changing_the_document() {
             .is_err()
     );
     assert!(document.is_pristine());
-    assert_eq!(
-        document.selection(),
-        (6.."alpha\n世界\n".len() as u64, false)
-    );
 }
 
 #[test]
@@ -345,9 +336,7 @@ fn editor_adapter_returns_generation_bound_utf8_safe_bounded_viewports() {
         Err(gmark_paged_document::PagedDocumentError::Cancelled)
     ));
 
-    adapter.set_selection(0..4, false);
     adapter.replace_text(0..4, "ZERO").unwrap();
-    assert_eq!(adapter.selection(), (4..4, false));
     assert_eq!(adapter.backend().generation(), 1);
     assert!(adapter.undo());
     assert_eq!(adapter.backend().generation(), 2);

@@ -3,7 +3,7 @@
 //! GPUI shell for disk-backed SourceBacked text documents.
 
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
-use directories::ProjectDirs;
 use gmark_document_core::{
     DEFAULT_DELIMITED_COLUMN_WINDOW, DEFAULT_DELIMITED_ROW_WINDOW, DerivedProjectionProvider,
     DerivedProjectionRequest, DerivedProjectionSnapshot, DerivedProjectionStatus, DocumentFormat,
@@ -20,7 +19,11 @@ use gmark_document_core::{
     SourceAffinity, SourceAnchor, SourceEdit, SourceLocator, SourceSelection, TextEncoding,
     Transaction, ViewDescriptor, ViewFormat,
 };
-use gmark_document_runtime::{DocumentSession, ResidentRecoveryError, ResidentRecoveryJournal};
+use gmark_document_runtime::{
+    ControllerError, DocumentController, DocumentEvent, DocumentEventSubscription, DocumentHandle,
+    DocumentId, DocumentLease, DocumentSession, DocumentViewInstanceId, FileIdentity,
+    ResidentRecoveryError, ResidentRecoveryJournal, SaveFailureCode,
+};
 #[cfg(test)]
 use gmark_json_graph::JsonGraphEdgeKind;
 use gmark_json_graph::{
@@ -29,11 +32,11 @@ use gmark_json_graph::{
     JsonGraphSnapshot, JsonValueKind, SourceLocator as JsonSourceLocator,
 };
 use gmark_paged_document::{
-    DelimitedEdit, DelimitedFilterOptions, DelimitedIndex, DelimitedIndexOptions, EncodedSavePlan,
-    ExternalChange, FileSource, JsonIndex, JsonIndexOptions, LineIndex, MarkdownTableIndex,
-    OpenProbe, OpenStrategy, PagedDocument as PagedDocumentAdapter, PagedDocumentError,
-    PagedRecoveryJournal, PieceDocument, PreparedUtf8Source, SearchCancellation, SearchMatch,
-    SearchOptions, SelectionTransfer, ViewportRequest, prepare_utf8_source, replay_paged_recovery,
+    DelimitedEdit, DelimitedFilterOptions, DelimitedIndex, DelimitedIndexOptions, ExternalChange,
+    FileSource, JsonIndex, JsonIndexOptions, LineIndex, MarkdownTableIndex, OpenProbe,
+    OpenStrategy, PagedDocument as PagedDocumentAdapter, PagedDocumentError, PagedRecoveryJournal,
+    PieceDocument, PreparedUtf8Source, SearchCancellation, SearchMatch, SearchOptions,
+    SelectionTransfer, ViewportRequest, prepare_utf8_source, replay_paged_recovery,
     search_file_source, selection_transfer_for_len, serialize_delimited_record,
     validate_json_lines_cancellable, validate_json_lines_from_cancellable,
 };
@@ -61,10 +64,24 @@ use crate::theme::ThemeManager;
 #[path = "contracts.rs"]
 mod contracts;
 
+#[path = "shared.rs"]
+mod shared;
+
+use shared::SharedDocument;
+
+#[path = "view_state.rs"]
+mod view_state;
+
+use view_state::DocumentHostViewState;
+pub(crate) use view_state::{
+    DetachedDocumentHostView, DocumentHostViewPresentation, ViewPresentationState,
+};
+
+pub(crate) use contracts::DocumentHostViewMode;
 use contracts::{
     CHEVRON_DOWN_ICON, CHEVRON_UP_ICON, CLOSE_ICON, DOCUMENT_HOST_KEY_CONTEXT,
-    DocumentHostViewMode, FALLBACK_SOURCE_ROW_HEIGHT, FIND_CASE_ICON, FIND_REGEX_ICON,
-    FIND_WORD_ICON, MAX_RENDERED_LINE_BYTES, PREFIX_PREVIEW_BYTES, SOURCE_OVERSCAN_ROWS,
+    FALLBACK_SOURCE_ROW_HEIGHT, FIND_CASE_ICON, FIND_REGEX_ICON, FIND_WORD_ICON,
+    MAX_RENDERED_LINE_BYTES, PREFIX_PREVIEW_BYTES, SOURCE_OVERSCAN_ROWS,
     SOURCE_SCROLL_BYTES_PER_PIXEL, STRUCTURED_CELL_BYTES, STRUCTURED_CELL_WIDTH,
     STRUCTURED_COLUMN_WINDOW, STRUCTURED_OVERSCAN_ROWS, SourceContextCommand, StructuredIndex,
     StructuredLines, StructuredTextSource, localized_document_error, source_surface_padding,
@@ -78,10 +95,14 @@ pub(crate) use contracts::{
 mod session;
 
 pub(crate) use session::DocumentRecoveryJournal;
+#[cfg(test)]
+use session::build_document_session;
+#[cfg(test)]
+use session::verify_saved_session_readback;
 use session::{
-    build_document_session, build_paged_session, derived_views_enabled,
+    build_document_session_from_prepared, build_paged_session, derived_views_enabled,
     modifier_horizontal_wheel_delta, record_recovery_transaction, recovery_view_id, session_plan,
-    structure_input_for_session, verify_saved_session_readback,
+    structure_input_for_session,
 };
 
 #[path = "projections.rs"]
@@ -101,13 +122,12 @@ use state::{
     StructuredCellEdit, StructuredMenuTarget, StructuredRow,
 };
 
-/// Tab 的格式文档 Host；内部 DocumentSession 是正文、revision 与后端选择的唯一权威状态。
+/// Tab 的格式文档 Host；共享 Controller 是正文、revision 与后端选择的唯一权威状态。
 pub(crate) struct DocumentHost {
     path: PathBuf,
     probe: OpenProbe,
     index: Option<LineIndex>,
-    document: Option<DocumentSession>,
-    prepared_source: Option<PreparedUtf8Source>,
+    document: Option<SharedDocument>,
     provisional_source: Option<FileSource>,
     structured_index: Option<StructuredIndex>,
     /// 未保存 CSV/TSV 的结构索引读取此临时快照，磁盘原文件仍由 Save 独占写入。
@@ -143,6 +163,8 @@ pub(crate) struct DocumentHost {
     /// 此 Tab 的选择、滚动、投影展开状态和活动模式。它始终留在 Host，即使保存任务
     /// 暂时移出共享 Session，也不能把一个窗口的 UI 状态塞回正文会话。
     tab_view_state: DocumentViewState,
+    view_back_history: VecDeque<ViewPresentationState>,
+    view_forward_history: VecDeque<ViewPresentationState>,
     /// 用户最近选择的投影 Provider；切回 Source 后仍保留偏好，活动模式属于 Tab。
     selected_projection_view: Option<DocumentViewId>,
     document_epoch: u64,
@@ -237,8 +259,12 @@ pub(crate) struct DocumentHost {
     search_error: Option<SharedString>,
     mode_notice: Option<SharedString>,
     tail_enabled: bool,
-    /// 仅在 session 尚未安装或保存任务暂时移出时存在；Ready 状态的 dirty 真值属于 session。
-    pending_dirty: Option<bool>,
+    /// Legacy compatibility hosts may own a filesystem poller.  Hosts built
+    /// from a service-owned handle only consume Controller state/events; they
+    /// must never start a per-view watcher.
+    external_monitor_owned: bool,
+    controller_events: Option<DocumentEventSubscription>,
+    controller_event_task: Task<()>,
     saving: bool,
     reloading: bool,
     error: Option<SharedString>,
@@ -248,6 +274,7 @@ pub(crate) struct DocumentHost {
     structured_scroll_handle: UniformListScrollHandle,
     structured_horizontal_scroll_handle: ScrollHandle,
     source_window_start: u64,
+    pending_source_collapsed_folds: BTreeSet<u64>,
     provisional_anchor: Option<SourceAnchor>,
     /// 关闭标签仍会保留实体用于“重新打开关闭的标签”；挂起期间所有后台任务必须停止，
     /// 重新激活后再从当前不可变文档状态恢复，不允许关闭的标签改写剪贴板或缓存。
@@ -337,8 +364,8 @@ mod source_viewport;
 mod structured_data;
 
 use structured_data::{
-    build_structured_index, read_json_cells, search_document_reader,
-    structured_json_lines_record_count, truncate_cell,
+    build_structured_index, build_structured_index_from_snapshot, read_json_cells,
+    search_document_reader, structured_json_lines_record_count, truncate_cell,
 };
 
 #[path = "source_window.rs"]
@@ -352,35 +379,144 @@ use source_window::{
 };
 
 fn document_view_state_mut<'a>(
-    _: &mut Option<DocumentSession>,
+    _: &mut Option<SharedDocument>,
     tab_view_state: &'a mut DocumentViewState,
 ) -> &'a mut DocumentViewState {
     tab_view_state
 }
 
-fn document_dirty_state(document: &Option<DocumentSession>, pending: &Option<bool>) -> bool {
+fn document_dirty_state(document: &Option<SharedDocument>) -> bool {
     document
         .as_ref()
-        .map(|document| document.dirty)
-        .or(*pending)
+        .map(SharedDocument::dirty)
         .unwrap_or(false)
 }
 
-fn set_document_dirty_state(
-    document: &mut Option<DocumentSession>,
-    pending: &mut Option<bool>,
-    dirty: bool,
-) {
-    if let Some(document) = document.as_mut() {
-        document.dirty = dirty;
-    } else {
-        *pending = Some(dirty);
-    }
-}
+#[path = "host_parts/constructors.rs"]
+mod constructors;
 
 impl DocumentHost {
+    fn capture_presentation(&self, cx: &App) -> ViewPresentationState {
+        let source_scroll_y = {
+            let handle = self.scroll_handle.0.borrow().base_handle.clone();
+            f32::from(handle.offset().y)
+        };
+        let structured_scroll_y = {
+            let handle = self.structured_scroll_handle.0.borrow().base_handle.clone();
+            f32::from(handle.offset().y)
+        };
+        let structured_scroll_x = f32::from(self.structured_horizontal_scroll_handle.offset().x);
+        let source_collapsed_folds = self
+            .fold_projection
+            .regions()
+            .iter()
+            .filter(|region| self.fold_projection.is_collapsed(region.id))
+            .map(|region| region.id)
+            .collect();
+        ViewPresentationState {
+            tab_view_state: self.tab_view_state.clone(),
+            search_query: self.search_input.read(cx).display_text().to_owned(),
+            structured_filter_query: self
+                .structured_filter_input
+                .read(cx)
+                .display_text()
+                .to_owned(),
+            structured_filter_column: self.structured_filter_column,
+            hidden_structured_columns: self.hidden_structured_columns.clone(),
+            structured_column_window_start: self.structured_column_window_start,
+            structured_selected_cell: self
+                .structured_selected_cell
+                .as_ref()
+                .map(|cell| (cell.record, cell.column)),
+            source_window_start: self.source_window_start,
+            source_collapsed_folds,
+            source_scroll_y,
+            structured_scroll_y,
+            structured_scroll_x,
+            view_mode: self.view_mode,
+            json_split_ratio: self.json_split_ratio,
+            json_expanded_nodes: self.json_expanded_nodes.clone(),
+            selected_projection_view: self.selected_projection_view.clone(),
+            graph_selected_item: self.graph_selected_item.clone(),
+            graph_search_collapsed_before: self.graph_search_collapsed_before.clone(),
+        }
+    }
+
+    fn restore_presentation(
+        &mut self,
+        presentation: ViewPresentationState,
+        cx: &mut Context<Self>,
+    ) {
+        self.tab_view_state = presentation.tab_view_state;
+        let search_query = presentation.search_query.clone();
+        let structured_filter_query = presentation.structured_filter_query.clone();
+        self.search_input.update(cx, |input, cx| {
+            let len = input.visible_len();
+            input.replace_text_in_visible_range(0..len, &search_query, None, false, cx);
+        });
+        self.structured_filter_input.update(cx, |input, cx| {
+            let len = input.visible_len();
+            input.replace_text_in_visible_range(0..len, &structured_filter_query, None, false, cx);
+        });
+        self.structured_filter_column = presentation.structured_filter_column;
+        self.hidden_structured_columns = presentation.hidden_structured_columns;
+        self.structured_column_window_start = presentation.structured_column_window_start;
+        self.structured_selected_cell = presentation
+            .structured_selected_cell
+            .map(|(record, column)| StructuredCellEdit { record, column });
+        self.source_window_start = presentation.source_window_start;
+        self.pending_source_collapsed_folds = presentation.source_collapsed_folds;
+        self.view_mode = presentation.view_mode;
+        self.json_split_ratio = presentation.json_split_ratio.clamp(0.3, 0.7);
+        self.json_expanded_nodes = presentation.json_expanded_nodes;
+        self.selected_projection_view = presentation.selected_projection_view;
+        self.graph_selected_item = presentation.graph_selected_item;
+        self.graph_search_collapsed_before = presentation.graph_search_collapsed_before;
+        self.scroll_handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.0), px(presentation.source_scroll_y)));
+        self.structured_scroll_handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.0), px(presentation.structured_scroll_y)));
+        self.structured_horizontal_scroll_handle
+            .set_offset(point(px(presentation.structured_scroll_x), px(0.0)));
+        if let Some(document) = self.document.as_ref() {
+            let len = document.len();
+            self.tab_view_state.source.selection.anchor.byte_offset = self
+                .tab_view_state
+                .source
+                .selection
+                .anchor
+                .byte_offset
+                .min(len);
+            self.tab_view_state.source.selection.head.byte_offset = self
+                .tab_view_state
+                .source
+                .selection
+                .head
+                .byte_offset
+                .min(len);
+            self.source_window_start = self
+                .source_window_start
+                .min(document.line_count().saturating_sub(1));
+            if let Some(line) =
+                document.line_for_offset(self.tab_view_state.source.selection.head.byte_offset)
+            {
+                if let Ok(line) = usize::try_from(line) {
+                    self.selection_anchor = Some(line);
+                    self.selected_lines = Some(line..line.saturating_add(1));
+                }
+            }
+        }
+        self.sync_tab_active_view();
+    }
+
     fn sync_tab_active_view(&mut self) {
-        let mut active_view = if self.view_mode == DocumentHostViewMode::Source {
+        let active_view = if self.view_mode == DocumentHostViewMode::Source {
             DocumentViewId::source()
         } else {
             self.selected_projection_view
@@ -389,32 +525,104 @@ impl DocumentHost {
         };
         // Session 与 Tab 必须公开同一个活动视图；只更新 Tab 会让 Source/Live 往返后
         // 持久会话仍声称自己停留在旧表格，保存、恢复和测试都会读到错误状态。
-        if let Some(document) = self.document.as_mut()
-            && document.set_active_view(active_view.clone()).is_err()
-        {
-            self.view_mode = DocumentHostViewMode::Source;
-            active_view = DocumentViewId::source();
-            // Source 是所有文本会话的必备视图；若这里仍失败，说明构造契约已损坏。
-            debug_assert!(document.set_active_view(active_view.clone()).is_ok());
-        }
         self.tab_view_state.active_view = Some(active_view);
     }
 
-    /// 后台保存需要独占并移走 session；Tab 视图状态始终留在 Host，避免后台副本
-    /// 与仍在渲染的窗口同时成为权威状态。
-    fn take_document_session(&mut self) -> Option<DocumentSession> {
-        let mut document = self.document.take()?;
-        debug_assert!(self.pending_dirty.is_none());
-        self.pending_dirty = Some(std::mem::replace(&mut document.dirty, false));
-        Some(document)
-    }
-
-    /// 安装或接回共享 Session 时只恢复正文状态；Tab 视图状态已经由 Host 持有。
-    fn install_document_session(&mut self, mut document: DocumentSession) {
-        if let Some(dirty) = self.pending_dirty.take() {
-            document.dirty = dirty;
-        }
-        self.document = Some(document);
+    /// Service-owned hosts consume Controller events instead of starting a
+    /// second filesystem watcher.  The poll task is view-scoped and is
+    /// stopped together with projection/indexing work on suspension.
+    fn start_controller_event_subscription(&mut self, cx: &mut Context<Self>) {
+        self.controller_event_task = Task::ready(());
+        self.controller_events = None;
+        let Some(document) = self.document.as_ref() else {
+            return;
+        };
+        let Ok((snapshot, subscription)) = document.handle().subscribe_with_snapshot() else {
+            self.error = Some("document event subscription failed".into());
+            return;
+        };
+        let document_id = snapshot.document_id;
+        self.controller_events = Some(subscription);
+        self.controller_event_task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let should_stop = this
+                    .update(cx, |view, cx| {
+                        if view.closed_suspended {
+                            return true;
+                        }
+                        let Some(subscription) = view.controller_events.as_mut() else {
+                            return true;
+                        };
+                        let events = match subscription.poll() {
+                            Ok(events) => events,
+                            Err(error) => {
+                                view.error = Some(error.to_string().into());
+                                return true;
+                            }
+                        };
+                        let relevant = events.iter().any(|event| match event {
+                            DocumentEvent::RevisionChanged {
+                                document_id: id, ..
+                            }
+                            | DocumentEvent::DirtyChanged {
+                                document_id: id, ..
+                            }
+                            | DocumentEvent::Saved {
+                                document_id: id, ..
+                            }
+                            | DocumentEvent::IdentityChanged {
+                                document_id: id, ..
+                            }
+                            | DocumentEvent::ExternalConflict {
+                                document_id: id, ..
+                            } => *id == document_id,
+                        });
+                        if relevant {
+                            let body_changed = events.iter().any(|event| {
+                                matches!(
+                                    event,
+                                    DocumentEvent::RevisionChanged {
+                                        document_id: id, ..
+                                    } if *id == document_id
+                                )
+                            });
+                            if body_changed {
+                                let expanded = view.json_expanded_nodes.clone();
+                                let hidden_columns = view.hidden_structured_columns.clone();
+                                let column_window = view.structured_column_window_start;
+                                let filter_column = view.structured_filter_column;
+                                view.document_epoch = view.document_epoch.wrapping_add(1);
+                                view.index =
+                                    view.document.as_ref().and_then(SharedDocument::line_index);
+                                view.invalidate_source_rows();
+                                view.invalidate_structured_runtime();
+                                view.json_expanded_nodes = expanded;
+                                view.hidden_structured_columns = hidden_columns;
+                                view.structured_column_window_start = column_window;
+                                view.structured_filter_column = filter_column;
+                                if !document_dirty_state(&view.document)
+                                    && view.structured_index.is_none()
+                                {
+                                    view.rebuild_clean_structured_index(cx);
+                                }
+                                if view.view_mode != DocumentHostViewMode::Source {
+                                    view.request_registered_projection(cx);
+                                }
+                            }
+                            cx.emit(DocumentHostEvent::StateChanged);
+                            cx.notify();
+                        }
+                        false
+                    })
+                    .unwrap_or(true);
+                if should_stop {
+                    break;
+                }
+            }
+        });
     }
 }
 
@@ -446,11 +654,11 @@ impl Drop for DocumentHost {
             cancellation.cancel();
         }
         // 未编辑的预建日志只有身份帧，不应在下次启动伪装成恢复文档。
-        if !document_dirty_state(&self.document, &self.pending_dirty)
+        if !document_dirty_state(&self.document)
             && let Some(mut journal) = self.coordinator.recovery_journal.take()
         {
             if let Some(document) = self.document.as_ref() {
-                let _ = journal.checkpoint(document);
+                let _ = document.with_session(|session| journal.checkpoint(session));
             } else {
                 let _ = journal.discard();
             }

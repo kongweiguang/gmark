@@ -1,6 +1,6 @@
 // @author kongweiguang
 
-//! GPUI 无关的 GMark 配置、偏好与工作区会话持久化契约。
+//! GPUI 无关的 Gmark 配置、偏好与工作区会话持久化契约。
 
 #![forbid(unsafe_code)]
 
@@ -13,7 +13,7 @@ mod recent_files;
 mod workspace_codec;
 mod workspace_session;
 
-pub use dirs::{ConfigDirs, GmarkConfigDirs};
+pub use dirs::AppDirs;
 pub use installation_id::{
     load_or_create_installation_id, load_or_create_installation_id_with_dirs,
 };
@@ -34,8 +34,11 @@ pub use recent_files::{
 };
 pub use workspace_session::{
     SessionAnchor, SessionSelection, WORKSPACE_SESSION_VERSION, WorkspaceSession,
-    WorkspaceSessionAffinity, WorkspaceSessionSelection, WorkspaceSessionStore,
-    WorkspaceSessionTab, WorkspaceSessionWindow, WorkspaceSessionWindowState,
-    read_workspace_sessions, remove_paths_from_workspace_sessions, remove_workspace_session,
-    upsert_workspace_session,
+    WorkspaceSessionAffinity, WorkspaceSessionDocumentRef, WorkspaceSessionHistoryEntry,
+    WorkspaceSessionMarkdownFold, WorkspaceSessionPane, WorkspaceSessionPaneId,
+    WorkspaceSessionPaneNode, WorkspaceSessionPaneTree, WorkspaceSessionPaneViewState,
+    WorkspaceSessionSelection, WorkspaceSessionSplitAxis, WorkspaceSessionStore,
+    WorkspaceSessionTab, WorkspaceSessionTableLayout, WorkspaceSessionWindow,
+    WorkspaceSessionWindowState, read_workspace_sessions, remove_paths_from_workspace_sessions,
+    remove_workspace_session, upsert_workspace_session,
 };

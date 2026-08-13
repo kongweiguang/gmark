@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::{
-    ConfigDirs,
+    AppDirs,
     persistence::atomic_write,
     preferences::{
         AccessibilityOverride, AppPreferences, AutoSavePreference, DEFAULT_LANGUAGE_ID,
@@ -141,7 +141,7 @@ impl From<&AppPreferences> for PreferencesFile {
             editor: EditorPreferencesFile {
                 show_table_headers: value.show_table_headers,
                 resource_insert_behavior: value.resource_insert_behavior().as_str().into(),
-                // 一个兼容版本内双写旧键，保障旧版 GMark 降级时仍读取相同行为。
+                // 一个兼容版本内双写旧键，保障旧版 Gmark 降级时仍读取相同行为。
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
                 auto_save: value.auto_save.as_str().into(),
                 spell_check: value.spell_check,
@@ -176,11 +176,12 @@ impl From<&AppPreferences> for PreferencesFile {
 
 /// 从系统配置目录读取偏好；损坏 TOML 按既有语义回退默认值。
 pub fn read_app_preferences() -> Result<AppPreferences> {
-    read_app_preferences_with_dirs(&ConfigDirs::from_system()?)
+    read_app_preferences_with_dirs(&AppDirs::from_system()?)
 }
 
 /// 从显式配置目录读取偏好；损坏 TOML 按既有语义回退默认值。
-pub fn read_app_preferences_with_dirs(dirs: &ConfigDirs) -> Result<AppPreferences> {
+pub fn read_app_preferences_with_dirs(dirs: &AppDirs) -> Result<AppPreferences> {
+    dirs.validate_config_root()?;
     let path = dirs.app_config_file();
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -199,15 +200,16 @@ pub fn read_app_preferences_with_dirs(dirs: &ConfigDirs) -> Result<AppPreference
 
 /// 读取或创建系统配置目录中的偏好，使用既有默认语言。
 pub fn load_or_create_app_preferences() -> Result<AppPreferences> {
-    let dirs = ConfigDirs::from_system()?;
+    let dirs = AppDirs::from_system()?;
     load_or_create_app_preferences_with_dirs(&dirs, DEFAULT_LANGUAGE_ID)
 }
 
 /// 读取或创建显式目录中的偏好，并由宿主提供语言检测后的回退 ID。
 pub fn load_or_create_app_preferences_with_dirs(
-    dirs: &ConfigDirs,
+    dirs: &AppDirs,
     fallback_language_id: &str,
 ) -> Result<AppPreferences> {
+    dirs.validate_config_root()?;
     let path = dirs.app_config_file();
     let fallback_language_id = fallback_language_id_or_default(fallback_language_id);
     let preferences = match std::fs::read_to_string(&path) {
@@ -227,19 +229,13 @@ pub fn load_or_create_app_preferences_with_dirs(
 
 /// 将偏好写入系统配置目录。
 pub fn save_app_preferences(preferences: &AppPreferences) -> Result<()> {
-    save_app_preferences_with_dirs(preferences, &ConfigDirs::from_system()?)
+    save_app_preferences_with_dirs(preferences, &AppDirs::from_system()?)
 }
 
 /// 将偏好原子写入显式配置目录。
-pub fn save_app_preferences_with_dirs(
-    preferences: &AppPreferences,
-    dirs: &ConfigDirs,
-) -> Result<()> {
+pub fn save_app_preferences_with_dirs(preferences: &AppPreferences, dirs: &AppDirs) -> Result<()> {
     let path = dirs.app_config_file();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create '{}'", parent.display()))?;
-    }
+    dirs.ensure_config_parent(&path)?;
     let text = toml::to_string_pretty(&PreferencesFile::from(preferences))?;
     atomic_write(&path, text.as_bytes())
 }

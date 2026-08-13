@@ -25,15 +25,18 @@ async fn large_source_shaped_layout_cache_reuses_and_invalidates_complete_keys(
     let large_view = editor
         .read_with(visual, |editor, _cx| editor.document_host.clone())
         .expect("large layout cache view");
-    let (initial_hits, initial_misses, initial_entries) =
-        large_view.read_with(visual, |view, cx| view.source_layout_cache_metrics_for_test(cx));
+    let (initial_hits, initial_misses, initial_entries) = large_view
+        .read_with(visual, |view, cx| {
+            view.source_layout_cache_metrics_for_test(cx)
+        });
     assert!(initial_misses > 0);
     assert!((1..=512).contains(&initial_entries));
 
     visual.update(|_window, cx| cx.refresh_windows());
     redraw(visual);
-    let (reused_hits, reused_misses, reused_entries) =
-        large_view.read_with(visual, |view, cx| view.source_layout_cache_metrics_for_test(cx));
+    let (reused_hits, reused_misses, reused_entries) = large_view.read_with(visual, |view, cx| {
+        view.source_layout_cache_metrics_for_test(cx)
+    });
     assert!(reused_hits > initial_hits);
     assert_eq!(reused_misses, initial_misses);
     assert_eq!(reused_entries, initial_entries);
@@ -50,8 +53,9 @@ async fn large_source_shaped_layout_cache_reuses_and_invalidates_complete_keys(
         cx.refresh_windows();
     });
     redraw(visual);
-    let (_theme_hits, theme_misses, theme_entries) =
-        large_view.read_with(visual, |view, cx| view.source_layout_cache_metrics_for_test(cx));
+    let (_theme_hits, theme_misses, theme_entries) = large_view.read_with(visual, |view, cx| {
+        view.source_layout_cache_metrics_for_test(cx)
+    });
     assert!(theme_misses > reused_misses);
     assert_eq!(theme_entries, reused_entries);
 }
@@ -375,7 +379,10 @@ async fn large_source_cross_line_paste_is_one_reversible_source_transaction(
     );
     assert_eq!(
         large_view.read_with(visual, |view, _cx| view.source_selection_for_test()),
-        Some(gmark_paged_document::SourceSelection::from_range(3..13, true))
+        Some(gmark_document_core::SourceSelection::from_range(
+            3..13,
+            true
+        ))
     );
     visual.update(|window, cx| {
         large_view.update(cx, |view, cx| view.redo_for_test(window, cx));

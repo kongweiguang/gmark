@@ -4,3 +4,4 @@
 
 include!("inline_parts/inline_head.rs");
 include!("inline_parts/inline_tail_01.rs");
+include!("inline_parts/inline_tail_02.rs");

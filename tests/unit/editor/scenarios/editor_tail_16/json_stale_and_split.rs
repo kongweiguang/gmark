@@ -299,8 +299,11 @@ async fn json_tabs_keep_independent_modes_and_persist_split_ratio(cx: &mut TestA
         assert_eq!(editor.view_mode, ViewMode::Preview);
         assert!(editor.switch_to_tab_index(1, cx));
         assert_eq!(editor.view_mode, ViewMode::Split);
-        let session = editor.workspace_session_snapshot(cx);
-        assert_eq!(session.tabs[1].view_mode.as_deref(), Some("split"));
+        let session = editor
+            .workspace_session_snapshot_result(cx)
+            .expect("canonical workspace session snapshot");
+        let focused = session.focused().expect("focused pane");
+        assert_eq!(focused.tabs[1].state.view_mode.as_deref(), Some("split"));
         assert_eq!(session.split_pane_ratio, Some(0.61));
     });
 }

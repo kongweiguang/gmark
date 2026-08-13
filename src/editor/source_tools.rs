@@ -15,6 +15,12 @@ impl Editor {
             &mut Context<crate::document_host::DocumentHost>,
         ),
     ) {
+        if !self.pane_canvas
+            && let Some(host) = self.focused_pane_entities(cx).1
+        {
+            host.update(cx, |host, cx| handler(host, action, window, cx));
+            return;
+        }
         if let Some(host) = self.document_host.clone() {
             host.update(cx, |host, cx| handler(host, action, window, cx));
         }

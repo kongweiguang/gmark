@@ -18,14 +18,14 @@ pub(crate) use fixtures::{fingerprint_contents, replay_journal};
 #[test]
 fn recovery_journal_preserves_source_anchor_affinity_and_direction() {
     let temp = tempfile::tempdir().unwrap();
-    let source_selection = gmark_paged_document::SourceSelection {
-        anchor: gmark_paged_document::SourceAnchor::new(
+    let source_selection = gmark_document_core::SourceSelection {
+        anchor: gmark_document_core::SourceAnchor::new(
             12,
-            gmark_paged_document::SourceAffinity::After,
+            gmark_document_core::SourceAffinity::After,
         ),
-        head: gmark_paged_document::SourceAnchor::new(
+        head: gmark_document_core::SourceAnchor::new(
             4,
-            gmark_paged_document::SourceAffinity::Before,
+            gmark_document_core::SourceAffinity::Before,
         ),
     };
     let persisted = RecoverySelection::from_source_selection(source_selection);

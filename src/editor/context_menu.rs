@@ -691,6 +691,7 @@ impl Editor {
         let had_workspace_dialog = self.dismiss_workspace_operation_dialog();
         let had_command_palette = self.dismiss_command_palette();
         let had_tab_context_menu = self.dismiss_tab_context_menu();
+        let had_tab_creation_or_split_menu = self.tabs.dismiss_new_or_split_menu();
         let had_status_overflow = self.status_bar.format_overflow_open;
         let had_status_mode_menu = self.status_bar.mode_menu_open;
         self.status_bar.format_overflow_open = false;
@@ -705,6 +706,7 @@ impl Editor {
             || had_workspace_dialog
             || had_command_palette
             || had_tab_context_menu
+            || had_tab_creation_or_split_menu
             || had_status_overflow
             || had_status_mode_menu
             || had_keyboard

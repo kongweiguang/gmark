@@ -5,7 +5,7 @@
 use gpui::{Hsla, WindowAppearance, hsla};
 
 /// Minimal palette kept independent from the main application theme runtime.
-/// The agent can start while GMark is fully stopped, so it cannot rely on a
+/// The agent can start while Gmark is fully stopped, so it cannot rely on a
 /// `ThemeManager` global or user theme files being available.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct UpdateAgentPalette {

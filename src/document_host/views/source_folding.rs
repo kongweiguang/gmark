@@ -232,8 +232,9 @@ impl DocumentHost {
                             view.fold_projection.set_regions(total, regions);
                             view.fold_window = None;
                         }
+                        view.apply_pending_source_folds(paged);
                         view.fold_snapshot_revision =
-                            view.document.as_ref().map(DocumentSession::revision);
+                            view.document.as_ref().map(SharedDocument::revision);
                     }
                     Err(PagedDocumentError::Cancelled) => {}
                     Err(error) => view.error = Some(localized_document_error(&error, cx)),
@@ -252,6 +253,11 @@ impl DocumentHost {
             return;
         };
         if self.fold_projection.toggle(id) {
+            if self.fold_projection.is_collapsed(id) {
+                self.pending_source_collapsed_folds.insert(id);
+            } else {
+                self.pending_source_collapsed_folds.remove(&id);
+            }
             self.active_edit = None;
             self.source_row_blocks.clear();
             cx.emit(DocumentHostEvent::StateChanged);
@@ -271,6 +277,11 @@ impl DocumentHost {
             return;
         };
         if self.fold_projection.set_collapsed(id, collapsed) {
+            if collapsed {
+                self.pending_source_collapsed_folds.insert(id);
+            } else {
+                self.pending_source_collapsed_folds.remove(&id);
+            }
             self.active_edit = None;
             self.source_row_blocks.clear();
             cx.emit(DocumentHostEvent::StateChanged);
@@ -319,6 +330,12 @@ impl DocumentHost {
     pub(super) fn collapse_all_source_folds(&mut self, cx: &mut Context<Self>) {
         self.active_edit = None;
         self.fold_projection.collapse_all();
+        self.pending_source_collapsed_folds = self
+            .fold_projection
+            .regions()
+            .iter()
+            .map(|region| region.id)
+            .collect();
         self.source_row_blocks.clear();
         cx.emit(DocumentHostEvent::StateChanged);
         cx.notify();
@@ -326,6 +343,7 @@ impl DocumentHost {
 
     pub(super) fn expand_all_source_folds(&mut self, cx: &mut Context<Self>) {
         self.fold_projection.expand_all();
+        self.pending_source_collapsed_folds.clear();
         self.source_row_blocks.clear();
         cx.emit(DocumentHostEvent::StateChanged);
         cx.notify();
@@ -334,6 +352,15 @@ impl DocumentHost {
     pub(super) fn ensure_source_line_visible(&mut self, line: usize) {
         if self.fold_projection.ensure_line_visible(line) {
             self.source_row_blocks.clear();
+        }
+    }
+
+    fn apply_pending_source_folds(&mut self, paged: bool) {
+        for id in &self.pending_source_collapsed_folds {
+            self.fold_projection.set_collapsed(*id, true);
+        }
+        if !paged {
+            self.pending_source_collapsed_folds.clear();
         }
     }
 

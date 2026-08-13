@@ -1,8 +1,8 @@
 // @author kongweiguang
 
 use super::{
-    ShortcutCommand, format_shortcut_for_display, normalize_shortcut_config,
-    resolved_shortcut_keys, shortcut_conflict_for,
+    ShortcutCategory, ShortcutCommand, format_shortcut_for_display, normalize_shortcut_config,
+    resolved_shortcut_keys, shortcut_conflict_for, shortcut_definitions,
 };
 use std::collections::BTreeMap;
 
@@ -81,6 +81,43 @@ fn command_palette_has_default_shortcuts() {
         resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::CommandPalette),
         vec!["cmd-shift-p".to_string(), "ctrl-shift-p".to_string()]
     );
+}
+
+#[test]
+fn pane_commands_are_configurable_without_global_defaults() {
+    let commands = [
+        ShortcutCommand::SplitRight,
+        ShortcutCommand::SplitDown,
+        ShortcutCommand::ClosePane,
+        ShortcutCommand::FocusPaneLeft,
+        ShortcutCommand::FocusPaneRight,
+        ShortcutCommand::FocusPaneUp,
+        ShortcutCommand::FocusPaneDown,
+        ShortcutCommand::MoveTabToPaneLeft,
+        ShortcutCommand::MoveTabToPaneRight,
+        ShortcutCommand::MoveTabToPaneUp,
+        ShortcutCommand::MoveTabToPaneDown,
+        ShortcutCommand::BalancePanes,
+    ];
+
+    for command in commands {
+        assert!(resolved_shortcut_keys(&BTreeMap::new(), command).is_empty());
+        let definition = shortcut_definitions()
+            .iter()
+            .find(|definition| definition.command == command)
+            .expect("pane command should have a shortcut definition");
+        assert_eq!(definition.category, ShortcutCategory::Navigation);
+        assert!(definition.default_keys.is_empty());
+        let mut config = BTreeMap::new();
+        config.insert(
+            definition.id.to_owned(),
+            vec!["ctrl-alt-shift-p".to_owned()],
+        );
+        assert_eq!(
+            resolved_shortcut_keys(&config, command),
+            vec!["ctrl-alt-shift-p".to_owned()]
+        );
+    }
 }
 
 #[test]

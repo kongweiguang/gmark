@@ -16,6 +16,10 @@ pub(super) use lifecycle::*;
 pub(super) use prepare::{cleanup_failed_prepare, write_apply_plan as prepare_apply_plan};
 pub(super) use staging::*;
 
+pub(super) fn resolve_current_update_target() -> Result<CurrentUpdateTarget, String> {
+    lifecycle::current_update_target()
+}
+
 /// Inherited rather than passed on the command line so an acknowledgement path
 /// alone is not a capability to write into the update cache.
 pub(super) const UPDATE_ACK_CAPABILITY_ENV: &str = "GMARK_UPDATE_ACK_CAPABILITY";

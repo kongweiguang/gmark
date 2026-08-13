@@ -10,7 +10,9 @@ impl Editor {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let position = self.tabs.new_tab_menu.as_ref()?.position;
+        let menu = self.tabs.new_tab_menu.as_ref()?;
+        let position = menu.position;
+        let target_pane = menu.pane;
         let c = &theme.colors;
         let d = &theme.dimensions;
         let visual_preferences = cx
@@ -111,7 +113,15 @@ impl Editor {
                             .on_click(move |_event, _window, cx| {
                                 let _ = untyped_editor.update(cx, |editor, cx| {
                                     editor.tabs.new_tab_menu = None;
-                                    editor.new_untyped_tab(cx);
+                                    if let Some(pane) = target_pane {
+                                        editor.new_document_tab_in_pane(
+                                            pane,
+                                            DocumentKind::Unspecified,
+                                            cx,
+                                        );
+                                    } else {
+                                        editor.new_untyped_tab(cx);
+                                    }
                                 });
                             }),
                         )
@@ -124,7 +134,15 @@ impl Editor {
                             .on_click(move |_event, _window, cx| {
                                 let _ = markdown_editor.update(cx, |editor, cx| {
                                     editor.tabs.new_tab_menu = None;
-                                    editor.new_untitled_tab(cx);
+                                    if let Some(pane) = target_pane {
+                                        editor.new_document_tab_in_pane(
+                                            pane,
+                                            DocumentKind::Markdown,
+                                            cx,
+                                        );
+                                    } else {
+                                        editor.new_untitled_tab(cx);
+                                    }
                                 });
                             }),
                         )
@@ -137,7 +155,15 @@ impl Editor {
                             .on_click(move |_event, _window, cx| {
                                 let _ = json_editor.update(cx, |editor, cx| {
                                     editor.tabs.new_tab_menu = None;
-                                    editor.new_document_tab(DocumentKind::Json, cx);
+                                    if let Some(pane) = target_pane {
+                                        editor.new_document_tab_in_pane(
+                                            pane,
+                                            DocumentKind::Json,
+                                            cx,
+                                        );
+                                    } else {
+                                        editor.new_document_tab(DocumentKind::Json, cx);
+                                    }
                                 });
                             }),
                         )
@@ -150,7 +176,15 @@ impl Editor {
                             .on_click(move |_event, _window, cx| {
                                 let _ = csv_editor.update(cx, |editor, cx| {
                                     editor.tabs.new_tab_menu = None;
-                                    editor.new_document_tab(DocumentKind::Csv, cx);
+                                    if let Some(pane) = target_pane {
+                                        editor.new_document_tab_in_pane(
+                                            pane,
+                                            DocumentKind::Csv,
+                                            cx,
+                                        );
+                                    } else {
+                                        editor.new_document_tab(DocumentKind::Csv, cx);
+                                    }
                                 });
                             }),
                         ),

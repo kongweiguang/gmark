@@ -21,14 +21,7 @@ impl DelimitedSource {
         options: DelimitedIndexOptions,
     ) -> Result<csv::Reader<DelimitedReader>, PagedDocumentError> {
         let reader = match self {
-            Self::File(path) => {
-                DelimitedReader::File(std::fs::File::open(path).map_err(|source| {
-                    PagedDocumentError::Io {
-                        path: path.clone(),
-                        source,
-                    }
-                })?)
-            }
+            Self::File(path) => DelimitedReader::File(FileSource::open(path)?.try_clone_file()?),
             Self::Snapshot(bytes) => DelimitedReader::Snapshot(Cursor::new(Arc::clone(bytes))),
         };
         Ok(ReaderBuilder::new()

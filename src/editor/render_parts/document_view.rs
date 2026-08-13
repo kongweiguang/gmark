@@ -22,7 +22,7 @@ fn markdown_callout_colors(
 }
 
 impl Editor {
-    /// 构建文档滚动面、虚拟化行与自定义滚动条。
+    /// 四种模式共用这个滚动面，以便首行顶距只由统一的 Source 基准决定。
     pub(super) fn render_document_content(
         &mut self,
         window: &mut Window,
@@ -590,11 +590,12 @@ impl Editor {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_editor_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_editor_scroll_wheel))
             .px(px(d.editor_padding))
-            .pt(px(if source_code_surface {
-                source_editor_top_padding(d)
-            } else {
-                editor_top_padding(self.typewriter_mode, viewport_height)
-            }))
+            .pt(px(editor_top_padding(
+                self.view_mode,
+                self.typewriter_mode,
+                viewport_height,
+                d,
+            )))
             .pb(px(if self.view_mode == super::ViewMode::Rendered {
                 0.0
             } else {

@@ -26,7 +26,7 @@ $running = @(Get-Process -Name 'gmark' -ErrorAction SilentlyContinue | Where-Obj
 })
 if ($running.Count -gt 0) {
     if (-not $ForceClose) {
-        throw 'gmark is running. Close it or pass -ForceClose.'
+        throw 'Gmark is running. Close it or pass -ForceClose.'
     }
     $running | Stop-Process -Force
     $running | Wait-Process -Timeout 10 -ErrorAction Stop
@@ -35,7 +35,7 @@ if ($running.Count -gt 0) {
 Import-Module (Join-Path $install 'gmark.Install.psm1') -Force
 Unregister-GmarkFileAssociations -ExecutablePath $executable
 
-$shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'gmark.lnk'
+$shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'Gmark.lnk'
 if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
@@ -57,4 +57,4 @@ $cleanupArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -ParentPid {
     '-InstallDir "{2}" -CleanupPath "{0}"'
 $cleanupArguments = $cleanupArguments -f $cleanup, $PID, $install
 Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList $cleanupArguments
-Write-Host "gmark has been unregistered and $install is scheduled for removal."
+Write-Host "Gmark has been unregistered and $install is scheduled for removal."

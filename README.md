@@ -1,8 +1,8 @@
 <!-- @author kongweiguang -->
 
 <div align="center">
-  <img src="assets/icon/gmark-icon-256.png" width="80" alt="GMark 图标" />
-  <h1>GMark</h1>
+  <img src="assets/icon/gmark-icon-256.png" width="80" alt="Gmark 图标" />
+  <h1>Gmark</h1>
   <p><strong>把 Markdown 写作、源码控制与结构化数据浏览放进同一个本地工作台。</strong></p>
   <p>Live 负责流畅编辑，Source 保留精确控制；JSON Graph 和 CSV/TSV 表格让数据文件也能直接读、查、改。</p>
   <p>
@@ -23,12 +23,12 @@
     <img
       src="assets/screenshots/gmark-hero-light.png"
       width="1040"
-      alt="GMark 完整窗口：左侧工作区打开 Markdown 渲染总览，主编辑区以 Live 视图显示标题、行内格式与数学公式"
+      alt="Gmark 完整窗口：左侧工作区打开 Markdown 渲染总览，主编辑区以 Live 视图显示标题、行内格式与数学公式"
     />
   </picture>
 </div>
 
-GMark 使用 Rust 与 GPUI 构建。文档始终是磁盘上的普通文件：不需要账号，不会为了编辑而上传内容，也不会把 Markdown 转换成专有格式。当前版本为 **v0.1.8**。
+Gmark 使用 Rust 与 GPUI 构建。文档始终是磁盘上的普通文件：不需要账号，不会为了编辑而上传内容，也不会把 Markdown 转换成专有格式。当前版本为 **v0.2.0**。
 
 ## 一份文件，四种视图
 
@@ -45,7 +45,7 @@ GMark 使用 Rust 与 GPUI 构建。文档始终是磁盘上的普通文件：�
   <img
     src="assets/screenshots/gmark-markdown-split.png"
     width="1040"
-    alt="GMark Split 视图：左侧 Markdown 源码与右侧列表、任务清单渲染结果同步显示"
+    alt="Gmark Split 视图：左侧 Markdown 源码与右侧列表、任务清单渲染结果同步显示"
   />
 </p>
 
@@ -67,7 +67,7 @@ Markdown 当前支持：
   <img
     src="assets/screenshots/gmark-json-graph.png"
     width="1040"
-    alt="GMark JSON Graph 深色界面：完整窗口内显示根对象、features、workspace、checks 节点与缩放控制"
+    alt="Gmark JSON Graph 深色界面：完整窗口内显示根对象、features、workspace、checks 节点与缩放控制"
   />
 </p>
 
@@ -79,7 +79,7 @@ CSV、TSV 与 TAB 文件进入结构化表格，而不是被当成图片或普�
   <img
     src="assets/screenshots/gmark-csv-table.png"
     width="1040"
-    alt="GMark CSV 表格浅色界面：12 行示例数据与 id、title、kind、status、score、notes 列导航"
+    alt="Gmark CSV 表格浅色界面：12 行示例数据与 id、title、kind、status、score、notes 列导航"
   />
 </p>
 
@@ -138,7 +138,7 @@ Source 内置语言识别覆盖 Rust、JavaScript/TypeScript、JSON/JSONL、Mark
 | macOS Apple Silicon | DMG |
 | macOS Intel | DMG |
 
-1. 启动 GMark，直接新建文档，或从“文件”菜单打开文件/文件夹。
+1. 启动 Gmark，直接新建文档，或从“文件”菜单打开文件/文件夹。
 2. 打开文件夹后，使用左侧文件树浏览工作区，使用右侧导航查看当前文档结构。
 3. 从窗口右下角切换 Live、Source、Split 或 Preview。
 4. 保存后仍然得到普通文件；需要分享时可以导出 HTML、PNG 或 PDF。
@@ -166,17 +166,23 @@ Source 内置语言识别覆盖 Rust、JavaScript/TypeScript、JSON/JSONL、Mark
 sudo xattr -rd com.apple.quarantine /Applications/gmark.app
 ```
 
-该命令只移除 GMark 的隔离标记，不会全局关闭 Gatekeeper。
+该命令只移除 Gmark 的隔离标记，不会全局关闭 Gatekeeper。
 
 </details>
 
 ## 数据与隐私
 
 - 文档、设置、工作区状态与恢复数据默认保存在本机。
-- 使用 GMark 不需要账号，也不需要把文档上传到云端。
+- 使用 Gmark 不需要账号，也不需要把文档上传到云端。
 - 文档中引用的 HTTP(S) 图片会在渲染时联网获取；请求不会携带 Cookie、Authorization 或 Referer，并受超时、重定向、并发和 20 MiB 响应上限保护。
 - 其他网络链接由用户主动打开；危险 URL 协议只保留源码并显示为不支持。应用也可按偏好设置检查更新。
 - 恢复功能用于处理意外退出，不替代版本控制和长期备份。
+
+### 数据目录切换说明
+
+v0.2.0 将配置、状态、缓存与运行时数据分别写入用户主目录下的 `~/.gmark/config`、`~/.gmark/state`、`~/.gmark/cache` 和 `~/.gmark/runtime`。旧平台配置目录中的偏好、自定义语言包、最近文件、窗口会话、恢复记录和安装 ID 不会自动迁移、扫描、修改或删除；需要保留偏好或语言包时，请在升级前手工复制到 `~/.gmark/config`。回滚旧二进制后，旧版本仍可读取原目录中的数据。
+
+更新包与渲染索引会在新缓存目录按需重新生成。正式安装和应用内更新会先等待旧进程退出再启动新版本；手工同时启动新旧版本可能因两者使用不同的安装 ID 和单实例锁而成为两个独立实例。只支持 V2 capability 首跳确认的自动切换，更旧的 V1 更新事务需要手动运行安装器。
 
 ## 从源码构建
 
@@ -190,8 +196,8 @@ cargo build --release --locked
 
 ## 反馈与许可
 
-问题与建议请提交到 [GitHub Issues](https://github.com/kongweiguang/gmark/issues)，并附上操作系统、GMark 版本、复现步骤和可公开的示例文档。请勿上传包含隐私或机密信息的原始文件。
+问题与建议请提交到 [GitHub Issues](https://github.com/kongweiguang/gmark/issues)，并附上操作系统、Gmark 版本、复现步骤和可公开的示例文档。请勿上传包含隐私或机密信息的原始文件。
 
-GMark 以 GNU General Public License v3.0 or later（GPL-3.0-or-later）授权。
+Gmark 以 GNU General Public License v3.0 or later（GPL-3.0-or-later）授权。
 
 本项目参考了 Velotype 的部分实现。

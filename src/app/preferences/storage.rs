@@ -7,26 +7,25 @@ use std::{collections::BTreeMap, path::PathBuf};
 use gpui::App;
 
 use super::*;
+use crate::config::AppDirs;
 
 pub(crate) fn read_app_preferences() -> anyhow::Result<AppPreferences> {
-    read_app_preferences_with_dirs(&GmarkConfigDirs::from_system()?)
+    read_app_preferences_with_dirs(&AppDirs::from_system()?)
 }
 
-pub(crate) fn read_app_preferences_with_dirs(
-    dirs: &GmarkConfigDirs,
-) -> anyhow::Result<AppPreferences> {
+pub(crate) fn read_app_preferences_with_dirs(dirs: &AppDirs) -> anyhow::Result<AppPreferences> {
     Ok(normalize_loaded_preferences(
         gmark_config::read_app_preferences_with_dirs(dirs)?,
     ))
 }
 
 pub(crate) fn load_or_create_app_preferences() -> anyhow::Result<AppPreferences> {
-    let dirs = GmarkConfigDirs::from_system()?;
+    let dirs = AppDirs::from_system()?;
     load_or_create_app_preferences_with_dirs_and_locales(&dirs, sys_locale::get_locales())
 }
 
 pub(super) fn load_or_create_app_preferences_with_dirs_and_locales<I, S>(
-    dirs: &GmarkConfigDirs,
+    dirs: &AppDirs,
     locales: I,
 ) -> anyhow::Result<AppPreferences>
 where
@@ -49,7 +48,7 @@ pub(crate) fn save_app_preferences(preferences: &AppPreferences) -> anyhow::Resu
 
 pub(crate) fn save_app_preferences_with_dirs(
     preferences: &AppPreferences,
-    dirs: &GmarkConfigDirs,
+    dirs: &AppDirs,
 ) -> anyhow::Result<()> {
     gmark_config::save_app_preferences_with_dirs(preferences, dirs)
 }
@@ -127,7 +126,7 @@ pub(crate) fn save_preferences_from_window(
     document_loading: &DocumentLoadingPreferences,
     status_bar: &StatusBarPreferences,
 ) -> anyhow::Result<AppPreferences> {
-    let dirs = GmarkConfigDirs::from_system()?;
+    let dirs = AppDirs::from_system()?;
     save_preferences_from_window_with_dirs(
         startup_open,
         auto_check_updates,
@@ -176,7 +175,7 @@ pub(super) fn save_preferences_from_window_with_dirs(
     keybindings: BTreeMap<String, Vec<String>>,
     document_loading: &DocumentLoadingPreferences,
     status_bar: &StatusBarPreferences,
-    dirs: &GmarkConfigDirs,
+    dirs: &AppDirs,
 ) -> anyhow::Result<AppPreferences> {
     let mut preferences =
         load_or_create_app_preferences_with_dirs_and_locales(dirs, sys_locale::get_locales())?;

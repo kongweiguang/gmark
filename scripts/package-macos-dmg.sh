@@ -59,5 +59,5 @@ cp -R "$APP" "$VOLUME/gmark.app"
 ln -s /Applications "$VOLUME/Applications"
 mkdir -p "$(dirname "$OUTPUT")"
 rm -f "$OUTPUT"
-hdiutil create -quiet -fs HFS+ -volname "gmark" -srcfolder "$VOLUME" -format UDZO "$OUTPUT"
+hdiutil create -quiet -fs HFS+ -volname "Gmark" -srcfolder "$VOLUME" -format UDZO "$OUTPUT"
 [[ -f "$OUTPUT" ]] || { echo "DMG was not created" >&2; exit 1; }

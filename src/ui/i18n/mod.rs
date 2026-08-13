@@ -360,6 +360,18 @@ pub struct I18nStrings {
     pub preferences_shortcut_toggle_view_mode: String,
     pub preferences_shortcut_toggle_workspace: String,
     pub menu_toggle_document_sidebar: String,
+    pub preferences_shortcut_split_right: String,
+    pub preferences_shortcut_split_down: String,
+    pub preferences_shortcut_close_pane: String,
+    pub preferences_shortcut_focus_pane_left: String,
+    pub preferences_shortcut_focus_pane_right: String,
+    pub preferences_shortcut_focus_pane_up: String,
+    pub preferences_shortcut_focus_pane_down: String,
+    pub preferences_shortcut_move_tab_to_pane_left: String,
+    pub preferences_shortcut_move_tab_to_pane_right: String,
+    pub preferences_shortcut_move_tab_to_pane_up: String,
+    pub preferences_shortcut_move_tab_to_pane_down: String,
+    pub preferences_shortcut_balance_panes: String,
     pub preferences_shortcut_quick_open: String,
     pub preferences_shortcut_command_palette: String,
     pub preferences_shortcut_go_to_line: String,
@@ -546,12 +558,26 @@ pub struct I18nStrings {
     pub status_bar_mode_preview: String,
     /// Label for side-by-side source and preview mode.
     pub status_bar_mode_split: String,
+    /// Short label shown when a document already exists in the target pane.
+    pub pane_notice_duplicate_document_label: String,
+    /// Explanation shown when a document already exists in the target pane.
+    pub pane_notice_duplicate_document_description: String,
+    /// Short label shown when the workspace has reached the eight-pane limit.
+    pub pane_notice_pane_limit_label: String,
+    /// Explanation shown when the workspace has reached the eight-pane limit.
+    pub pane_notice_pane_limit_description: String,
+    /// Short label shown when a pane operation cannot fit in the available space.
+    pub pane_notice_insufficient_space_label: String,
+    /// Explanation shown when a pane operation cannot fit in the available space.
+    pub pane_notice_insufficient_space_description: String,
     /// Suffix shown after the character count number.
     pub status_bar_word_count_suffix: String,
     /// Source byte-format labels shown in the status bar.
     pub status_bar_encoding_utf8: String,
     pub status_bar_encoding_utf8_bom: String,
     pub status_bar_line_ending_mixed: String,
+    pub status_bar_shared_document: String,
+    pub status_bar_shared_views_template: String,
     /// Nav label for the status bar preferences tab.
     pub preferences_nav_status_bar: String,
     /// Label for the status bar enabled toggle.

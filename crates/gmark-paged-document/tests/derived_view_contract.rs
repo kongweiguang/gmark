@@ -8,13 +8,13 @@ use gmark_document_core::{
     DelimitedWindowProjection, DerivedProjectionProvider, DerivedProjectionRequest,
     DerivedProjectionSnapshot, DerivedProjectionStatus, DocumentFormat, DocumentRevision,
     DocumentSnapshot, DocumentViewId, DocumentViewRegistry, ProjectionCancellation,
-    ProjectionError, SourceEdit, SourceLocator, SourceViewState, Transaction, ViewDescriptor,
-    ViewFormat,
+    ProjectionError, SourceEdit, SourceLocator, SourceSelection, SourceViewState, Transaction,
+    ViewDescriptor, ViewFormat,
 };
 use gmark_paged_document::{
     FileSource, LineIndex, MAX_SYSTEM_CLIPBOARD_BYTES, PagedDocument, PagedDocumentError,
     PieceDocument, SearchCancellation, SelectionTransfer, SourceAffinity, SourceAnchor,
-    SourceSelection, selection_transfer_for_len,
+    selection_transfer_for_len,
 };
 
 struct TestSnapshot {
@@ -106,57 +106,29 @@ fn source_selection_keeps_direction_without_changing_the_normalized_range() {
 }
 
 #[test]
-fn large_adapter_preserves_source_anchor_affinity_and_clamps_each_endpoint() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("source-affinity.txt");
-    std::fs::write(&path, "alpha beta").unwrap();
-    let source = FileSource::open(&path).unwrap();
-    let index = LineIndex::build(&source).unwrap();
-    let mut adapter = PagedDocument::new(PieceDocument::open(source, index).unwrap());
-    let selection = SourceSelection {
-        anchor: SourceAnchor::new(500, SourceAffinity::After),
-        head: SourceAnchor::new(2, SourceAffinity::Before),
-    };
-
-    adapter.set_source_selection(selection);
-    assert_eq!(
-        adapter.source_selection(),
-        SourceSelection {
-            anchor: SourceAnchor::new(adapter.len(), SourceAffinity::After),
-            head: SourceAnchor::new(2, SourceAffinity::Before),
-        }
-    );
-    assert_eq!(adapter.selection(), (2..adapter.len(), true));
-
-    adapter.replace_text(2..5, "X").unwrap();
-    assert_eq!(
-        adapter.source_selection(),
-        SourceSelection::collapsed(3, SourceAffinity::After)
-    );
-}
-
-#[test]
-fn large_adapter_undo_redo_restores_directional_source_selection() {
+fn large_adapter_undo_redo_restores_document_content() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("source-selection-history.txt");
     std::fs::write(&path, "a🙂b\nsecond").unwrap();
     let source = FileSource::open(&path).unwrap();
     let index = LineIndex::build(&source).unwrap();
     let mut adapter = PagedDocument::new(PieceDocument::open(source, index).unwrap());
-    let before = SourceSelection {
-        anchor: SourceAnchor::new(5, SourceAffinity::After),
-        head: SourceAnchor::new(1, SourceAffinity::Before),
-    };
-    adapter.set_source_selection(before);
-
     adapter.replace_text(1..5, "中").unwrap();
-    let after = adapter.source_selection();
-    assert_eq!(after, SourceSelection::collapsed(4, SourceAffinity::After));
+    assert_eq!(
+        String::from_utf8(adapter.read_range(0..adapter.len()).unwrap()).unwrap(),
+        "a中b\nsecond"
+    );
 
     assert!(adapter.undo());
-    assert_eq!(adapter.source_selection(), before);
+    assert_eq!(
+        String::from_utf8(adapter.read_range(0..adapter.len()).unwrap()).unwrap(),
+        "a🙂b\nsecond"
+    );
     assert!(adapter.redo());
-    assert_eq!(adapter.source_selection(), after);
+    assert_eq!(
+        String::from_utf8(adapter.read_range(0..adapter.len()).unwrap()).unwrap(),
+        "a中b\nsecond"
+    );
 }
 
 impl DerivedProjectionSnapshot for TestSnapshot {

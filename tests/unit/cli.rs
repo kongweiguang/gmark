@@ -36,7 +36,7 @@ fn terminal_commands_keep_precedence_over_following_arguments() {
 #[test]
 fn help_preserves_the_public_cli_contract() {
     let help = help_text("1.2.3");
-    assert!(help.contains("gmark 1.2.3"));
+    assert!(help.contains("Gmark 1.2.3"));
     assert!(help.contains("gmark [OPTIONS] [FILES...]"));
     assert!(help.contains("-d, --detach"));
 }

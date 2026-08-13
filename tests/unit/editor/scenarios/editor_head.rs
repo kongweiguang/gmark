@@ -664,6 +664,7 @@ fn init_editor_test_app(cx: &mut TestAppContext) {
         I18nManager::init(cx);
         ThemeManager::init(cx);
         crate::components::init(cx);
+        crate::app::document_service::DocumentService::init(cx);
     });
 }
 

@@ -182,5 +182,5 @@ pub(super) use metrics::{render_character_count, render_cursor, render_custom_bu
 pub(super) use mode::render_mode_switch;
 pub(super) use sidebars::{
     render_document_sidebar_toggle, render_recovery_status, render_sidebar_toggle,
-    should_render_file_status,
+    render_workspace_search_toggle, should_render_file_status,
 };

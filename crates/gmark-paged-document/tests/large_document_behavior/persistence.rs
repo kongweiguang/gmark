@@ -95,6 +95,25 @@ fn clean_document_accepts_a_pure_append_with_incremental_line_indexing() {
         document.external_change().unwrap(),
         ExternalChange::Unchanged
     );
+
+    writer.write_all(b"gamma\n").unwrap();
+    writer.sync_all().unwrap();
+    assert!(matches!(
+        document.external_change().unwrap(),
+        ExternalChange::Appended { .. }
+    ));
+    let appended_source = FileSource::open(&path).unwrap();
+    let appended_index = document
+        .line_index()
+        .extend_for_append(&appended_source)
+        .unwrap();
+    document
+        .accept_external_append(appended_source, appended_index)
+        .unwrap();
+    assert_eq!(
+        document.read_range(0..document.len()).unwrap(),
+        b"alpha\nbeta\ngamma\n"
+    );
 }
 
 #[test]

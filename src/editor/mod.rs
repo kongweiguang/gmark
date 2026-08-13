@@ -7,18 +7,23 @@
 //! [`DocumentTree`], which centralizes structural mutations and cached visible
 //! order metadata.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gmark_document::{Revision, SourceDocument};
-use gmark_paged_document::{SourceAffinity, SourceSelection};
+use gmark_document_core::SourceSelection;
+use gmark_paged_document::SourceAffinity;
 use gpui::*;
 
 use self::context_menu::{ContextMenuState, TableInsertDialogState};
 use self::tree::DocumentTree;
+#[path = "mod_parts/editor_state.rs"]
+mod editor_state;
 use crate::components::{
     Block, BlockKind, BlockRecord, FootnoteDefinitionBinding, FootnoteReferenceLocation,
     FootnoteRegistry, FootnoteResolvedOccurrence, ImageReferenceDefinitions, InlineTextTree,
@@ -28,6 +33,7 @@ use crate::components::{
     TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellPosition, TableColumnAlignment,
     TableData, TableRuntime, UndoCaptureKind, serialize_table_cell_markdown,
 };
+use editor_state::*;
 mod close;
 mod command_palette;
 mod context_menu;
@@ -48,6 +54,7 @@ pub(crate) use crate::perf;
 mod markdown_render_state;
 pub(crate) mod markdown_view_state;
 pub(crate) mod math_edit;
+pub(crate) mod panes;
 mod persistence;
 mod projection;
 mod recovery;
@@ -55,7 +62,7 @@ pub(crate) mod render;
 pub(crate) mod render_asset_manager;
 mod runtime_context;
 mod selection;
-mod services;
+pub(crate) mod services;
 mod source_format;
 mod source_mapping;
 mod source_tools;
@@ -66,7 +73,7 @@ mod table_edit;
 mod table_fragment;
 mod table_selection;
 mod tabs;
-pub(crate) use tabs::{DetachedTab, RestoredTab};
+pub(crate) use tabs::DetachedTab;
 #[cfg(test)]
 #[path = "../../tests/unit/editor/scenarios.rs"]
 mod tests;
@@ -84,111 +91,6 @@ use self::status_bar::StatusBarState;
 use self::virtual_surface::VirtualSurfaceState;
 use self::workspace::WorkspaceState;
 
-/// Link navigation request deferred until a `Window` is available.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PendingOpenLink {
-    pub(crate) prompt_target: String,
-    pub(crate) open_target: String,
-}
-
-/// A resource picked before an untitled document enters Save As. The source
-/// path is kept outside the Markdown transaction so cancelling Save As cannot
-/// leave a copied file or a partial insertion behind.
-#[derive(Clone)]
-enum PendingResourceInsertion {
-    /// Picker/slash-command insertion keeps its structural destination until
-    /// Save As succeeds; no file is copied before this state is resumed.
-    Prompted {
-        block: Entity<Block>,
-        parent: Option<Entity<Block>>,
-        index: usize,
-        original_kind: BlockKind,
-        cleaned_title: InlineTextTree,
-        cursor: usize,
-        query_only: bool,
-        source: PathBuf,
-    },
-    /// Drag/drop and single-path paste preserve the exact inline split. The
-    /// source path is materialized only after the document has a path.
-    Pasted {
-        block: Entity<Block>,
-        leading: InlineTextTree,
-        trailing: InlineTextTree,
-        source: PathBuf,
-    },
-    /// Resource replacement retains the author-facing label and explicit kind.
-    /// The target entity is re-resolved after materialization so a disappeared
-    /// block cannot leave behind a copy created by this attempt.
-    Replace {
-        entity_id: EntityId,
-        previous: crate::components::ResourceRecord,
-        source: PathBuf,
-    },
-}
-
-struct ResourceTitleDialogState {
-    entity_id: EntityId,
-    previous: crate::components::ResourceRecord,
-    input: Entity<Block>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TableFragmentMergeDirection {
-    IntoPrevious,
-    IntoNext,
-}
-
-#[derive(Clone)]
-struct TableFragmentMergeTarget {
-    table_id: EntityId,
-    direction: TableFragmentMergeDirection,
-    rows: Vec<Vec<InlineTextTree>>,
-}
-
-#[derive(Clone)]
-struct TableFragmentMergeState {
-    base_revision: Revision,
-    parent_id: Option<EntityId>,
-    fragment_ids: Vec<EntityId>,
-    targets: Vec<TableFragmentMergeTarget>,
-}
-
-#[derive(Clone)]
-struct DiagramOverlayState {
-    block_id: EntityId,
-    preview_key: u64,
-    rendered: crate::components::MermaidSvgRender,
-    /// `None` 时随视口适配；用户滚轮缩放或请求原始尺寸后保留显式比例。
-    manual_scale: Option<f32>,
-    scale_focus_handle: FocusHandle,
-    close_focus_handle: FocusHandle,
-    focus_close_on_render: bool,
-}
-
-#[derive(Clone, Debug)]
-struct WorkspaceLinkCandidate {
-    path: PathBuf,
-    relative_workspace_path: String,
-    title: String,
-    disambiguate: bool,
-}
-
-#[derive(Clone, Debug)]
-struct WorkspaceLinkCompletionState {
-    block_id: EntityId,
-    base_revision: Revision,
-    trigger_range: std::ops::Range<usize>,
-    selected: usize,
-    candidates: Vec<WorkspaceLinkCandidate>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SplitResizeSession {
-    start_x: Pixels,
-    start_ratio: f32,
-    available_width: f32,
-}
-
 /// Top-level controller that owns editor-wide state and delegates tree
 /// mutations to [`DocumentTree`].
 ///
@@ -203,6 +105,30 @@ pub struct Editor {
     document_host: Option<Entity<crate::document_host::DocumentHost>>,
     /// Markdown 源文本真值；块树只负责当前视图的可重建投影。
     source_document: EditorDocumentSession,
+    /// Service-backed views share a process-wide Controller; their filesystem
+    /// watcher is owned by DocumentService rather than duplicated per Editor.
+    shared_document: bool,
+    /// Lightweight wake-up loop for shared Controller events. It is cancelled
+    /// whenever this Editor is detached from an active tab.
+    shared_event_task: Option<Task<()>>,
+    /// Pane child editors render only the document canvas. The window shell
+    /// remains owned by the root Editor entity.
+    pane_canvas: bool,
+    /// Only the workspace's active pane may publish a pending block focus.
+    /// Inactive sibling projections still render, but cannot steal the shared
+    /// window input handler while they resynchronize.
+    pane_canvas_focus_enabled: bool,
+    /// Durable pane tab identity used to key Markdown presentation snapshots.
+    /// The shell's legacy tab id is intentionally not reused for child views.
+    pane_tab_id: Option<uuid::Uuid>,
+    /// Body-free persisted navigation metadata retained while a pane canvas
+    /// is inactive; live undo entries are appended when the child is mounted.
+    pane_history_back: Vec<serde_json::Value>,
+    pane_history_forward: Vec<serde_json::Value>,
+    /// Source-backed host metadata retained by the shell while its active
+    /// lease is moved into a pane-owned detached view.
+    pane_host_path: Option<PathBuf>,
+    pane_host_probe: Option<gmark_paged_document::OpenProbe>,
     /// 非 UTF-8 文件只读打开；用户明确转换后才允许编辑或保存。
     source_encoding: crate::document_io::DocumentEncoding,
     /// 无路径文档也必须保留显式类型；不能再用 `file_path == None` 偷换成 Markdown。
@@ -221,7 +147,7 @@ pub struct Editor {
     split_resize_session: Option<SplitResizeSession>,
     split_divider_focus_handle: FocusHandle,
     /// 主画布工具栏按钮跨 render 保持焦点身份，避免文档投影刷新打断键盘导航。
-    document_toolbar_focus_handles: [FocusHandle; 3],
+    document_toolbar_focus_handles: [FocusHandle; 4],
     /// 图片缩放工具条跨异步分片加载保持稳定的键盘焦点顺序。
     image_preview_focus_handles: [FocusHandle; 4],
     /// Stable tile identities used to release standalone image-preview assets
@@ -320,6 +246,36 @@ pub struct Editor {
     /// True while an online update check is running in the background.
     workspace: WorkspaceState,
     tabs: tabs::TabState,
+    /// Authoritative recursive pane workspace for the document canvas. The
+    /// root Editor remains the window shell; active child canvases live in the
+    /// pane entity and are keyed by pane/tab identity here for lifecycle sync.
+    pane_workspace: Option<Entity<panes::PaneWorkspaceView>>,
+    pane_events: Rc<RefCell<Vec<panes::PaneEvent>>>,
+    /// Short-lived non-blocking pane action notice (duplicate/limit/reject).
+    pane_notice: Option<SharedString>,
+    pane_notice_task: Option<Task<()>>,
+    /// Pending pane-local close target.  It is kept separate from the legacy
+    /// tab index so a dirty pane tab can be prompted without activating or
+    /// mutating another pane first.
+    pane_close_target: Option<(panes::PaneId, panes::TabId)>,
+    /// Completion bridge installed on a pane canvas while Save and Close is
+    /// running.  `1` means the save completed cleanly, `2` means it was
+    /// cancelled or failed; `0` is still pending.  The bridge is shared with
+    /// the child Editor because save work completes on that entity.
+    pane_close_save_signal: Option<Arc<std::sync::atomic::AtomicU8>>,
+    pane_close_save_task: Option<Task<()>>,
+    pane_canvas_entities: Rc<
+        RefCell<
+            BTreeMap<
+                panes::PaneId,
+                (
+                    panes::TabId,
+                    gmark_document_runtime::DocumentViewInstanceId,
+                    panes::PaneCanvasEntity,
+                ),
+            >,
+        >,
+    >,
     focus_mode: bool,
     typewriter_mode: bool,
     status_bar: StatusBarState,
@@ -527,7 +483,7 @@ struct ScrollbarDragSession {
 
 /// Source-mode selection snapshot stored with undo history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct UndoSelectionSnapshot {
+pub(crate) struct UndoSelectionSnapshot {
     selection: SourceSelection,
 }
 
@@ -685,7 +641,7 @@ pub enum ViewMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DocumentKind {
+pub(crate) enum DocumentKind {
     Unspecified,
     Markdown,
     Json,

@@ -5,7 +5,7 @@
 use super::*;
 
 pub(super) fn search_document_reader(
-    document: Option<&DocumentSession>,
+    document: Option<&SharedDocument>,
     provisional_source: Option<&FileSource>,
     query: &str,
     options: SearchOptions,
@@ -33,12 +33,23 @@ pub(super) fn build_structured_index(
                 delimiter,
                 ..DelimitedIndexOptions::default()
             };
-            let cache_dir = ProjectDirs::from("com", "kongweiguang", "gmark")
-                .map(|dirs| dirs.cache_dir().join("large-document-indexes"));
+            let cache_dir = index_cache_dir();
             let index = if let Some(snapshot) = snapshot {
                 DelimitedIndex::build_snapshot_cancellable(snapshot, options, cancellation)
             } else if let Some(cache_dir) = cache_dir {
-                DelimitedIndex::build_cached_cancellable(source, options, cache_dir, cancellation)
+                match DelimitedIndex::build_cached_cancellable(
+                    source,
+                    options,
+                    cache_dir,
+                    cancellation,
+                ) {
+                    Ok(index) => Ok(index),
+                    Err(gmark_paged_document::PagedDocumentError::Io { .. }) => {
+                        eprintln!("large-document index cache write failed; using uncached build");
+                        DelimitedIndex::build_cancellable(source, options, cancellation)
+                    }
+                    Err(error) => Err(error),
+                }
             } else {
                 DelimitedIndex::build_cancellable(source, options, cancellation)
             }?;
@@ -56,10 +67,17 @@ pub(super) fn build_structured_index(
         }
         DocumentFormat::Json => {
             let options = JsonIndexOptions::default();
-            let cache_dir = ProjectDirs::from("com", "kongweiguang", "gmark")
-                .map(|dirs| dirs.cache_dir().join("large-document-indexes"));
+            let cache_dir = index_cache_dir();
             let index = if let Some(cache_dir) = cache_dir {
-                JsonIndex::build_cached_cancellable(source, options, cache_dir, cancellation)
+                match JsonIndex::build_cached_cancellable(source, options, cache_dir, cancellation)
+                {
+                    Ok(index) => Ok(index),
+                    Err(gmark_paged_document::PagedDocumentError::Io { .. }) => {
+                        eprintln!("large-document JSON cache write failed; using uncached build");
+                        JsonIndex::build_cancellable(source, options, cancellation)
+                    }
+                    Err(error) => Err(error),
+                }
             } else {
                 JsonIndex::build_cancellable(source, options, cancellation)
             }?;
@@ -96,6 +114,60 @@ pub(super) fn build_structured_index(
             }))
         }
         DocumentFormat::PlainText => Ok(None),
+    }
+}
+
+/// Returns the persistent large-document cache only when its cache root can be
+/// validated and created safely. A missing/unusable cache must never turn into
+/// a persistent temporary directory; callers fall back to an uncached build.
+fn index_cache_dir() -> Option<PathBuf> {
+    let dirs = match gmark_config::AppDirs::from_system() {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            eprintln!("large-document index cache disabled: {error:#}");
+            return None;
+        }
+    };
+    let cache_dir = dirs.large_document_indexes_dir();
+    if let Err(error) = dirs.ensure_cache_parent(&cache_dir.join(".gmark-index-root")) {
+        eprintln!("large-document index cache disabled: {error:#}");
+        return None;
+    }
+    Some(cache_dir)
+}
+
+/// Build the structured variants that can consume a resident Controller
+/// snapshot directly.  This keeps untitled/registry-backed tables and JSONL
+/// views functional without materializing a second authoritative body.
+pub(super) fn build_structured_index_from_snapshot(
+    snapshot: Arc<[u8]>,
+    format: DocumentFormat,
+    cancellation: &SearchCancellation,
+) -> Result<Option<StructuredIndex>, gmark_paged_document::PagedDocumentError> {
+    match format {
+        DocumentFormat::Delimited { delimiter } => {
+            let options = DelimitedIndexOptions {
+                delimiter,
+                ..DelimitedIndexOptions::default()
+            };
+            DelimitedIndex::build_snapshot_cancellable(snapshot, options, cancellation)
+                .map(StructuredIndex::Delimited)
+                .map(Some)
+        }
+        DocumentFormat::JsonLines => {
+            let ranges = snapshot_line_ranges(&snapshot);
+            validate_json_lines_snapshot(&snapshot, &ranges, cancellation)?;
+            let lines = StructuredLines::Snapshot(ranges.into());
+            let record_count = structured_json_lines_record_count(&lines);
+            Ok(Some(StructuredIndex::JsonLines {
+                lines,
+                source: StructuredTextSource::Snapshot(snapshot),
+                record_count,
+            }))
+        }
+        // Markdown/JSON indexes retain file-backed readers today.  Callers
+        // may fall back to the existing file identity when one exists.
+        DocumentFormat::Markdown | DocumentFormat::Json | DocumentFormat::PlainText => Ok(None),
     }
 }
 

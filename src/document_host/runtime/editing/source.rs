@@ -20,7 +20,7 @@ impl DocumentHost {
             Some(lines.start)
         };
         self.selected_lines = Some(lines.clone());
-        let Some(document) = self.document.as_mut() else {
+        let Some(document) = self.document.as_ref() else {
             return;
         };
         let Some(start) = document
@@ -37,7 +37,8 @@ impl DocumentHost {
         else {
             return;
         };
-        document.set_selection(start..end, reversed);
+        let selection = SourceSelection::from_range(start..end, reversed);
+        let _ = document.set_source_selection(selection);
     }
 
     pub(super) fn on_select_all(
@@ -128,11 +129,23 @@ impl DocumentHost {
 
     fn start_clipboard_read(
         &mut self,
-        document: DocumentSession,
+        document: SharedDocument,
         range: Range<u64>,
         delete_after_copy: bool,
         cx: &mut Context<Self>,
     ) {
+        // Capture the immutable Controller snapshot before yielding to the
+        // worker.  Reading the live session in the worker would race a paste
+        // transaction and make the clipboard contain the replacement rather
+        // than the command's selected bytes.
+        let snapshot = match document.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.error = Some(error.to_string().into());
+                cx.notify();
+                return;
+            }
+        };
         if let Some(cancellation) = self.clipboard_cancellation.take() {
             cancellation.cancel();
         }
@@ -153,7 +166,7 @@ impl DocumentHost {
         self.clipboard_task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    document.read_range_cancellable(read_range, &cancellation)
+                    Self::read_snapshot_range_cancellable(snapshot, read_range, &cancellation)
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
@@ -171,7 +184,7 @@ impl DocumentHost {
                         ));
                         if delete_after_copy {
                             let current_revision =
-                                view.document.as_ref().map(DocumentSession::revision);
+                                view.document.as_ref().map(SharedDocument::revision);
                             if current_revision == Some(revision) {
                                 view.replace_source_range(range, "", cx);
                             } else {
@@ -192,6 +205,39 @@ impl DocumentHost {
             });
         });
         cx.notify();
+    }
+
+    /// Read an immutable snapshot in bounded chunks so a cancelled copy does
+    /// not retain a live Controller lock or materialize the whole source on
+    /// the UI thread.
+    fn read_snapshot_range_cancellable(
+        snapshot: Arc<dyn DocumentSnapshot>,
+        range: Range<u64>,
+        cancellation: &SearchCancellation,
+    ) -> Result<Vec<u8>, PagedDocumentError> {
+        if range.start > range.end || range.end > snapshot.len() {
+            return Err(PagedDocumentError::InvalidTransaction(
+                "selection range is outside the immutable document snapshot".to_owned(),
+            ));
+        }
+        const COPY_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+        let mut offset = range.start;
+        let mut bytes = Vec::new();
+        while offset < range.end {
+            if cancellation.is_cancelled() {
+                return Err(PagedDocumentError::Cancelled);
+            }
+            let end = offset.saturating_add(COPY_CHUNK_BYTES).min(range.end);
+            let chunk = snapshot
+                .read_range(offset..end)
+                .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))?;
+            bytes.extend_from_slice(&chunk);
+            offset = end;
+        }
+        if cancellation.is_cancelled() {
+            return Err(PagedDocumentError::Cancelled);
+        }
+        Ok(bytes)
     }
 
     pub(super) fn delete_selected_source(&mut self, cx: &mut Context<Self>) {
@@ -217,10 +263,10 @@ impl DocumentHost {
         replacement: &str,
         cx: &mut Context<Self>,
     ) {
-        let Some(mut next_document) = self.document.clone() else {
+        let Some(document) = self.document.as_ref() else {
             return;
         };
-        if let Err(error) = next_document.replace_text(range.clone(), replacement) {
+        if let Err(error) = document.replace_range(range.clone(), replacement) {
             self.error = Some(localized_document_error(&error, cx));
             cx.notify();
             return;
@@ -232,15 +278,7 @@ impl DocumentHost {
                     self.view_mode,
                     DocumentHostViewMode::Live | DocumentHostViewMode::Split
                 ));
-        self.install_source_replacement(
-            next_document,
-            range,
-            replacement,
-            preserve_view,
-            false,
-            false,
-            cx,
-        );
+        self.install_source_replacement(range, replacement, preserve_view, false, false, cx);
     }
 
     fn replace_structured_cell_source_range(
@@ -249,15 +287,15 @@ impl DocumentHost {
         replacement: &str,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(mut next_document) = self.document.clone() else {
+        let Some(document) = self.document.as_ref() else {
             return false;
         };
-        if let Err(error) = next_document.replace_text(range.clone(), replacement) {
+        if let Err(error) = document.replace_range(range.clone(), replacement) {
             self.error = Some(localized_document_error(&error, cx));
             cx.notify();
             return false;
         }
-        self.install_source_replacement(next_document, range, replacement, true, true, false, cx);
+        self.install_source_replacement(range, replacement, true, true, false, cx);
         true
     }
 
@@ -290,28 +328,28 @@ impl DocumentHost {
         replacement: &str,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(mut next_document) = self.document.clone() else {
+        let Some(document) = self.document.as_ref() else {
             return false;
         };
-        let transaction = Transaction {
-            base_revision: gmark_document_core::DocumentRevision(base_revision),
-            edits: vec![SourceEdit {
-                range: range.clone(),
-                replacement: Arc::from(replacement),
-            }],
-        };
-        if let Err(error) = next_document.apply_source_transaction(&transaction) {
+        if document.revision() != base_revision {
+            self.graph_edit_error = Some(localized_document_error(
+                &PagedDocumentError::InvalidTransaction("stale document revision".into()),
+                cx,
+            ));
+            cx.notify();
+            return false;
+        }
+        if let Err(error) = document.replace_range(range.clone(), replacement) {
             self.graph_edit_error = Some(localized_document_error(&error, cx));
             cx.notify();
             return false;
         }
-        self.install_source_replacement(next_document, range, replacement, true, false, false, cx);
+        self.install_source_replacement(range, replacement, true, false, false, cx);
         true
     }
 
     pub(super) fn install_source_replacement(
         &mut self,
-        mut next_document: DocumentSession,
         range: Range<u64>,
         replacement: &str,
         preserve_view: bool,
@@ -337,29 +375,38 @@ impl DocumentHost {
         }
         let caret = range.start.saturating_add(replacement.len() as u64);
         let selection = Some(SourceSelection::collapsed(caret, SourceAffinity::After));
-        if let Some(journal) = self.coordinator.recovery_journal.as_mut()
-            && let Err(error) = record_recovery_transaction(
-                journal,
-                &next_document,
-                next_document.revision().saturating_sub(1),
-                range.clone(),
-                replacement,
-                selection,
-                recovery_view_id(self.view_mode),
-            )
-        {
-            self.coordinator.recovery_error = Some(error.to_string().into());
+        if let (Some(journal), Some(document)) = (
+            self.coordinator.recovery_journal.as_mut(),
+            self.document.as_ref(),
+        ) {
+            let result = document.with_session(|session| {
+                record_recovery_transaction(
+                    journal,
+                    session,
+                    document.revision().saturating_sub(1),
+                    range.clone(),
+                    replacement,
+                    selection,
+                    recovery_view_id(self.view_mode),
+                )
+            });
+            match result {
+                Ok(Err(error)) => self.coordinator.recovery_error = Some(error.to_string().into()),
+                Err(error) => self.coordinator.recovery_error = Some(error.to_string().into()),
+                Ok(Ok(())) => {}
+            }
         }
-        let line = next_document
-            .line_for_offset(caret.min(next_document.len()))
+        let Some(document) = self.document.as_ref() else {
+            return;
+        };
+        let line = document
+            .line_for_offset(caret.min(document.len()))
             .and_then(|line| usize::try_from(line).ok())
             .unwrap_or_default();
         self.active_edit = None;
         self.source_drag_anchor = None;
         self.selection_anchor = Some(line);
         self.selected_lines = Some(line..line.saturating_add(1));
-        next_document.dirty = !next_document.is_pristine();
-        self.install_document_session(next_document);
         self.tail_enabled = false;
         if !preserve_view {
             self.view_mode = DocumentHostViewMode::Source;

@@ -577,7 +577,9 @@ fn about_dialog_body_lines_include_repository_without_star_message() {
     let strings = I18nStrings::zh_cn();
     let lines = Editor::about_dialog_body_lines(&strings);
 
-    assert_eq!(lines[0], format!("gmark {}", env!("CARGO_PKG_VERSION")));
+    // The dialog and native window title share the product's title-case brand,
+    // so this contract catches accidental casing drift in the about surface.
+    assert_eq!(lines[0], format!("Gmark {}", env!("CARGO_PKG_VERSION")));
     assert_eq!(lines[1], "作者：kongweiguang\n版权所有 © 2026 kongweiguang");
     assert_eq!(
         lines[2],

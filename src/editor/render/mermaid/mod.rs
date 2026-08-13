@@ -6,9 +6,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-use anyhow::{Context as _, anyhow};
-use directories::ProjectDirs;
+use anyhow::{Context as _, anyhow, bail};
 
 use crate::theme::Theme;
 
@@ -20,6 +20,11 @@ const MERMAID_SCALE_PER_EXTRA_LINE: f32 = 0.035;
 const MERMAID_MAX_SCALE: f32 = 1.75;
 // 任何会改变基础 SVG 几何或样式的渲染策略都必须升级此版本，避免沿用旧缓存。
 const MERMAID_RENDER_CACHE_VERSION: u8 = 6;
+
+// Process-owned fallback cache used only when the persistent cache root is
+// unavailable. TempDir gives each process a unique location and owns its
+// lifecycle instead of sharing a durable temp path between launches.
+static PROCESS_MERMAID_CACHE: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
 
 mod flowchart;
 use flowchart::*;
@@ -175,15 +180,38 @@ fn render_mermaid_svg_for_display_with(
     theme_mode: MermaidThemeMode,
     renderer: MermaidRenderer,
 ) -> anyhow::Result<MermaidSvgRender> {
-    let cache_dir = mermaid_cache_dir()?;
-    render_mermaid_svg_for_display_in_cache(
+    let persistent_or_process = mermaid_cache_dir()?;
+    match render_mermaid_svg_for_display_in_cache(
         source,
         available_width,
         viewport_width,
         theme_mode,
         renderer,
-        &cache_dir,
-    )
+        &persistent_or_process,
+    ) {
+        Ok(render) => Ok(render),
+        Err(error) => {
+            // The persistent cache may become unwritable after resolution;
+            // retry once in the process-owned cache before failing rendering.
+            let fallback = process_mermaid_cache_dir()?;
+            if fallback == persistent_or_process {
+                return Err(error);
+            }
+            render_mermaid_svg_for_display_in_cache(
+                source,
+                available_width,
+                viewport_width,
+                theme_mode,
+                renderer,
+                &fallback,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to write process Mermaid SVG cache after persistent cache error ({error})"
+                )
+            })
+        }
+    }
 }
 
 fn render_mermaid_svg_for_display_in_cache(
@@ -424,13 +452,30 @@ use svg::{
 };
 
 fn mermaid_cache_dir() -> anyhow::Result<PathBuf> {
-    let root = ProjectDirs::from("com", "kongweiguang", "gmark")
-        .map(|dirs| dirs.cache_dir().to_path_buf())
-        .unwrap_or_else(|| std::env::temp_dir().join("gmark"));
-    let dir = root.join("mermaid-svg");
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create Mermaid SVG cache '{}'", dir.display()))?;
-    Ok(dir)
+    if let Ok(dirs) = gmark_config::AppDirs::from_system() {
+        let dir = dirs.mermaid_svg_dir();
+        if dirs
+            .ensure_cache_parent(&dir.join(".gmark-mermaid-cache-root"))
+            .is_ok()
+        {
+            return Ok(dir);
+        }
+    }
+
+    process_mermaid_cache_dir()
+}
+
+fn process_mermaid_cache_dir() -> anyhow::Result<PathBuf> {
+    let cache = PROCESS_MERMAID_CACHE.get_or_init(|| {
+        tempfile::Builder::new()
+            .prefix("gmark-mermaid-")
+            .tempdir()
+            .map_err(|error| error.to_string())
+    });
+    match cache {
+        Ok(directory) => Ok(directory.path().to_path_buf()),
+        Err(error) => bail!("failed to create process Mermaid SVG cache: {error}"),
+    }
 }
 
 fn mermaid_cache_file_path_in(cache_dir: &Path, kind: &str, key: &str) -> anyhow::Result<PathBuf> {

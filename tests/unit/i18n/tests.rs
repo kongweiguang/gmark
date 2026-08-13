@@ -1,7 +1,7 @@
 // @author kongweiguang
 
 use super::{I18nManager, I18nStrings, language_id_for_locale_preferences};
-use crate::config::GmarkConfigDirs;
+use crate::config::AppDirs;
 use crate::theme::ThemeManager;
 use gmark_i18n::LanguagePack;
 
@@ -21,6 +21,49 @@ fn built_in_chinese_strings_are_utf8() {
     assert_eq!(strings.save_failed_title, "保存失败");
     assert_eq!(strings.export_failed_title, "导出失败");
     assert_eq!(strings.view_mode_switch_to_source, "切换到源码");
+    assert_eq!(strings.status_bar_mode_split, "源码与预览");
+    assert_eq!(strings.pane_notice_duplicate_document_label, "文档已存在");
+    assert_eq!(
+        strings.pane_notice_duplicate_document_description,
+        "目标窗格中已打开此文档。"
+    );
+    assert_eq!(strings.pane_notice_pane_limit_label, "已达到窗格上限");
+    assert_eq!(
+        strings.pane_notice_pane_limit_description,
+        "一个工作区最多包含 8 个窗格。"
+    );
+    assert_eq!(strings.pane_notice_insufficient_space_label, "空间不足");
+    assert_eq!(
+        strings.pane_notice_insufficient_space_description,
+        "没有足够的空间创建新窗格。"
+    );
+    assert_eq!(strings.preferences_shortcut_split_right, "向右拆分");
+    assert_eq!(strings.preferences_shortcut_split_down, "向下拆分");
+    assert_eq!(strings.preferences_shortcut_close_pane, "关闭窗格");
+    assert_eq!(strings.preferences_shortcut_focus_pane_left, "聚焦左侧窗格");
+    assert_eq!(
+        strings.preferences_shortcut_focus_pane_right,
+        "聚焦右侧窗格"
+    );
+    assert_eq!(strings.preferences_shortcut_focus_pane_up, "聚焦上方窗格");
+    assert_eq!(strings.preferences_shortcut_focus_pane_down, "聚焦下方窗格");
+    assert_eq!(
+        strings.preferences_shortcut_move_tab_to_pane_left,
+        "将标签页移至左侧窗格"
+    );
+    assert_eq!(
+        strings.preferences_shortcut_move_tab_to_pane_right,
+        "将标签页移至右侧窗格"
+    );
+    assert_eq!(
+        strings.preferences_shortcut_move_tab_to_pane_up,
+        "将标签页移至上方窗格"
+    );
+    assert_eq!(
+        strings.preferences_shortcut_move_tab_to_pane_down,
+        "将标签页移至下方窗格"
+    );
+    assert_eq!(strings.preferences_shortcut_balance_panes, "平衡窗格");
     assert_eq!(strings.context_menu_insert, "插入");
     assert_eq!(strings.table_insert_title, "插入表格");
     assert_eq!(strings.image_loading_without_alt, "正在加载图片...");
@@ -31,7 +74,7 @@ fn built_in_chinese_strings_are_utf8() {
     );
     assert_eq!(
         strings.help_check_updates_message,
-        "正在检查 gmark 的最新版本..."
+        "正在检查 Gmark 的最新版本..."
     );
     assert_eq!(strings.update_open_release, "下载并安装");
     assert_eq!(strings.preferences_reduced_motion, "减少动态效果");
@@ -260,7 +303,7 @@ fn imports_jsonc_language_pack_and_persists_normalized_json() {
     )
     .expect("language config should be written");
 
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut manager = I18nManager::default();
     let imported_id = manager
         .import_language_config_with_dirs(&source, &dirs)
@@ -303,7 +346,7 @@ fn imported_pack_keeps_nested_partial_fallbacks_in_the_ui_projection() {
     )
     .expect("language config should be written");
 
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut manager = I18nManager::default();
     manager
         .import_language_config_with_dirs(&source, &dirs)
@@ -321,7 +364,7 @@ fn reimporting_the_active_language_refreshes_the_ui_projection() {
     let root = std::env::temp_dir().join(format!("gmark-i18n-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).expect("temp root should be created");
     let source = root.join("language.json");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut manager = I18nManager::default();
 
     std::fs::write(
@@ -363,7 +406,7 @@ fn custom_language_cannot_override_builtin_language_id() {
     )
     .expect("language config should be written");
 
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut manager = I18nManager::default();
     let err = manager
         .import_language_config_with_dirs(&source, &dirs)

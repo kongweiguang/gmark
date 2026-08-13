@@ -92,7 +92,7 @@
     }
 
     #[gpui::test]
-    async fn workspace_header_tabs_support_keyboard_activation(cx: &mut gpui::TestAppContext) {
+    async fn workspace_status_bar_search_toggle_opens_and_cancels(cx: &mut gpui::TestAppContext) {
         init_workspace_test_app(cx);
         let (editor, visual) = cx.add_window_view(|_window, cx| {
             super::Editor::from_markdown(cx, "# Heading\n\nBody".to_owned(), None)
@@ -105,21 +105,67 @@
         });
         visual.update(|window, cx| window.draw(cx).clear());
 
-        editor.update_in(visual, |editor, window, _cx| {
-            let handle = &editor
-                .workspace
-                .header_focus_handles
-                .as_ref()
-                .expect("header focus handles")[2];
-            handle.focus(window);
-            assert!(handle.is_focused(window));
-        });
         visual.update(|window, cx| window.draw(cx).clear());
         assert_workspace_header_layout(visual);
-        visual.simulate_keystrokes("enter");
+        let search_toggle = visual
+            .debug_bounds("status-bar-search-toggle")
+            .expect("status bar owns workspace search activation");
+        visual.simulate_click(search_toggle.center(), Modifiers::default());
         visual.run_until_parked();
         editor.update(visual, |editor, _cx| {
             assert_eq!(editor.workspace.active_tab, WorkspaceTab::Search);
+            assert!(editor.workspace.search_input.is_some());
+        });
+
+        // Clicking the active search action cancels search but leaves the
+        // workspace drawer open so the Files tree is restored in place.
+        visual.update(|window, cx| window.draw(cx).clear());
+        let search_toggle = visual
+            .debug_bounds("status-bar-search-toggle")
+            .expect("status bar search action remains available while searching");
+        visual.simulate_click(search_toggle.center(), Modifiers::default());
+        visual.run_until_parked();
+        editor.update(visual, |editor, _cx| {
+            assert!(editor.workspace.is_open);
+            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Files);
+        });
+
+        // Opening search again from Files focuses the editor input; Escape
+        // follows the same cancellation path as the status-bar toggle.
+        visual.update(|window, cx| window.draw(cx).clear());
+        let search_toggle = visual
+            .debug_bounds("status-bar-search-toggle")
+            .expect("status bar search action remains available in Files");
+        visual.simulate_click(search_toggle.center(), Modifiers::default());
+        visual.run_until_parked();
+        editor.update(visual, |editor, _cx| {
+            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Search);
+        });
+        // Closing the drawer while Search is active preserves that view;
+        // invoking the status-bar Search action while closed must reopen
+        // Search rather than interpreting the click as cancellation.
+        visual.update(|window, cx| window.draw(cx).clear());
+        let files_toggle = visual
+            .debug_bounds("status-bar-sidebar-toggle")
+            .expect("status bar Files action remains available");
+        visual.simulate_click(files_toggle.center(), Modifiers::default());
+        visual.run_until_parked();
+        editor.update(visual, |editor, _cx| assert!(!editor.workspace.is_open));
+
+        visual.update(|window, cx| window.draw(cx).clear());
+        let search_toggle = visual
+            .debug_bounds("status-bar-search-toggle")
+            .expect("status bar Search action remains available while drawer is closed");
+        visual.simulate_click(search_toggle.center(), Modifiers::default());
+        visual.run_until_parked();
+        editor.update_in(visual, |editor, window, cx| {
+            assert!(editor.workspace.is_open);
+            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Search);
+            assert!(editor.handle_workspace_key(&key_event("escape"), window, cx));
+        });
+        editor.update(visual, |editor, _cx| {
+            assert!(editor.workspace.is_open);
+            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Files);
         });
 
         visual.simulate_resize(size(px(1180.0), px(780.0)));
@@ -128,15 +174,7 @@
         visual.update(|window, _cx| assert_eq!(window.scale_factor(), 2.0));
         editor.update(visual, |editor, _cx| {
             assert!(editor.workspace.is_open);
-            assert_eq!(
-                editor
-                    .workspace
-                    .header_focus_handles
-                    .as_ref()
-                    .unwrap()
-                    .len(),
-                3
-            );
+            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Files);
         });
     }
 

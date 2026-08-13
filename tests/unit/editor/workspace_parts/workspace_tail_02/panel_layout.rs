@@ -61,6 +61,11 @@
 
         let main = visual.debug_bounds("editor-main-content").unwrap();
         let panel = visual.debug_bounds("document-sidebar-panel").unwrap();
+        let header = visual.debug_bounds("document-sidebar-header").unwrap();
+        let tabs = visual.debug_bounds("document-tab-strip").unwrap();
+        assert_eq!(f32::from(header.size.height), 36.0);
+        assert_eq!(header.top(), tabs.top());
+        assert_eq!(header.size.height, tabs.size.height);
         assert!(panel.right() <= main.right());
         assert!(panel.left() > main.left());
         assert!(
@@ -182,7 +187,10 @@
         editor.update(visual, |editor, cx| {
             assert_eq!(editor.workspace_panel_width(), None);
             assert_eq!(
-                editor.workspace_session_snapshot(cx).workspace_panel_width,
+                editor
+                    .workspace_session_snapshot_result(cx)
+                    .expect("canonical workspace session snapshot")
+                    .workspace_panel_width,
                 None
             );
             assert_eq!(editor.source_document.text(), source);
@@ -294,7 +302,9 @@
         assert!(handle.left() <= panel.right());
         assert!(handle.right() >= panel.right());
         assert!(visual.debug_bounds("document-tab-leading-tools").is_none());
-        assert!(visual.debug_bounds("document-tab-trailing-tools").is_none());
+        assert!(visual.debug_bounds("document-tab-trailing-tools").is_some());
+        assert!(visual.debug_bounds("document-toolbar-action-0").is_some());
+        assert!(visual.debug_bounds("document-toolbar-action-1").is_none());
 
         visual.simulate_click(handle.center(), Modifiers::default());
         visual.simulate_keystrokes("right");

@@ -127,11 +127,20 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "variable.builtin",
     "variable.member",
     "variable.parameter",
+    "text.title",
+    "text.literal",
+    "text.uri",
+    "text.reference",
+    "text.emphasis",
+    "text.strong",
+    "string.escape",
+    "markup.marker",
 ];
 
 #[cfg(feature = "code-highlight-core")]
 struct HighlightRegistry {
     configs: HashMap<SourceLanguage, HighlightConfiguration>,
+    inline_config: Option<HighlightConfiguration>,
 }
 
 #[cfg(feature = "code-highlight-core")]
@@ -140,6 +149,16 @@ static CODE_HIGHLIGHT_REGISTRY: LazyLock<HighlightRegistry> = LazyLock::new(High
 #[cfg(feature = "code-highlight-core")]
 impl HighlightRegistry {
     fn new() -> Self {
+        let inline_config = {
+            #[cfg(feature = "code-highlight-official")]
+            {
+                crate::highlight_configs::build_markdown_inline_config()
+            }
+            #[cfg(not(feature = "code-highlight-official"))]
+            {
+                None
+            }
+        };
         let configs = {
             #[cfg(any(
                 feature = "code-highlight-official",
@@ -310,11 +329,21 @@ impl HighlightRegistry {
                 HashMap::new()
             }
         };
-        Self { configs }
+        Self {
+            configs,
+            inline_config,
+        }
     }
 
     fn config_for(&self, language: SourceLanguage) -> Option<&HighlightConfiguration> {
         self.configs.get(&language)
+    }
+
+    fn config_for_injection(&self, language_name: &str) -> Option<&HighlightConfiguration> {
+        if language_name.eq_ignore_ascii_case("markdown_inline") {
+            return self.inline_config.as_ref();
+        }
+        SourceLanguage::from_alias(language_name).and_then(|language| self.config_for(language))
     }
 }
 
@@ -364,21 +393,21 @@ fn tree_sitter_highlight(
 ) -> Option<Vec<HighlightSpan>> {
     let mut highlighter = Highlighter::new();
     let events = highlighter
-        .highlight(config, source.as_bytes(), None, |_| None)
+        .highlight(config, source.as_bytes(), None, |language_name| {
+            CODE_HIGHLIGHT_REGISTRY.config_for_injection(language_name)
+        })
         .ok()?;
     let mut spans = Vec::new();
-    let mut active = Vec::new();
+    let mut active: Vec<Option<TokenClass>> = Vec::new();
     for event in events {
         match event.ok()? {
             HighlightEvent::Source { start, end } => {
-                if let Some(class) = active.last().copied() {
+                if let Some(Some(class)) = active.last().copied() {
                     push_highlight_span(&mut spans, source, start, end, class);
                 }
             }
             HighlightEvent::HighlightStart(highlight) => {
-                if let Some(class) = class_for_highlight(highlight) {
-                    active.push(class);
-                }
+                active.push(class_for_highlight(highlight));
             }
             HighlightEvent::HighlightEnd => {
                 active.pop();
@@ -517,13 +546,16 @@ fn class_for_highlight(highlight: Highlight) -> Option<TokenClass> {
     Some(match *name {
         "comment" => TokenClass::Comment,
         "keyword" | "tag" => TokenClass::Keyword,
-        "string" | "string.special" | "embedded" => TokenClass::String,
+        "string" | "string.special" | "string.escape" | "embedded" => TokenClass::String,
         "number" => TokenClass::Number,
         "type" | "type.builtin" | "module" => TokenClass::Type,
         "function" | "function.builtin" | "constructor" => TokenClass::Function,
         "constant" | "constant.builtin" => TokenClass::Constant,
         "variable" | "variable.builtin" | "variable.parameter" => TokenClass::Variable,
         "property" | "property.builtin" | "attribute" => TokenClass::Property,
+        "text.title" | "text.emphasis" | "text.strong" | "markup.marker" => TokenClass::Keyword,
+        "text.literal" | "text.uri" => TokenClass::String,
+        "text.reference" => TokenClass::Property,
         "operator" => TokenClass::Operator,
         "punctuation" | "punctuation.bracket" | "punctuation.delimiter" | "punctuation.special" => {
             TokenClass::Punctuation

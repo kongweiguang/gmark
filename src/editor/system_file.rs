@@ -1,6 +1,6 @@
 // @author kongweiguang
 
-//! Narrow platform adapter for opening local paths outside GMark.
+//! Narrow platform adapter for opening local paths outside Gmark.
 
 use std::path::Path;
 use std::process::Command;

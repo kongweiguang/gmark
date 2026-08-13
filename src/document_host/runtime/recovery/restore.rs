@@ -19,7 +19,10 @@ impl DocumentHost {
         let recovered_structure_enabled = derived_views_enabled(probe.strategy);
         let fallback_source = source.clone();
         let fallback_encoding = probe.encoding.clone();
-        let mut view = Self::new(path, probe, source, cx);
+        // Recovery must win before a compatibility host can publish a regular
+        // controller body; keep the host unbound until the replayed session is
+        // ready, then install exactly one shared controller.
+        let mut view = Self::new_with_source(path, probe, Some(source), cx);
         // 替换普通索引任务；Task drop 会取消尚未发布的普通打开结果，恢复日志始终胜出。
         if let Some(cancellation) = view.coordinator.index_cancellation.take() {
             cancellation.cancel();
@@ -115,17 +118,19 @@ impl DocumentHost {
                                 return;
                             }
                         };
+                        // Replayed recovery content is intentionally ahead of
+                        // the on-disk baseline; carry that fact in the shared
+                        // Controller session before publishing it.
+                        document.dirty = true;
                         if let Some(selection) = selection {
-                            document.set_source_selection(selection);
+                            document_view_state_mut(&mut view.document, &mut view.tab_view_state)
+                                .source
+                                .selection = selection;
+                            document_view_state_mut(&mut view.document, &mut view.tab_view_state)
+                                .source
+                                .top_byte_anchor = selection.head;
                         }
-                        document_view_state_mut(&mut view.document, &mut view.tab_view_state)
-                            .source
-                            .selection = document.source_selection();
-                        document_view_state_mut(&mut view.document, &mut view.tab_view_state)
-                            .source
-                            .top_byte_anchor = document.source_selection().head;
                         view.install_document_session(document);
-                        view.prepared_source = Some(recovered.prepared_source);
                         view.provisional_source = None;
                         view.invalidate_source_rows();
                         view.coordinator.recovery_journal =
@@ -146,7 +151,6 @@ impl DocumentHost {
                         }
                         view.view_mode = DocumentHostViewMode::Source;
                         view.sync_tab_active_view();
-                        set_document_dirty_state(&mut view.document, &mut view.pending_dirty, true);
                         view.tail_enabled = false;
                         if let Some(line) = selected_line {
                             view.selection_anchor = Some(line);
@@ -173,7 +177,6 @@ impl DocumentHost {
                             }
                         };
                         view.install_document_session(document);
-                        view.prepared_source = Some(prepared);
                         view.provisional_source = None;
                         view.invalidate_source_rows();
                         view.coordinator.recovery_error = Some(

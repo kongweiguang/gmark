@@ -1,11 +1,11 @@
 <!-- @author kongweiguang -->
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="280" viewBox="0 0 720 280" role="img" aria-labelledby="title desc">
-  <title id="title">GMark rendering fixture</title>
+  <title id="title">Gmark rendering fixture</title>
   <desc id="desc">A small local SVG used to check source, preview, and split views.</desc>
   <rect width="720" height="280" rx="24" fill="#0f172a" />
   <circle cx="142" cy="140" r="74" fill="#2563eb" />
   <circle cx="142" cy="140" r="42" fill="#38bdf8" />
   <path d="M275 82h300a18 18 0 0 1 18 18v80a18 18 0 0 1-18 18H275a18 18 0 0 1-18-18v-80a18 18 0 0 1 18-18Z" fill="#1e293b" stroke="#64748b" stroke-width="2" />
-  <text x="302" y="132" fill="#f8fafc" font-family="sans-serif" font-size="28" font-weight="700">GMark</text>
+  <text x="302" y="132" fill="#f8fafc" font-family="sans-serif" font-size="28" font-weight="700">Gmark</text>
   <text x="302" y="166" fill="#bae6fd" font-family="sans-serif" font-size="18">local SVG preview</text>
 </svg>

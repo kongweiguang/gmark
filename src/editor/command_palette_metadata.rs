@@ -80,6 +80,18 @@ pub(super) fn localized_action_description(
             "gotoline" => "按行号或字节位置跳转到文档位置",
             "toggleviewmode" => "在渲染视图与 Markdown 源码视图之间切换",
             "toggleworkspace" => "显示或隐藏工作区侧边栏",
+            "splitright" => "在当前窗格右侧创建一个新窗格",
+            "splitdown" => "在当前窗格下方创建一个新窗格",
+            "closepane" => "关闭当前窗格，并将焦点移到相邻窗格",
+            "focuspaneleft" => "将焦点移到左侧相邻窗格",
+            "focuspaneright" => "将焦点移到右侧相邻窗格",
+            "focuspaneup" => "将焦点移到上方相邻窗格",
+            "focuspanedown" => "将焦点移到下方相邻窗格",
+            "movetabtopaneleft" => "将当前标签页移到左侧相邻窗格",
+            "movetabtopaneright" => "将当前标签页移到右侧相邻窗格",
+            "movetabtopaneup" => "将当前标签页移到上方相邻窗格",
+            "movetabtopanedown" => "将当前标签页移到下方相邻窗格",
+            "balancepanes" => "均衡所有窗格的可用空间",
             "togglefocusmode" => "隐藏非必要界面，让注意力集中在正文",
             "toggletypewritermode" => "输入时让当前行尽量保持在视口中央",
             "normalizelineendingslf" => "将整篇文档的换行符转换为 Unix/macOS 常用的 LF",
@@ -153,5 +165,21 @@ pub(super) fn localized_action_description(
         }
         .to_owned();
     }
-    format!("Run the {label} command")
+
+    let description = match action_id.as_str() {
+        "splitright" => "Split the current pane and place a new pane on its right",
+        "splitdown" => "Split the current pane and place a new pane below it",
+        "closepane" => "Close the active pane and focus an adjacent pane",
+        "focuspaneleft" => "Focus the adjacent pane on the left",
+        "focuspaneright" => "Focus the adjacent pane on the right",
+        "focuspaneup" => "Focus the adjacent pane above",
+        "focuspanedown" => "Focus the adjacent pane below",
+        "movetabtopaneleft" => "Move the active tab to the adjacent pane on the left",
+        "movetabtopaneright" => "Move the active tab to the adjacent pane on the right",
+        "movetabtopaneup" => "Move the active tab to the adjacent pane above",
+        "movetabtopanedown" => "Move the active tab to the adjacent pane below",
+        "balancepanes" => "Distribute the available space evenly across panes",
+        _ => return format!("Run the {label} command"),
+    };
+    description.to_owned()
 }

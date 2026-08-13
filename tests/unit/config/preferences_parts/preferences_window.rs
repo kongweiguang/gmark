@@ -4,7 +4,7 @@
 fn saving_preferences_window_persists_selected_language() {
     let root =
         std::env::temp_dir().join(format!("gmark-preferences-window-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let preferences = AppPreferences {
         startup_open: StartupOpenPreference::NewFile,
         auto_check_updates: true,
@@ -172,12 +172,13 @@ async fn preferences_pages_keep_actions_visible_at_two_x_scale(cx: &mut TestAppC
                             <= 1.0
                     );
                 } else {
-                    let leading_icon = visual
-                        .debug_bounds("preferences-titlebar-leading-icon")
-                        .unwrap();
-                    assert_eq!(leading_icon.size, size(px(20.0), px(20.0)));
-                    assert!(leading_icon.left() >= titlebar.left());
-                    assert!(title_label.left() > leading_icon.right());
+                    // Windows uses the text-only preference chrome so the
+                    // localized title stays aligned with the content column.
+                    assert!(
+                        visual
+                            .debug_bounds("preferences-titlebar-leading-icon")
+                            .is_none()
+                    );
                 }
             }
             let navigation = visual.debug_bounds("preferences-navigation").unwrap();

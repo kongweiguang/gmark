@@ -2,7 +2,7 @@
 
 # Mermaid 图表
 
-Mermaid 图表使用 `mermaid` 代码块。下面的示例来自常见的流程、系统设计和知识整理场景，适合在 GMark 中分别查看源码、预览和分屏效果。
+Mermaid 图表使用 `mermaid` 代码块。下面的示例来自常见的流程、系统设计和知识整理场景，适合在 Gmark 中分别查看源码、预览和分屏效果。
 
 ## 流程图
 
@@ -110,7 +110,7 @@ erDiagram
 
 ```mermaid
 gantt
-    title GMark Demo 整理计划
+    title Gmark Demo 整理计划
     dateFormat YYYY-MM-DD
 
     section 内容
@@ -150,7 +150,7 @@ gitGraph
 
 ```mermaid
 mindmap
-  root((GMark))
+  root((Gmark))
     文档
       Markdown
       代码

@@ -33,7 +33,7 @@ impl Render for UiTooltip {
     }
 }
 
-/// GPUI owns hover delay and viewport placement; the view only owns gmark's
+/// GPUI owns hover delay and viewport placement; the view only owns Gmark's
 /// restrained visual treatment so every icon-only control is consistent.
 pub(crate) fn ui_tooltip(label: impl Into<SharedString>, cx: &mut App) -> AnyView {
     let label = label.into();

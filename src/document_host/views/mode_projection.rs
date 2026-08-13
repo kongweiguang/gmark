@@ -177,20 +177,24 @@ impl DocumentHost {
     /// 构建仍放后台；generation 同时防止随后的 redo/编辑发布过期索引。
     pub(super) fn rebuild_clean_structured_index(&mut self, cx: &mut Context<Self>) {
         if !derived_views_enabled(self.probe.strategy)
-            || document_dirty_state(&self.document, &self.pending_dirty)
+            || document_dirty_state(&self.document)
             || self.structured_index.is_some()
         {
             return;
         }
-        let Some(source) = self
-            .prepared_source
-            .as_ref()
-            .map(|prepared| prepared.source().clone())
-        else {
+        let Some(document) = self.document.clone() else {
             return;
         };
-        let Some(index) = self.index.clone() else {
-            return;
+        let source = document.structured_source().ok().flatten();
+        let index = self.index.clone();
+        let snapshot = if source.is_none() || index.is_none() {
+            document
+                .snapshot()
+                .ok()
+                .and_then(|snapshot| snapshot.read_range(0..snapshot.len()).ok())
+                .map(Arc::<[u8]>::from)
+        } else {
+            None
         };
         let format = self.probe.format.clone();
         let cancellation = SearchCancellation::default();
@@ -208,12 +212,37 @@ impl DocumentHost {
         self.structured_task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
+                    if let Some(snapshot) = snapshot {
+                        if matches!(
+                            &format,
+                            DocumentFormat::Delimited { .. } | DocumentFormat::JsonLines
+                        ) {
+                            return build_structured_index_from_snapshot(
+                                snapshot,
+                                format,
+                                &cancellation,
+                            );
+                        }
+                    }
+                    let (source, index) = if let (Some(source), Some(index)) = (source, index) {
+                        (source, index)
+                    } else {
+                        // Markdown/JSON indexes still retain file-backed readers.
+                        // Use the existing clean identity as a bounded input when
+                        // available; no host-owned body or shadow is created.
+                        let identity = document.identity().map_err(|error| {
+                            PagedDocumentError::InvalidTransaction(error.to_string())
+                        })?;
+                        let source = FileSource::open(identity.canonical_path)?;
+                        let index = LineIndex::build_cancellable(&source, &cancellation)?;
+                        (source, index)
+                    };
                     build_structured_index(&source, &index, format, &cancellation, None)
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
                 if !task_stamp.accepts_strict(view, view.structured_generation)
-                    || document_dirty_state(&view.document, &view.pending_dirty)
+                    || document_dirty_state(&view.document)
                 {
                     return;
                 }

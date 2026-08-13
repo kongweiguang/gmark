@@ -1,11 +1,13 @@
 // @author kongweiguang
 
 use super::{
-    WorkspaceSession, WorkspaceSessionTab, WorkspaceSessionWindow, WorkspaceSessionWindowState,
+    WorkspaceSession, WorkspaceSessionDocumentRef, WorkspaceSessionPane, WorkspaceSessionPaneId,
+    WorkspaceSessionPaneNode, WorkspaceSessionPaneViewState, WorkspaceSessionSplitAxis,
+    WorkspaceSessionTab, WorkspaceSessionWindow, WorkspaceSessionWindowState,
     read_workspace_sessions_with_dirs, remove_paths_from_workspace_sessions_with_dirs,
     remove_workspace_session_with_dirs, upsert_workspace_session_with_dirs,
 };
-use crate::config::GmarkConfigDirs;
+use crate::config::AppDirs;
 use std::path::PathBuf;
 
 fn temp_root(name: &str) -> PathBuf {
@@ -13,7 +15,7 @@ fn temp_root(name: &str) -> PathBuf {
 }
 
 fn session(id: uuid::Uuid, path: &str, pinned: bool) -> WorkspaceSession {
-    WorkspaceSession::new(
+    session_with_tabs(
         id,
         vec![WorkspaceSessionTab::new(PathBuf::from(path), pinned)],
         0,
@@ -21,10 +23,27 @@ fn session(id: uuid::Uuid, path: &str, pinned: bool) -> WorkspaceSession {
     )
 }
 
+fn session_with_tabs(
+    id: uuid::Uuid,
+    tabs: Vec<WorkspaceSessionTab>,
+    active_index: usize,
+    workspace_root: Option<PathBuf>,
+) -> WorkspaceSession {
+    let mut session = WorkspaceSession::single_pane(id, workspace_root);
+    let pane_id = session.focused_pane;
+    let active_tab = tabs
+        .get(active_index.min(tabs.len().saturating_sub(1)))
+        .map(|tab| tab.id);
+    session
+        .panes
+        .insert(pane_id, WorkspaceSessionPane::new(tabs, active_tab));
+    session
+}
+
 #[test]
 fn registry_round_trips_multiple_windows_and_updates_one_in_place() {
     let root = temp_root("registry");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let first_id = uuid::Uuid::new_v4();
     let second_id = uuid::Uuid::new_v4();
     upsert_workspace_session_with_dirs(&session(first_id, "a.md", false), &dirs).unwrap();
@@ -35,14 +54,17 @@ fn registry_round_trips_multiple_windows_and_updates_one_in_place() {
     assert_eq!(restored.len(), 2);
     assert_eq!(restored[0].id, second_id);
     assert_eq!(restored[1].id, first_id);
-    assert_eq!(restored[1].tabs[0].path, PathBuf::from("updated.md"));
+    assert_eq!(
+        restored[1].focused().unwrap().tabs[0].document.file_path(),
+        Some(PathBuf::from("updated.md").as_path())
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn removing_one_window_preserves_the_other_and_empty_registry_removes_file() {
     let root = temp_root("remove");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let first_id = uuid::Uuid::new_v4();
     let second_id = uuid::Uuid::new_v4();
     upsert_workspace_session_with_dirs(&session(first_id, "a.md", false), &dirs).unwrap();
@@ -57,7 +79,7 @@ fn removing_one_window_preserves_the_other_and_empty_registry_removes_file() {
 #[test]
 fn legacy_v1_session_is_migrated_to_registry() {
     let root = temp_root("legacy");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(
         dirs.workspace_session_file(),
@@ -66,15 +88,18 @@ fn legacy_v1_session_is_migrated_to_registry() {
     .unwrap();
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
     assert_eq!(restored.len(), 1);
-    assert_eq!(restored[0].tabs[0].path, PathBuf::from("a.md"));
-    assert!(restored[0].tabs[0].pinned);
+    assert_eq!(
+        restored[0].focused().unwrap().tabs[0].document.file_path(),
+        Some(PathBuf::from("a.md").as_path())
+    );
+    assert!(restored[0].focused().unwrap().tabs[0].pinned);
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn registry_v2_is_migrated_with_empty_view_state() {
     let root = temp_root("legacy-v2");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     let id = uuid::Uuid::new_v4();
     std::fs::write(
@@ -87,15 +112,25 @@ fn registry_v2_is_migrated_with_empty_view_state() {
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].id, id);
-    assert!(restored[0].tabs[0].view_mode.is_none());
-    assert!(restored[0].tabs[0].selection.is_none());
+    assert!(
+        restored[0].focused().unwrap().tabs[0]
+            .state
+            .view_mode
+            .is_none()
+    );
+    assert!(
+        restored[0].focused().unwrap().tabs[0]
+            .state
+            .selection
+            .is_none()
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn registry_v3_is_migrated_with_empty_window_state() {
     let root = temp_root("legacy-v3");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     let id = uuid::Uuid::new_v4();
     std::fs::write(
@@ -106,7 +141,13 @@ fn registry_v3_is_migrated_with_empty_window_state() {
         )
         .unwrap();
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
-    assert_eq!(restored[0].tabs[0].view_mode.as_deref(), Some("split"));
+    assert_eq!(
+        restored[0].focused().unwrap().tabs[0]
+            .state
+            .view_mode
+            .as_deref(),
+        Some("split")
+    );
     assert!(restored[0].window.is_none());
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -114,7 +155,7 @@ fn registry_v3_is_migrated_with_empty_window_state() {
 #[test]
 fn registry_v4_is_migrated_with_empty_workspace_panel_width() {
     let root = temp_root("legacy-v4");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     let id = uuid::Uuid::new_v4();
     std::fs::write(
@@ -133,7 +174,7 @@ fn registry_v4_is_migrated_with_empty_workspace_panel_width() {
 #[test]
 fn registry_v5_is_migrated_with_empty_split_pane_ratio() {
     let root = temp_root("legacy-v5");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     let id = uuid::Uuid::new_v4();
     std::fs::write(
@@ -153,7 +194,7 @@ fn registry_v5_is_migrated_with_empty_split_pane_ratio() {
 #[test]
 fn registry_v6_is_migrated_with_empty_workspace_visibility() {
     let root = temp_root("legacy-v6");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     let id = uuid::Uuid::new_v4();
     std::fs::write(
@@ -174,7 +215,7 @@ fn registry_v6_is_migrated_with_empty_workspace_visibility() {
 #[test]
 fn registry_v7_selection_without_affinity_uses_directional_defaults() {
     let root = temp_root("legacy-v7-selection");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     let id = uuid::Uuid::new_v4();
     std::fs::write(
@@ -186,17 +227,21 @@ fn registry_v7_selection_without_affinity_uses_directional_defaults() {
     .unwrap();
 
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
-    let selection = restored[0].tabs[0].selection.as_ref().unwrap();
+    let selection = restored[0].focused().unwrap().tabs[0]
+        .state
+        .selection
+        .as_ref()
+        .unwrap();
     let source = selection.source_selection_for_range(selection.start..selection.end);
     assert_eq!(source.anchor.byte_offset, 9);
     assert_eq!(
         source.anchor.affinity,
-        gmark_paged_document::SourceAffinity::After
+        gmark_document_core::SourceAffinity::After
     );
     assert_eq!(source.head.byte_offset, 2);
     assert_eq!(
         source.head.affinity,
-        gmark_paged_document::SourceAffinity::Before
+        gmark_document_core::SourceAffinity::Before
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -204,7 +249,7 @@ fn registry_v7_selection_without_affinity_uses_directional_defaults() {
 #[test]
 fn workspace_docked_visibility_round_trips() {
     let root = temp_root("workspace-visibility");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut closed = session(uuid::Uuid::new_v4(), "closed.md", false);
     closed.workspace_docked_open = Some(false);
     upsert_workspace_session_with_dirs(&closed, &dirs).unwrap();
@@ -217,7 +262,7 @@ fn workspace_docked_visibility_round_trips() {
 #[test]
 fn workspace_panel_width_is_finite_and_bounded_before_persistence() {
     let root = temp_root("workspace-panel-width");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut bounded = session(uuid::Uuid::new_v4(), "bounded.md", false);
     bounded.workspace_panel_width = Some(900.0);
     upsert_workspace_session_with_dirs(&bounded, &dirs).unwrap();
@@ -244,7 +289,7 @@ fn workspace_panel_width_is_finite_and_bounded_before_persistence() {
 #[test]
 fn split_pane_ratio_is_finite_and_bounded_before_persistence() {
     let root = temp_root("split-pane-ratio");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut bounded = session(uuid::Uuid::new_v4(), "bounded.md", false);
     bounded.split_pane_ratio = Some(0.9);
     upsert_workspace_session_with_dirs(&bounded, &dirs).unwrap();
@@ -271,53 +316,57 @@ fn split_pane_ratio_is_finite_and_bounded_before_persistence() {
 #[test]
 fn invalid_view_state_is_normalized_before_persistence() {
     let root = temp_root("invalid-view-state");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut tab = WorkspaceSessionTab::new(PathBuf::from("a.md"), false);
-    tab.view_mode = Some("unsupported".to_owned());
-    tab.selection = Some(super::WorkspaceSessionSelection {
+    tab.state.view_mode = Some("unsupported".to_owned());
+    tab.state.selection = Some(super::WorkspaceSessionSelection {
         start: 9,
         end: 2,
         reversed: true,
         anchor_affinity: None,
         head_affinity: None,
     });
-    tab.scroll_x = Some(50_000_000.0);
-    tab.scroll_y = Some(-50_000_000.0);
-    let session = WorkspaceSession::new(uuid::Uuid::new_v4(), vec![tab], 0, None);
+    tab.state.scroll_x = Some(50_000_000.0);
+    tab.state.scroll_y = Some(-50_000_000.0);
+    let session = session_with_tabs(uuid::Uuid::new_v4(), vec![tab], 0, None);
     upsert_workspace_session_with_dirs(&session, &dirs).unwrap();
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
-    let tab = &restored[0].tabs[0];
-    assert!(tab.view_mode.is_none());
-    assert_eq!(tab.selection.as_ref().unwrap().start, 2);
-    assert_eq!(tab.selection.as_ref().unwrap().end, 9);
-    assert_eq!(tab.scroll_x, Some(10_000_000.0));
-    assert_eq!(tab.scroll_y, Some(-10_000_000.0));
+    let tab = &restored[0].focused().unwrap().tabs[0];
+    assert!(tab.state.view_mode.is_none());
+    assert_eq!(tab.state.selection.as_ref().unwrap().start, 2);
+    assert_eq!(tab.state.selection.as_ref().unwrap().end, 9);
+    assert_eq!(tab.state.scroll_x, Some(10_000_000.0));
+    assert_eq!(tab.state.scroll_y, Some(-10_000_000.0));
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn workspace_session_round_trips_source_anchor_affinity() {
     let root = temp_root("selection-affinity");
-    let dirs = GmarkConfigDirs::from_root(&root);
-    let source_selection = gmark_paged_document::SourceSelection {
-        anchor: gmark_paged_document::SourceAnchor::new(
+    let dirs = AppDirs::from_root(&root);
+    let source_selection = gmark_document_core::SourceSelection {
+        anchor: gmark_document_core::SourceAnchor::new(
             9,
-            gmark_paged_document::SourceAffinity::After,
+            gmark_document_core::SourceAffinity::After,
         ),
-        head: gmark_paged_document::SourceAnchor::new(
+        head: gmark_document_core::SourceAnchor::new(
             2,
-            gmark_paged_document::SourceAffinity::Before,
+            gmark_document_core::SourceAffinity::Before,
         ),
     };
     let mut tab = WorkspaceSessionTab::new(PathBuf::from("a.md"), false);
-    tab.selection = Some(super::WorkspaceSessionSelection::from_source_selection(
+    tab.state.selection = Some(super::WorkspaceSessionSelection::from_source_selection(
         source_selection,
     ));
-    let session = WorkspaceSession::new(uuid::Uuid::new_v4(), vec![tab], 0, None);
+    let session = session_with_tabs(uuid::Uuid::new_v4(), vec![tab], 0, None);
     upsert_workspace_session_with_dirs(&session, &dirs).unwrap();
 
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
-    let selection = restored[0].tabs[0].selection.as_ref().unwrap();
+    let selection = restored[0].focused().unwrap().tabs[0]
+        .state
+        .selection
+        .as_ref()
+        .unwrap();
     assert_eq!(
         selection.source_selection_for_range(selection.start..selection.end),
         source_selection
@@ -328,7 +377,7 @@ fn workspace_session_round_trips_source_anchor_affinity() {
 #[test]
 fn invalid_window_state_is_dropped_and_extreme_valid_state_is_bounded() {
     let root = temp_root("invalid-window-state");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut invalid = session(uuid::Uuid::new_v4(), "invalid.md", false);
     invalid.window = Some(WorkspaceSessionWindow {
         x: f32::NAN,
@@ -372,26 +421,28 @@ fn invalid_window_state_is_dropped_and_extreme_valid_state_is_bounded() {
 }
 
 #[test]
-fn newest_window_owns_duplicate_path_across_registry() {
+fn duplicate_paths_are_allowed_across_windows() {
     let root = temp_root("duplicate-path");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let first_id = uuid::Uuid::new_v4();
     let second_id = uuid::Uuid::new_v4();
     upsert_workspace_session_with_dirs(&session(first_id, "same.md", false), &dirs).unwrap();
     upsert_workspace_session_with_dirs(&session(second_id, "same.md", true), &dirs).unwrap();
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
-    assert_eq!(restored.len(), 1);
-    assert_eq!(restored[0].id, second_id);
-    assert!(restored[0].tabs[0].pinned);
+    assert_eq!(restored.len(), 2);
+    assert_eq!(restored[0].id, first_id);
+    assert_eq!(restored[1].id, second_id);
+    assert!(!restored[0].focused().unwrap().tabs[0].pinned);
+    assert!(restored[1].focused().unwrap().tabs[0].pinned);
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn recovery_path_removal_preserves_other_tabs_and_repairs_active_index() {
     let root = temp_root("recovery-path");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let id = uuid::Uuid::new_v4();
-    let session = WorkspaceSession::new(
+    let session = session_with_tabs(
         id,
         vec![
             WorkspaceSessionTab::new(PathBuf::from("recovered.md"), true),
@@ -406,15 +457,21 @@ fn recovery_path_removal_preserves_other_tabs_and_repairs_active_index() {
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].id, id);
-    assert_eq!(restored[0].tabs[0].path, PathBuf::from("clean.md"));
-    assert_eq!(restored[0].active_index, 0);
+    assert_eq!(
+        restored[0].focused().unwrap().tabs[0].document.file_path(),
+        Some(PathBuf::from("clean.md").as_path())
+    );
+    assert_eq!(
+        restored[0].focused().unwrap().active_tab,
+        Some(restored[0].focused().unwrap().tabs[0].id)
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn document_sidebar_session_fields_round_trip_with_bounds() {
     let root = temp_root("document-sidebar");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let mut value = session(uuid::Uuid::new_v4(), "notes.md", false);
     value.document_sidebar_width = Some(480.0);
     value.document_sidebar_docked_open = Some(true);
@@ -429,7 +486,7 @@ fn document_sidebar_session_fields_round_trip_with_bounds() {
 #[test]
 fn legacy_session_without_document_sidebar_restores_collapsed_defaults() {
     let root = temp_root("document-sidebar-legacy");
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     let id = uuid::Uuid::new_v4();
     std::fs::write(
@@ -442,5 +499,73 @@ fn legacy_session_without_document_sidebar_restores_collapsed_defaults() {
     let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
     assert_eq!(restored[0].document_sidebar_width, None);
     assert_eq!(restored[0].document_sidebar_docked_open, None);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn canonical_v10_snapshot_round_trip_keeps_pane_identity_duplicates_and_history_limit() {
+    let root = temp_root("canonical-v10");
+    let dirs = AppDirs::from_root(&root);
+    let window_id = uuid::Uuid::new_v4();
+    let first_pane = WorkspaceSessionPaneId::from(uuid::Uuid::from_u128(1));
+    let second_pane = WorkspaceSessionPaneId::from(uuid::Uuid::from_u128(2));
+    let first_tab_id = uuid::Uuid::from_u128(11);
+    let duplicate_tab_id = uuid::Uuid::from_u128(12);
+    let cross_pane_tab_id = uuid::Uuid::from_u128(13);
+
+    let mut first = WorkspaceSessionTab::new(PathBuf::from("same.md"), true);
+    first.id = first_tab_id;
+    first.state = WorkspaceSessionPaneViewState {
+        view_mode: Some("split".to_owned()),
+        split_ratio: Some(0.42),
+        forward: (0..40).map(serde_json::Value::from).collect(),
+        back: (0..40).map(serde_json::Value::from).collect(),
+        ..Default::default()
+    };
+    let mut duplicate = WorkspaceSessionTab::new(PathBuf::from("same.md"), false);
+    duplicate.id = duplicate_tab_id;
+    let mut cross_pane = WorkspaceSessionTab::new(PathBuf::from("same.md"), false);
+    cross_pane.id = cross_pane_tab_id;
+    cross_pane.document = WorkspaceSessionDocumentRef::File(PathBuf::from("same.md"));
+
+    let mut session = WorkspaceSession::single_pane(window_id, None);
+    session.root = WorkspaceSessionPaneNode::Split {
+        axis: WorkspaceSessionSplitAxis::Horizontal,
+        ratio: 0.6,
+        first: Box::new(WorkspaceSessionPaneNode::Leaf(first_pane)),
+        second: Box::new(WorkspaceSessionPaneNode::Leaf(second_pane)),
+    };
+    session.panes.clear();
+    session.panes.insert(
+        first_pane,
+        WorkspaceSessionPane::new(vec![first, duplicate], Some(first_tab_id)),
+    );
+    session.panes.insert(
+        second_pane,
+        WorkspaceSessionPane::new(vec![cross_pane], Some(cross_pane_tab_id)),
+    );
+    session.focused_pane = second_pane;
+
+    upsert_workspace_session_with_dirs(&session, &dirs).unwrap();
+    let encoded = std::fs::read_to_string(dirs.workspace_session_file()).unwrap();
+    let encoded_value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(encoded_value["version"], serde_json::json!(10));
+    assert!(
+        encoded_value["windows"]
+            .as_array()
+            .is_some_and(|windows| { windows.iter().any(|window| window.get("root").is_some()) })
+    );
+
+    let restored = read_workspace_sessions_with_dirs(&dirs).unwrap();
+    assert_eq!(restored.len(), 1);
+    let restored = &restored[0];
+    assert_eq!(restored.focused_pane, second_pane);
+    assert_eq!(restored.panes[&first_pane].tabs.len(), 1);
+    assert_eq!(restored.panes[&second_pane].tabs.len(), 1);
+    let state = &restored.panes[&first_pane].tabs[0].state;
+    assert_eq!(state.forward.len(), 32);
+    assert_eq!(state.back.len(), 32);
+    assert_eq!(restored.panes[&first_pane].tabs[0].id, first_tab_id);
+    assert_eq!(restored.panes[&second_pane].tabs[0].id, cross_pane_tab_id);
     std::fs::remove_dir_all(root).unwrap();
 }

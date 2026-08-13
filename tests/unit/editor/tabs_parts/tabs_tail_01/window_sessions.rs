@@ -1,5 +1,23 @@
 // @author kongweiguang
 
+#[test]
+fn shared_document_window_close_state_only_prompts_on_last_window_lease() {
+    let document_id = gmark_document_runtime::DocumentId::new();
+    let state = crate::editor::close::EditorDocumentCloseState {
+        document_id,
+        dirty: true,
+        global_lease_count: 2,
+        window_lease_count: 1,
+    };
+    assert!(!state.closes_last_lease());
+
+    let last_window_state = crate::editor::close::EditorDocumentCloseState {
+        window_lease_count: 2,
+        ..state
+    };
+    assert!(last_window_state.closes_last_lease());
+}
+
 #[gpui::test]
 async fn explicit_close_and_quit_keep_distinct_session_intent(cx: &mut gpui::TestAppContext) {
     init_test_app(cx);
@@ -31,7 +49,9 @@ async fn window_bounds_observer_populates_workspace_session_snapshot(
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.install_workspace_session_window_observer(window, cx);
-            let snapshot = editor.workspace_session_snapshot(cx);
+            let snapshot = editor
+                .workspace_session_snapshot_result(cx)
+                .expect("canonical workspace session snapshot");
             let restored = snapshot
                 .window
                 .expect("window placement should be captured");
@@ -55,14 +75,20 @@ async fn registry_sessions_open_as_independent_editor_windows(cx: &mut gpui::Tes
     std::fs::write(&first, "first window").unwrap();
     std::fs::write(&second, "second window").unwrap();
     let sessions = [first.clone(), second.clone()].map(|path| {
-        crate::config::workspace_session::WorkspaceSession::new(
+        let mut session = crate::config::workspace_session::WorkspaceSession::single_pane(
             uuid::Uuid::new_v4(),
-            vec![crate::config::workspace_session::WorkspaceSessionTab::new(
-                path, false,
-            )],
-            0,
             Some(root.clone()),
-        )
+        );
+        let pane_id = session.focused_pane;
+        let tab = crate::config::workspace_session::WorkspaceSessionTab::new(path, false);
+        session.panes.insert(
+            pane_id,
+            crate::config::workspace_session::WorkspaceSessionPane::new(
+                vec![tab.clone()],
+                Some(tab.id),
+            ),
+        );
+        session
     });
     cx.update(|cx| {
         for session in sessions {

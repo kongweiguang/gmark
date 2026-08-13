@@ -2,7 +2,7 @@
 
 # 数学公式
 
-本页集中展示 GMark 的行内数学和块数学。公式正文使用 LaTeX，源码仍然是普通 Markdown，适合在 Source 和 Preview 之间来回检查。
+本页集中展示 Gmark 的行内数学和块数学。公式正文使用 LaTeX，源码仍然是普通 Markdown，适合在 Source 和 Preview 之间来回检查。
 
 ## 行内公式与块公式
 

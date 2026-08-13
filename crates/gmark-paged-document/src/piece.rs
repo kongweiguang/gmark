@@ -103,6 +103,7 @@ pub fn search_file_source(
         len,
         undo: Vec::new(),
         redo: Vec::new(),
+        persisted_pieces: None,
     };
     document.search(query, options, cancellation)
 }
@@ -118,6 +119,10 @@ pub struct PieceDocument {
     len: u64,
     undo: Vec<(PieceTree, u64)>,
     redo: Vec<(PieceTree, u64)>,
+    /// Optional in-memory acknowledgement baseline used by an explicit
+    /// discard decision.  The tree shares persistent roots and the append
+    /// store; it is metadata, not a second body representation.
+    persisted_pieces: Option<(PieceTree, u64)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,6 +240,30 @@ impl PieceTree {
 
     fn first(&self) -> Option<&Piece> {
         self.root.first()
+    }
+
+    fn same_as(&self, other: &Self) -> bool {
+        if self.piece_count() != other.piece_count() {
+            return false;
+        }
+        let mut left_cursor = self.root.cursor::<()>(());
+        let mut right_cursor = other.root.cursor::<()>(());
+        left_cursor.next();
+        right_cursor.next();
+        loop {
+            match (left_cursor.item(), right_cursor.item()) {
+                (None, None) => return true,
+                (Some(left), Some(right))
+                    if left.source == right.source
+                        && left.range == right.range
+                        && left.newlines == right.newlines =>
+                {
+                    left_cursor.next();
+                    right_cursor.next();
+                }
+                _ => return false,
+            }
+        }
     }
 
     fn push(&mut self, piece: Piece) {
@@ -466,6 +495,7 @@ impl PieceDocument {
             len,
             undo: Vec::new(),
             redo: Vec::new(),
+            persisted_pieces: None,
         })
     }
 
@@ -473,9 +503,19 @@ impl PieceDocument {
         self.len
     }
 
+    /// Identity of the file represented by the base pieces.  The runtime uses
+    /// this when it creates an encoded save plan after a metadata-only
+    /// encoding change.
+    pub fn base_identity(&self) -> crate::FileIdentity {
+        self.base_identity.clone()
+    }
+
     /// 是否已经回到当前磁盘基线。追加缓冲可能仍为 undo/redo 保留历史数据，
     /// 因此只比较逻辑 piece 根，不能用追加缓冲是否为空判断脏状态。
     pub fn is_pristine(&self) -> bool {
+        if let Some((persisted, persisted_len)) = &self.persisted_pieces {
+            return self.len == *persisted_len && self.pieces.same_as(persisted);
+        }
         if self.base_identity.len == 0 {
             return self.len == 0 && self.pieces.is_empty();
         }
@@ -490,6 +530,14 @@ impl PieceDocument {
                     ..
                 }) if range.start == 0 && range.end == self.base_identity.len
             )
+    }
+
+    /// A close/discard decision can acknowledge the current logical pieces as
+    /// the new in-memory baseline without writing a second body.  Persistent
+    /// tree roots and the append store are shared by clone, so this only keeps
+    /// structural metadata needed by subsequent undo/redo dirty checks.
+    pub fn mark_current_pristine(&mut self) {
+        self.persisted_pieces = Some((self.pieces.clone(), self.len));
     }
 
     /// 判断逻辑文档是否为空，避免调用方依赖内部长度表示。

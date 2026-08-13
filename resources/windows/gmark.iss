@@ -12,7 +12,7 @@
   #error OutputDir must be provided by ISCC
 #endif
 
-#define MyAppName "gmark"
+#define MyAppName "Gmark"
 #define MyAppPublisher "kongweiguang"
 #define MyAppExeName "gmark.exe"
 
@@ -25,7 +25,7 @@ AppPublisherURL=https://github.com/kongweiguang/gmark
 AppSupportURL=https://github.com/kongweiguang/gmark/issues
 AppUpdatesURL=https://github.com/kongweiguang/gmark/releases
 DefaultDirName={localappdata}\Programs\gmark
-DefaultGroupName=gmark
+DefaultGroupName=Gmark
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
@@ -41,7 +41,7 @@ RestartApplications=no
 UninstallDisplayIcon={app}\gmark.exe
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
-VersionInfoDescription=gmark Markdown Editor Setup
+VersionInfoDescription=Gmark Markdown Editor Setup
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 LicenseFile={#SourceDir}\LICENSE
@@ -60,15 +60,15 @@ Source: "{#SourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\gmark"; Filename: "{app}\gmark.exe"
-Name: "{autodesktop}\gmark"; Filename: "{app}\gmark.exe"; Tasks: desktopicon
+Name: "{group}\Gmark"; Filename: "{app}\gmark.exe"
+Name: "{autodesktop}\Gmark"; Filename: "{app}\gmark.exe"; Tasks: desktopicon
 
 [Registry]
 ; Register as an Open With application without taking over the user's defaults.
-Root: HKCU; Subkey: "Software\Classes\Applications\gmark.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "gmark"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\gmark.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Gmark"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\gmark.exe\shell\open\command"; ValueType: string; ValueData: """{app}\gmark.exe"" ""%1"""
 Root: HKCU; Subkey: "Software\Classes\Applications\gmark.exe\SupportedTypes"; ValueType: string; ValueName: ".md"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\Applications\gmark.exe\SupportedTypes"; ValueType: string; ValueName: ".markdown"; ValueData: ""
 
 [Run]
-Filename: "{app}\gmark.exe"; Description: "{cm:LaunchProgram,gmark}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\gmark.exe"; Description: "{cm:LaunchProgram,Gmark}"; Flags: nowait postinstall skipifsilent

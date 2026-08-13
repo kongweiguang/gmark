@@ -5,7 +5,7 @@
     windows_subsystem = "windows"
 )]
 
-//! Standalone progress feedback window for a GMark update transaction.
+//! Standalone progress feedback window for a Gmark update transaction.
 
 #[path = "../update_agent/mod.rs"]
 mod update_agent;

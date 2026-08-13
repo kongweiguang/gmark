@@ -2,7 +2,6 @@
 
 //! Atomic save and post-save session reconciliation.
 
-use super::coordinator::map_persistence_error;
 use super::*;
 use std::io::Write as _;
 
@@ -53,40 +52,34 @@ impl DocumentHost {
         window_handle: gpui::AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
-        if self.saving
-            || self.reloading
-            || (!document_dirty_state(&self.document, &self.pending_dirty) && !save_as)
-        {
+        if self.saving || self.reloading || (!document_dirty_state(&self.document) && !save_as) {
             return;
         }
+        let Some(document) = self.document.clone() else {
+            return;
+        };
         if let Some(cancellation) = self.coordinator.save.cancellation.take() {
             cancellation.cancel();
         }
         self.coordinator.save.generation = self.coordinator.save.generation.wrapping_add(1);
         let task_stamp = DocumentTaskStamp::capture(self, self.coordinator.save.generation);
         let save_started = crate::perf::start();
-        let open_strategy = self.probe.strategy;
-        let probe_options = self.probe.options;
-        let force_safe_source = self.probe.force_safe_source;
         let save_profile = self.probe.profile();
-        let save_plan = session_plan(&save_profile, &self.probe, open_strategy, false);
+        let save_plan = session_plan(&save_profile, &self.probe, self.probe.strategy, false);
+        let snapshot = match document.request_save_snapshot() {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                self.coordinator.save.generation = self.coordinator.save.generation.wrapping_add(1);
+                return;
+            }
+            Err(error) => {
+                self.error = Some(error.to_string().into());
+                return;
+            }
+        };
         let cancellation = SearchCancellation::default();
         self.coordinator.save.cancellation = Some(cancellation.clone());
-        // 保存会暂时取走 document 并重建 uniform_list 的数据源。必须保留底层像素偏移；
-        // 近文件尾部用 scroll_to_item 恢复会再次经过估算布局，仍可能跳动数百行。
         let save_scroll_offset = self.scroll_handle.0.borrow().base_handle.offset();
-        let Some(mut document) = self.take_document_session() else {
-            self.coordinator.save.cancellation = None;
-            return;
-        };
-        let prepared_source = self.prepared_source.take();
-        let encoded_save = prepared_source
-            .as_ref()
-            .and_then(PreparedUtf8Source::save_plan);
-        // 直接 UTF-8 的 PreparedUtf8Source 仍持有目标文件；Windows 原子替换要求
-        // 所有目标句柄先关闭。编码文档的 PreparedUtf8Source 指向影子文件，失败时需保留。
-        let prepared_on_error = encoded_save.as_ref().and(prepared_source);
-        self.provisional_source = None;
         if let Some(cancellation) = self.coordinator.search_cancellation.take() {
             cancellation.cancel();
         }
@@ -96,94 +89,21 @@ impl DocumentHost {
         self.structured_filter_task = Task::ready(());
         self.json_expand_task = Task::ready(());
         self.coordinator.external_generation = self.coordinator.external_generation.wrapping_add(1);
-        #[cfg(not(test))]
-        let recovery_dir = gmark_config::GmarkConfigDirs::from_system()
-            .ok()
-            .map(|dirs| dirs.recovery_dir());
-        #[cfg(test)]
-        let recovery_dir: Option<PathBuf> = None;
-        // 保存期间主动结束行编辑并阻止新编辑，避免后台保存旧快照后覆盖用户在保存中
-        // 继续输入的内容。大文件保存为流式任务，状态栏会明确显示 Saving…。
         self.active_edit = None;
         self.saving = true;
         self.error = None;
+        let snapshot_for_event = snapshot.clone();
+        let save_path = path.clone();
         cx.emit(DocumentHostEvent::StateChanged);
         self.coordinator.save.task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let save_result = if let Some(plan) = encoded_save {
-                        if save_as {
-                            document
-                                .save_encoded_atomic_as_cancellable(&plan, &path, &cancellation)
-                                .map(|_| ())
-                        } else {
-                            document
-                                .save_encoded_atomic_cancellable(&plan, &path, &cancellation)
-                                .map(|_| ())
-                        }
-                    } else {
-                        document.save_atomic_cancellable(&path, &cancellation)
-                    };
-                    if let Err(error) = save_result {
-                        return Err((document, prepared_on_error, map_persistence_error(error)));
+                    if cancellation.is_cancelled() {
+                        return Err(PagedDocumentError::Cancelled);
                     }
-                    // 保存后从最终磁盘内容重新建立干净基线，清除旧 undo/add buffer，并恢复结构视图。
-                    let rebuild = (|| {
-                        let original = FileSource::open(&path)?;
-                        let mut probe = gmark_paged_document::probe_file(&path, probe_options)?;
-                        // 当前会话不因保存后的大小变化热迁移；重新打开时才重新执行策略。
-                        probe.strategy = open_strategy;
-                        probe.force_safe_source = force_safe_source;
-                        let original_for_session = original.clone();
-                        let prepared = prepare_utf8_source(original, probe.encoding.clone())?;
-                        let index = LineIndex::build_cancellable(prepared.source(), &cancellation)?;
-                        let clean_document = build_document_session(
-                            &probe,
-                            &original_for_session,
-                            prepared.source().clone(),
-                            index.clone(),
-                            true,
-                        )?;
-                        let recovery = recovery_dir.as_ref().map(|dir| {
-                            DocumentRecoveryJournal::create(
-                                dir,
-                                &original_for_session,
-                                probe.encoding.clone(),
-                                &clean_document,
-                            )
-                        });
-                        verify_saved_session_readback(&document, &clean_document, &cancellation)?;
-                        let (structure_source, structure_index, structure_bytes) =
-                            structure_input_for_session(
-                                &clean_document,
-                                &prepared,
-                                &index,
-                                &cancellation,
-                            )?;
-                        let structured = if derived_views_enabled(probe.strategy) {
-                            build_structured_index(
-                                &structure_source,
-                                &structure_index,
-                                probe.format.clone(),
-                                &cancellation,
-                                structure_bytes,
-                            )
-                        } else {
-                            Ok(None)
-                        };
-                        Ok::<_, gmark_paged_document::PagedDocumentError>((
-                            clean_document,
-                            prepared,
-                            index,
-                            structured,
-                            recovery,
-                            probe,
-                            path,
-                        ))
-                    })();
-                    rebuild.map_err(|error| {
-                        (document, prepared_on_error, map_persistence_error(error))
-                    })
+                    write_save_snapshot(&snapshot, &save_path, &cancellation, save_as)?;
+                    let identity = FileSource::open(&save_path)?.identity()?;
+                    Ok::<_, PagedDocumentError>(identity)
                 })
                 .await;
             let saved = result.is_ok();
@@ -205,69 +125,36 @@ impl DocumentHost {
                 view.coordinator.save.cancellation = None;
                 view.saving = false;
                 match result {
-                    Ok((document, prepared, index, structured, recovery, probe, path)) => {
-                        // 保存后的干净 PieceTree 是新的磁盘身份基线；即使 revision 从零重新
-                        // 开始，也不能接受旧基线上的搜索、复制或派生 projection 结果。
+                    Ok(identity) => {
+                        let revision = snapshot_for_event.revision;
+                        let _ = document.save_succeeded(
+                            revision,
+                            gmark_document_runtime::FileIdentity::from(&identity),
+                        );
                         view.document_epoch = view.document_epoch.wrapping_add(1);
-                        view.cancel_selection_transfers();
-                        let (replacement, recovery_creation_error) = match recovery {
-                            Some(Ok(journal)) => (Some(journal), None),
-                            Some(Err(error)) => (None, Some(error)),
-                            None => (None, None),
-                        };
-                        let cleanup_error = view
-                            .coordinator
-                            .replace_recovery_journal_after_persistence(replacement, &document)
-                            .err();
-                        view.coordinator.recovery_error = match recovery_creation_error {
-                            Some(error) => Some(localized_document_error(&error, cx)),
-                            None => cleanup_error.map(|error| localized_document_error(&error, cx)),
-                        };
-                        view.install_document_session(document);
-                        view.prepared_source = Some(prepared);
-                        view.provisional_source = None;
-                        view.index = Some(index);
                         view.invalidate_source_rows();
-                        view.probe = probe;
                         view.scroll_handle
                             .0
                             .borrow()
                             .base_handle
                             .set_offset(save_scroll_offset);
-                        view.invalidate_structured_runtime();
-                        match structured {
-                            Ok(structured) => {
-                                view.structured_index = structured;
-                                view.clear_structure_error();
-                            }
-                            Err(error) => {
-                                view.structured_index = None;
-                                view.set_structure_error(error, cx);
-                            }
-                        }
                         view.active_edit = None;
-                        set_document_dirty_state(
-                            &mut view.document,
-                            &mut view.pending_dirty,
-                            false,
-                        );
+                        // The immutable save verified the pre-write identity and
+                        // installed the written identity as the new Controller
+                        // baseline. Any monitor result captured before this save
+                        // is therefore stale, including an own-save replacement
+                        // observed while the worker was completing.
+                        view.coordinator.pending_external_change = None;
+                        view.coordinator.external_monitor_paused = false;
+                        view.coordinator.external_status = None;
                         if save_as {
                             view.path = path.clone();
-                            view.coordinator.pending_external_change = None;
-                            view.coordinator.external_monitor_paused = false;
-                            view.coordinator.external_status = None;
-                            cx.emit(DocumentHostEvent::SavedAs(path));
+                            cx.emit(DocumentHostEvent::SavedAs(path.clone()));
                         }
                     }
-                    Err((document, prepared, error)) => {
-                        view.install_document_session(document);
-                        view.prepared_source = prepared;
-                        view.invalidate_source_rows();
-                        view.scroll_handle
-                            .0
-                            .borrow()
-                            .base_handle
-                            .set_offset(save_scroll_offset);
+                    Err(error) => {
+                        let _ = document
+                            .save_failed(snapshot_for_event.revision, SaveFailureCode::Other);
                         view.error = Some(error.to_string().into());
                     }
                 }
@@ -287,6 +174,26 @@ impl DocumentHost {
     }
 }
 
+/// Stream the immutable Controller snapshot without holding the Controller
+/// mutex.  The runtime owns encoding, source-format restoration, and the
+/// atomic writer; the host only selects save-vs-save-as semantics.
+fn write_save_snapshot(
+    snapshot: &gmark_document_runtime::DocumentSaveSnapshot,
+    path: &Path,
+    cancellation: &SearchCancellation,
+    save_as: bool,
+) -> Result<(), PagedDocumentError> {
+    if cancellation.is_cancelled() {
+        return Err(PagedDocumentError::Cancelled);
+    }
+    if save_as {
+        snapshot.save_as_atomic_cancellable(path, cancellation)?;
+    } else {
+        snapshot.save_atomic_cancellable(path, cancellation)?;
+    }
+    Ok(())
+}
+
 pub(super) fn delimited_record_terminator(bytes: &[u8]) -> &'static str {
     if bytes.ends_with(b"\r\n") {
         "\r\n"
@@ -300,14 +207,14 @@ pub(super) fn delimited_record_terminator(bytes: &[u8]) -> &'static str {
 }
 
 pub(super) fn transform_delimited_adapter(
-    mut document: DocumentSession,
+    document: SharedDocument,
     delimiter: u8,
     edit: DelimitedEdit,
     cancellation: &SearchCancellation,
     progress: &AtomicU64,
-) -> Result<DocumentSession, PagedDocumentError> {
+) -> Result<String, PagedDocumentError> {
     let resident_source =
-        document.store.kind() == gmark_document_core::DocumentBackendKind::Resident;
+        document.backend_kind() == Some(gmark_document_core::DocumentBackendKind::Resident);
     let (column, header) = match edit {
         DelimitedEdit::InsertColumn { before, header } => (before, Some(header)),
         DelimitedEdit::DeleteColumn { column } => (column, None),
@@ -417,10 +324,10 @@ pub(super) fn transform_delimited_adapter(
             path: output_path.clone(),
             source,
         })?;
-    let output_reader = output.reopen().map_err(|source| PagedDocumentError::Io {
+    let bytes = std::fs::read(output.path()).map_err(|source| PagedDocumentError::Io {
         path: output_path,
         source,
     })?;
-    document.replace_text_reader(0..document.len(), output_reader)?;
-    Ok(document)
+    String::from_utf8(bytes)
+        .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))
 }

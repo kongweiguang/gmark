@@ -414,13 +414,21 @@ impl Block {
         let block_type_width =
             expanded_block_type_width(cx.global::<I18nManager>().current_language_id());
         let expanded_block_type_width = show_block_type.then_some(block_type_width);
-        let position = toolbar_window_position(
+        let mut position = toolbar_window_position(
             selection,
             text_bounds,
             viewport,
             attached_surface_height,
             expanded_block_type_width,
         );
+        if f32::from(viewport.width) <= 400.0 {
+            // Narrow client areas begin below the custom title/tab chrome; keep
+            // the toolbar inside that content surface without changing the
+            // general above-selection placement contract on normal windows.
+            position.top = position
+                .top
+                .max(super::WINDOW_CHROME_RESERVE + super::VIEWPORT_INSET);
+        }
         let d = &theme.dimensions;
         let c = &theme.colors;
         let visual_preferences = cx

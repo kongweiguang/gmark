@@ -200,6 +200,104 @@ pub(in crate::editor) fn render_sidebar_toggle(
         .into_any_element()
 }
 
+/// Status-bar search control for the left workspace drawer. Keeping this
+/// beside the Files toggle leaves the drawer itself free of a permanent
+/// toolbar and mirrors the compact Zed workbench interaction.
+pub(in crate::editor) fn render_workspace_search_toggle(
+    state: &mut StatusBarState,
+    active: bool,
+    theme: &Theme,
+    strings: &I18nStrings,
+    cx: &mut Context<Editor>,
+) -> AnyElement {
+    let c = &theme.colors;
+    let d = &theme.dimensions;
+    let focus_handle = state
+        .search_focus_handle
+        .get_or_insert_with(|| cx.focus_handle())
+        .clone();
+    let pointer_focus_handle = focus_handle.clone();
+    let label = strings.workspace_tab_search.clone();
+    div()
+        .id("status-bar-search-toggle")
+        .debug_selector(|| "status-bar-search-toggle".to_owned())
+        .relative()
+        .size(px(d.status_bar_height))
+        .tab_index(0)
+        .track_focus(&focus_handle)
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .border(px(1.0))
+        .border_color(hsla(0.0, 0.0, 0.0, 0.0))
+        .bg(if state.search_hovered || active {
+            c.workbench.control_hover
+        } else {
+            hsla(0., 0., 0., 0.)
+        })
+        .cursor_pointer()
+        .focus(|this| this.border_color(c.workbench.focus_ring))
+        .text_color(c.workbench.text_secondary)
+        .child(
+            svg()
+                .path(SEARCH_ICON)
+                .size(px(15.0))
+                .text_color(c.workbench.icon),
+        )
+        .children(active.then(|| {
+            div()
+                .absolute()
+                .left(px(4.0))
+                .right(px(4.0))
+                .bottom(px(0.0))
+                .h(px(2.0))
+                .rounded(px(1.0))
+                .bg(c.workbench.accent)
+                .debug_selector(|| "status-bar-search-indicator".to_owned())
+        }))
+        .children(
+            (state.tooltip_visible == Some(StatusTooltip::Search)).then(|| {
+                status_bar_tooltip(
+                    label,
+                    theme,
+                    StatusTooltipAlignment::Start,
+                    "status-bar-search-tooltip".to_owned(),
+                )
+            }),
+        )
+        .on_hover(cx.listener(
+            |editor: &mut Editor,
+             hovered: &bool,
+             _window: &mut Window,
+             cx: &mut Context<Editor>| {
+                editor.set_status_search_tooltip_hover(*hovered, cx);
+            },
+        ))
+        .on_click(cx.listener(
+            move |editor: &mut Editor,
+                  _: &gpui::ClickEvent,
+                  window: &mut Window,
+                  cx: &mut Context<Editor>| {
+                pointer_focus_handle.focus(window);
+                editor.toggle_workspace_search(window, cx);
+            },
+        ))
+        .on_key_down(cx.listener(
+            |editor: &mut Editor,
+             event: &KeyDownEvent,
+             window: &mut Window,
+             cx: &mut Context<Editor>| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    editor.toggle_workspace_search(window, cx);
+                    cx.stop_propagation();
+                }
+            },
+        ))
+        .into_any_element()
+}
+
 pub(in crate::editor) fn render_document_sidebar_toggle(
     state: &mut StatusBarState,
     is_open: bool,

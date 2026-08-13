@@ -20,12 +20,16 @@ impl DocumentHost {
     }
 
     pub(crate) fn document_line_ending_label(&self) -> String {
-        let Some(summary) = self
-            .document
-            .as_ref()
-            .and_then(DocumentSession::resident_source_document)
-            .map(gmark_document::SourceDocument::source_format_summary)
-        else {
+        let Some(summary) = self.document.as_ref().and_then(|document| {
+            document
+                .with_session(|session| {
+                    session
+                        .resident_source_document()
+                        .map(gmark_document::SourceDocument::source_format_summary)
+                })
+                .ok()
+                .flatten()
+        }) else {
             // Paged documents intentionally avoid a whole-file scan. The
             // source view still exposes individual endings when requested.
             return "—".to_owned();

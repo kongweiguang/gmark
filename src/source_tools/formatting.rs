@@ -102,9 +102,10 @@ pub(crate) fn resolve_formatter(
     }
 
     let workspace_config = nearest_workspace_config(file);
-    let global_config = crate::config::GmarkConfigDirs::from_system()
-        .ok()
-        .map(|dirs| dirs.app_config_file());
+    let global_config = crate::config::AppDirs::from_system().ok().and_then(|dirs| {
+        dirs.validate_config_root().ok()?;
+        Some(dirs.config_toml_file())
+    });
     for (path, from_workspace) in workspace_config
         .into_iter()
         .map(|path| (path, true))
@@ -154,9 +155,12 @@ pub(crate) fn format_on_save_for_file(file: &Path, global_default: bool) -> bool
         .as_deref()
         .and_then(format_on_save_from_config)
         .or_else(|| {
-            crate::config::GmarkConfigDirs::from_system()
+            crate::config::AppDirs::from_system()
                 .ok()
-                .map(|dirs| dirs.app_config_file())
+                .and_then(|dirs| {
+                    dirs.validate_config_root().ok()?;
+                    Some(dirs.config_toml_file())
+                })
                 .as_deref()
                 .and_then(format_on_save_from_config)
         })

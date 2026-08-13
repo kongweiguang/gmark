@@ -1,5 +1,7 @@
 // @author kongweiguang
 
+use crate::preferences::StatusBarButton;
+
 use super::*;
 
 pub(in crate::editor) fn render_cursor((line, col): (usize, usize), theme: &Theme) -> AnyElement {

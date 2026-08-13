@@ -352,7 +352,9 @@ impl Editor {
         // 历史快照来自 UI 输入与源码同步的交界处。即使旧版本或异常事件顺序留下了
         // 换行数量不匹配的快照，也必须修复为可序列化格式，不能在撤销时终止主线程。
         let format = source_format_for_history_text(&source_text, entry.source_format.clone());
-        let _ = self.source_document.restore_source_format(format);
+        if let Err(error) = self.source_document.try_restore_source_format(format) {
+            eprintln!("恢复历史源码格式失败: {error}");
+        }
         match self.view_mode {
             ViewMode::Rendered | ViewMode::Preview => {
                 self.rebuild_primary_projection_from_source_reusing(cx);

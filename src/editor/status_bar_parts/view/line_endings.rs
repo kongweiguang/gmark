@@ -1,5 +1,7 @@
 // @author kongweiguang
 
+use gmark_document::LineEnding;
+
 use super::*;
 
 pub(in crate::editor) fn render_line_ending_picker(

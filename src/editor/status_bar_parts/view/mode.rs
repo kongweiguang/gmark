@@ -189,7 +189,7 @@ pub(in crate::editor) fn render_mode_switch(
                 .absolute()
                 .right(px(0.0))
                 .bottom(px(d.status_bar_height + 4.0))
-                .min_w(px(120.0))
+                .w(px(120.0))
                 .occlude()
                 .p(px(4.0))
                 .flex()
@@ -252,6 +252,8 @@ fn render_mode_menu_item(
         .child(
             div()
                 .flex_1()
+                .min_w(px(0.0))
+                .truncate()
                 .text_size(px(theme.dimensions.status_bar_text_size))
                 .text_color(theme.colors.workbench.text_primary)
                 .child(label.to_owned()),

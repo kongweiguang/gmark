@@ -86,11 +86,45 @@ pub(crate) fn build_json_config() -> Option<HighlightConfiguration> {
 
 #[cfg(feature = "code-highlight-official")]
 pub(crate) fn build_markdown_config() -> Option<HighlightConfiguration> {
+    // tree-sitter-md 还会把整个围栏块标成 literal；该外层颜色会盖住已经
+    // 注入的 Rust/JSON 等语义 token，因此仅保留围栏标点并让内容语言接管正文。
+    // 块级结构标记需要比普通标点更醒目：标题、列表、引用、分隔线和围栏
+    // 使用主题高亮色；链接括号与强调定界符仍由 inline query 保持低干扰。
+    let highlights_query = tree_sitter_md::HIGHLIGHT_QUERY_BLOCK
+        .replace("  (fenced_code_block)\n", "")
+        .replace("@punctuation.special", "@markup.marker")
+        .replace(
+            "(fenced_code_block_delimiter) @punctuation.delimiter",
+            "(fenced_code_block_delimiter) @markup.marker",
+        );
+    let highlights_query = format!(
+        "{highlights_query}\n\n[\n  (task_list_marker_checked)\n  (task_list_marker_unchecked)\n] @markup.marker\n\n(info_string\n  (language) @text.reference)\n"
+    );
+    let injections_query = tree_sitter_md::INJECTION_QUERY_BLOCK
+        .replace(
+            "(fenced_code_block\n  (info_string\n    (language) @injection.language)\n  (code_fence_content) @injection.content)",
+            "((fenced_code_block\n  (info_string\n    (language) @injection.language)\n  (code_fence_content) @injection.content)\n  (#set! injection.include-children))",
+        )
+        .replace(
+            "(#set! injection.language \"markdown_inline\")",
+            "(#set! injection.language \"markdown_inline\")\n  (#set! injection.include-children)",
+        );
     configure_highlights(
         tree_sitter_md::LANGUAGE.into(),
         "markdown",
-        tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
-        tree_sitter_md::INJECTION_QUERY_BLOCK,
+        &highlights_query,
+        &injections_query,
+        "",
+    )
+}
+
+#[cfg(feature = "code-highlight-official")]
+pub(crate) fn build_markdown_inline_config() -> Option<HighlightConfiguration> {
+    configure_highlights(
+        tree_sitter_md::INLINE_LANGUAGE.into(),
+        "markdown_inline",
+        tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
+        tree_sitter_md::INJECTION_QUERY_INLINE,
         "",
     )
 }

@@ -4147,7 +4147,7 @@ dependencies = [
 
 [[package]]
 name = "gmark"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4268,7 +4268,9 @@ dependencies = [
 name = "gmark-document-core"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]
@@ -4383,6 +4385,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
+ "winsafe",
 ]
 
 [[package]]

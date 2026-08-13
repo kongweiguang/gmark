@@ -6,25 +6,49 @@ use super::*;
 
 impl DocumentHost {
     pub(crate) fn is_dirty(&self) -> bool {
-        document_dirty_state(&self.document, &self.pending_dirty)
+        document_dirty_state(&self.document)
     }
 
     /// “不保存”是终止当前恢复会话，不只是隐藏窗口级 dirty 标记。
+    /// Controller 只允许最终 lease 执行 discard，避免一个 pane 清掉共享文档
+    /// 的 dirty 基线；成功后 recovery journal 也必须一并清理。
     pub(crate) fn discard_unsaved_changes(&mut self, cx: &mut Context<Self>) {
-        if let Some(mut journal) = self.coordinator.recovery_journal.take() {
-            if let Some(document) = self.document.as_ref() {
-                if let Err(error) = journal.checkpoint(document) {
-                    self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
-                    // 保留句柄，让 Drop 在窗口销毁时按 clean 状态再尝试一次 checkpoint。
-                    self.coordinator.recovery_journal = Some(journal);
+        let _ = self.discard_unsaved_changes_for_owned_leases(1, cx);
+    }
+
+    /// Discard changes when the caller owns every active view lease for this
+    /// host's document.  A split window can hold multiple host leases, so the
+    /// final-lease-only compatibility method above is insufficient for window
+    /// close.  Keep the journal cleanup and event publication identical to the
+    /// single-lease path, while returning success to the close coordinator.
+    pub(crate) fn discard_unsaved_changes_for_owned_leases(
+        &mut self,
+        expected_owned_leases: usize,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mut discard_succeeded = match self.document.as_ref() {
+            Some(document) => match document
+                .handle()
+                .discard_current_changes_for_owned_leases(expected_owned_leases)
+            {
+                Ok(_) => true,
+                Err(error) => {
+                    self.coordinator.recovery_error = Some(error.to_string().into());
+                    false
                 }
-            } else if let Err(error) = journal.discard() {
-                self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
-            }
+            },
+            None => true,
+        };
+        if discard_succeeded
+            && let Some(journal) = self.coordinator.recovery_journal.take()
+            && let Err(error) = journal.discard()
+        {
+            self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
+            discard_succeeded = false;
         }
-        set_document_dirty_state(&mut self.document, &mut self.pending_dirty, false);
         cx.emit(DocumentHostEvent::StateChanged);
         cx.notify();
+        discard_succeeded
     }
 
     pub(crate) fn encoding_label(&self) -> String {
@@ -99,8 +123,15 @@ impl DocumentHost {
         if self.source_is_utf8() {
             return;
         }
+        let Some(document) = self.document.as_ref() else {
+            return;
+        };
+        if let Err(error) = document.set_encoding(TextEncoding::Utf8 { bom: false }) {
+            self.error = Some(error.to_string().into());
+            cx.notify();
+            return;
+        }
         self.probe.encoding = TextEncoding::Utf8 { bom: false };
-        set_document_dirty_state(&mut self.document, &mut self.pending_dirty, true);
         cx.emit(DocumentHostEvent::StateChanged);
         cx.notify();
     }
@@ -212,7 +243,7 @@ impl DocumentHost {
 
     pub(crate) fn toggle_follow(&mut self, cx: &mut Context<Self>) {
         let strings = cx.global::<I18nManager>().strings_arc();
-        if document_dirty_state(&self.document, &self.pending_dirty) {
+        if document_dirty_state(&self.document) {
             self.coordinator.external_status =
                 Some(strings.large_document_text("follow_dirty_error").into());
         } else {

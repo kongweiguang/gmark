@@ -9,7 +9,7 @@ use gmark_document::{
     SourceDocument, TextEdit, Transaction as ResidentTransaction, atomic_write_verified,
 };
 use gmark_document_core::{
-    DocumentSnapshot, SourceAffinity, SourceAnchor, SourceEdit, SourceSelection, TextEncoding,
+    DocumentRevision, DocumentSnapshot, SourceAffinity, SourceAnchor, SourceEdit, TextEncoding,
     Transaction,
 };
 use gmark_paged_document::{
@@ -36,14 +36,12 @@ impl PersistedContent {
     }
 }
 
-/// 普通文件的 Rope 后端。选择与正文 history 同步撤销，磁盘身份只用于冲突检测。
+/// 普通文件的 Rope 后端。selection 与正文 history 由共享 Controller 协调，
+/// 磁盘身份只用于冲突检测。
 #[derive(Clone)]
 pub struct ResidentDocument {
     document: SourceDocument,
     encoding: TextEncoding,
-    selection: SourceSelection,
-    undo_selections: Vec<SourceSelection>,
-    redo_selections: Vec<SourceSelection>,
     persisted_content: PersistedContent,
     source_identity: FileIdentity,
     lines: Arc<[Range<u64>]>,
@@ -70,9 +68,6 @@ impl ResidentDocument {
         Self {
             document,
             encoding,
-            selection: SourceSelection::default(),
-            undo_selections: Vec::new(),
-            redo_selections: Vec::new(),
             persisted_content: PersistedContent::Snapshot(persisted_snapshot),
             source_identity,
             lines,
@@ -91,11 +86,25 @@ impl ResidentDocument {
     /// 兼容 Markdown controller 的 SourceDocument transaction 后重建通用行坐标。
     pub fn refresh_source_state(&mut self) {
         self.rebuild_lines();
-        self.clamp_selection();
     }
 
     pub fn revision(&self) -> u64 {
         self.document.revision().get()
+    }
+
+    pub fn set_revision(&mut self, revision: DocumentRevision) {
+        self.document
+            .set_revision(gmark_document::Revision::from_u64(revision.0));
+    }
+
+    pub fn advance_revision(&mut self) -> Result<DocumentRevision, gmark_document::DocumentError> {
+        self.document
+            .advance_revision()
+            .map(|revision| DocumentRevision(revision.get()))
+    }
+
+    pub fn set_encoding(&mut self, encoding: TextEncoding) {
+        self.encoding = encoding;
     }
 
     pub fn snapshot(&self) -> Arc<dyn DocumentSnapshot> {
@@ -116,6 +125,10 @@ impl ResidentDocument {
 
     pub fn mark_persisted(&mut self) {
         self.persisted_content = PersistedContent::Snapshot(self.document.snapshot());
+    }
+
+    pub fn mark_persisted_snapshot(&mut self, snapshot: gmark_document::DocumentSnapshot) {
+        self.persisted_content = PersistedContent::Snapshot(snapshot);
     }
 
     pub fn mark_persisted_text(&mut self, text: impl Into<Arc<str>>) {
@@ -143,23 +156,6 @@ impl ResidentDocument {
             .partition_point(|range| range.end <= offset && range.end < self.len())
             .min(self.lines.len().saturating_sub(1));
         Some(index as u64)
-    }
-
-    pub fn source_selection(&self) -> SourceSelection {
-        self.selection
-    }
-
-    pub fn set_selection(&mut self, range: Range<u64>, reversed: bool) {
-        let len = self.len();
-        self.selection =
-            SourceSelection::from_range(range.start.min(len)..range.end.min(len), reversed);
-    }
-
-    pub fn set_source_selection(&mut self, mut selection: SourceSelection) {
-        let len = self.len();
-        selection.anchor.byte_offset = selection.anchor.byte_offset.min(len);
-        selection.head.byte_offset = selection.head.byte_offset.min(len);
-        self.selection = selection;
     }
 
     pub fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>, PagedDocumentError> {
@@ -287,8 +283,6 @@ impl ResidentDocument {
             self.revision(),
             &[SourceEdit::new(range.clone(), replacement)],
         )?;
-        let caret = range.start.saturating_add(replacement.len() as u64);
-        self.selection = SourceSelection::collapsed(caret, SourceAffinity::After);
         Ok(())
     }
 
@@ -315,12 +309,7 @@ impl ResidentDocument {
     pub fn undo(&mut self) -> bool {
         match self.document.undo() {
             Ok(Some(_)) => {
-                self.redo_selections.push(self.selection);
-                if let Some(selection) = self.undo_selections.pop() {
-                    self.selection = selection;
-                }
                 self.rebuild_lines();
-                self.clamp_selection();
                 true
             }
             Ok(None) | Err(_) => false,
@@ -330,12 +319,7 @@ impl ResidentDocument {
     pub fn redo(&mut self) -> bool {
         match self.document.redo() {
             Ok(Some(_)) => {
-                self.record_undo_selection(self.selection);
-                if let Some(selection) = self.redo_selections.pop() {
-                    self.selection = selection;
-                }
                 self.rebuild_lines();
-                self.clamp_selection();
                 true
             }
             Ok(None) | Err(_) => false,
@@ -447,7 +431,6 @@ impl ResidentDocument {
                 Ok(TextEdit::new(start..end, edit.replacement.clone()))
             })
             .collect::<Result<Vec<_>, PagedDocumentError>>()?;
-        let previous_selection = self.selection;
         self.document
             .apply_transaction(ResidentTransaction::new(
                 self.document.revision(),
@@ -455,8 +438,6 @@ impl ResidentDocument {
             ))
             .map_err(|error| map_document_error(error.to_string(), self.len(), 0..0))?;
         if !edits.is_empty() {
-            self.record_undo_selection(previous_selection);
-            self.redo_selections.clear();
             self.rebuild_lines();
         }
         Ok(())
@@ -561,19 +542,6 @@ impl ResidentDocument {
         let (lines, structural_units) = build_source_metrics(&self.document.text());
         self.lines = lines;
         self.structural_units = structural_units;
-    }
-
-    fn clamp_selection(&mut self) {
-        let len = self.len();
-        self.selection.anchor.byte_offset = self.selection.anchor.byte_offset.min(len);
-        self.selection.head.byte_offset = self.selection.head.byte_offset.min(len);
-    }
-
-    fn record_undo_selection(&mut self, selection: SourceSelection) {
-        if self.undo_selections.len() == HISTORY_LIMIT {
-            self.undo_selections.remove(0);
-        }
-        self.undo_selections.push(selection);
     }
 }
 

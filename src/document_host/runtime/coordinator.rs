@@ -1,11 +1,38 @@
 // @author kongweiguang
 
-use gmark_document_core::PersistenceError;
 use gmark_paged_document::{ExternalChange, PagedDocumentError, SearchCancellation};
 use gpui::{SharedString, Task};
 
 use super::DocumentRecoveryJournal;
+use super::SharedDocument;
 use super::session::RetiredRecoveryJournal;
+
+pub(crate) trait RecoveryDocument {
+    fn checkpoint_recovery(
+        &self,
+        journal: &mut DocumentRecoveryJournal,
+    ) -> Result<(), PagedDocumentError>;
+}
+
+impl RecoveryDocument for SharedDocument {
+    fn checkpoint_recovery(
+        &self,
+        journal: &mut DocumentRecoveryJournal,
+    ) -> Result<(), PagedDocumentError> {
+        self.with_session(|session| journal.checkpoint(session))
+            .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))
+            .and_then(|result| result)
+    }
+}
+
+impl RecoveryDocument for gmark_document_runtime::DocumentSession {
+    fn checkpoint_recovery(
+        &self,
+        journal: &mut DocumentRecoveryJournal,
+    ) -> Result<(), PagedDocumentError> {
+        journal.checkpoint(self)
+    }
+}
 
 pub(crate) struct SaveCoordinator {
     pub(crate) generation: u64,
@@ -20,14 +47,6 @@ impl Default for SaveCoordinator {
             cancellation: None,
             task: Task::ready(()),
         }
-    }
-}
-
-pub(crate) fn map_persistence_error(error: PagedDocumentError) -> PersistenceError {
-    match error {
-        PagedDocumentError::SourceChanged => PersistenceError::SourceChanged,
-        PagedDocumentError::Recovery(message) => PersistenceError::Recovery(message),
-        error => PersistenceError::AtomicWrite(error.to_string()),
     }
 }
 
@@ -109,19 +128,21 @@ impl DocumentCoordinator {
     pub(crate) fn replace_recovery_journal_after_persistence(
         &mut self,
         replacement: Option<DocumentRecoveryJournal>,
-        document: &gmark_document_runtime::DocumentSession,
+        document: &impl RecoveryDocument,
     ) -> Result<(), PagedDocumentError> {
         let retry_error = self.retry_retired_recovery_journals().err();
         let previous = std::mem::replace(&mut self.recovery_journal, replacement);
-        let checkpoint_error =
-            previous.and_then(|mut journal| match journal.checkpoint(document) {
+        let checkpoint_error = previous.and_then(|mut journal| {
+            let result = document.checkpoint_recovery(&mut journal);
+            match result {
                 Ok(()) => None,
                 Err(error) => {
                     let (retired, retirement_error) = journal.retire_for_cleanup();
                     self.retired_recovery_journals.push(retired);
                     Some(retirement_error.unwrap_or(error))
                 }
-            });
+            }
+        });
 
         match (retry_error, checkpoint_error) {
             (Some(error), _) | (None, Some(error)) => Err(error),

@@ -311,7 +311,7 @@ pub(crate) fn current_update_target() -> Result<CurrentUpdateTarget, String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate installed gmark: {error}"))?;
         let expected_install_root = windows_install_location()?.ok_or_else(|| {
-            "gmark is not registered by the fixed Inno installation; portable mode cannot self-update"
+            "Gmark is not registered by the fixed Inno installation; portable mode cannot self-update"
                 .to_owned()
         })?;
         let parent = executable
@@ -346,7 +346,7 @@ pub(crate) fn current_update_target() -> Result<CurrentUpdateTarget, String> {
             .and_then(|path| path.parent())
             .map(Path::to_path_buf)
             .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
-            .ok_or_else(|| "gmark is not running from a macOS application bundle".to_owned())?;
+            .ok_or_else(|| "Gmark is not running from a macOS application bundle".to_owned())?;
         let bundle_metadata = fs::symlink_metadata(&bundle)
             .map_err(|error| format!("failed to inspect macOS application bundle: {error}"))?;
         if !is_real_directory(&bundle_metadata) {

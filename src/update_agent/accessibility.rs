@@ -180,7 +180,7 @@ impl Bridge {
 
 pub(crate) fn build_tree(snapshot: Snapshot) -> TreeUpdate {
     let mut root = Node::new(Role::Window);
-    root.set_label("GMark update");
+    root.set_label("Gmark update");
     root.set_children(vec![STATUS_ID, MESSAGE_ID]);
 
     let mut status = Node::new(if snapshot.failure {

@@ -1,7 +1,7 @@
 // @author kongweiguang
 
 use super::{
-    GmarkConfigDirs, RECENT_FILES_LIMIT, load_or_create_installation_id_with_dirs,
+    AppDirs, RECENT_FILES_LIMIT, load_or_create_installation_id_with_dirs,
     read_recent_files_with_dirs, record_recent_file_with_dirs, remove_recent_file_with_dirs,
 };
 
@@ -9,14 +9,21 @@ use super::{
 fn ui_check_override_isolates_every_config_artifact() {
     let root = std::env::temp_dir().join(format!("gmark-ui-check-config-{}", uuid::Uuid::new_v4()));
 
-    let dirs = GmarkConfigDirs::from_system_with_override(Some(root.clone())).unwrap();
+    let dirs = AppDirs::from_system_with_override(Some(root.clone())).unwrap();
 
-    assert_eq!(dirs.app_config_file(), root.join("config.toml"));
-    assert_eq!(dirs.instance_lock_file(), root.join("instance.lock"));
-    assert_eq!(dirs.recovery_dir(), root.join("recovery"));
+    assert_eq!(dirs.config_root(), root.join("config").as_path());
+    assert_eq!(dirs.state_root(), root.join("state").as_path());
+    assert_eq!(dirs.cache_root(), root.join("cache").as_path());
+    assert_eq!(dirs.runtime_root(), root.join("runtime").as_path());
+    assert_eq!(dirs.app_config_file(), root.join("config/config.toml"));
+    assert_eq!(
+        dirs.instance_lock_file(),
+        root.join("runtime/instance.lock")
+    );
+    assert_eq!(dirs.recovery_dir(), root.join("state/recovery"));
     assert_eq!(
         dirs.workspace_session_file(),
-        root.join("workspace-session.json")
+        root.join("state/workspace-session.json")
     );
 }
 use std::path::{Path, PathBuf};
@@ -24,7 +31,7 @@ use std::path::{Path, PathBuf};
 #[test]
 fn missing_recent_history_file_returns_empty_list() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
 
     assert!(read_recent_files_with_dirs(&dirs).unwrap().is_empty());
     assert!(!dirs.history_file().exists());
@@ -35,7 +42,7 @@ fn missing_recent_history_file_returns_empty_list() {
 #[test]
 fn empty_recent_history_write_does_not_create_file() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
 
     remove_recent_file_with_dirs(Path::new("missing.md"), &dirs).unwrap();
 
@@ -47,7 +54,7 @@ fn empty_recent_history_write_does_not_create_file() {
 #[test]
 fn blank_recent_file_path_is_rejected() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
 
     assert!(record_recent_file_with_dirs(Path::new("   "), &dirs).is_err());
     assert!(!dirs.history_file().exists());
@@ -58,7 +65,7 @@ fn blank_recent_file_path_is_rejected() {
 #[test]
 fn recent_history_filters_empty_lines_and_deduplicates() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(
         dirs.history_file(),
@@ -78,7 +85,7 @@ fn recent_history_filters_empty_lines_and_deduplicates() {
 #[test]
 fn recent_history_filters_legacy_gmark_temp_fixture_paths() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let fixture_path = std::env::temp_dir().join(format!(
         "gmark-drop-save-replace-{}-123.md",
         std::process::id()
@@ -100,7 +107,7 @@ fn recent_history_filters_legacy_gmark_temp_fixture_paths() {
 #[test]
 fn recording_gmark_temp_fixture_path_is_noop() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let fixture_path = std::env::temp_dir().join(format!(
         "gmark-drop-dirty-discard-{}-123.md",
         std::process::id()
@@ -119,7 +126,7 @@ fn recording_gmark_temp_fixture_path_is_noop() {
 #[test]
 fn ordinary_temp_markdown_file_can_still_be_recorded() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let path = std::env::temp_dir().join(format!("manual-note-{}.md", std::process::id()));
 
     let paths = record_recent_file_with_dirs(&path, &dirs).unwrap();
@@ -133,7 +140,7 @@ fn ordinary_temp_markdown_file_can_still_be_recorded() {
 #[test]
 fn recording_recent_file_moves_it_to_front_and_truncates() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
 
     for index in 0..(RECENT_FILES_LIMIT + 2) {
         record_recent_file_with_dirs(&PathBuf::from(format!("file-{index}.md")), &dirs).unwrap();
@@ -157,7 +164,7 @@ fn recording_recent_file_moves_it_to_front_and_truncates() {
 #[test]
 fn removing_recent_file_persists_history_without_it() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     record_recent_file_with_dirs(&PathBuf::from("one.md"), &dirs).unwrap();
     record_recent_file_with_dirs(&PathBuf::from("two.md"), &dirs).unwrap();
 
@@ -175,7 +182,7 @@ fn removing_recent_file_persists_history_without_it() {
 #[test]
 fn removing_last_recent_file_deletes_history_file() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     let path = PathBuf::from("only.md");
     record_recent_file_with_dirs(&path, &dirs).unwrap();
     assert!(dirs.history_file().exists());
@@ -192,7 +199,7 @@ fn removing_last_recent_file_deletes_history_file() {
 #[test]
 fn installation_id_is_created_once_and_remains_stable() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
 
     let first = load_or_create_installation_id_with_dirs(&dirs).unwrap();
     let second = load_or_create_installation_id_with_dirs(&dirs).unwrap();
@@ -210,7 +217,7 @@ fn installation_id_is_created_once_and_remains_stable() {
 #[test]
 fn invalid_installation_id_is_rejected_without_replacing_cohort() {
     let root = std::env::temp_dir().join(format!("gmark-config-{}", uuid::Uuid::new_v4()));
-    let dirs = GmarkConfigDirs::from_root(&root);
+    let dirs = AppDirs::from_root(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(dirs.installation_id_file(), "not-a-uuid\n").unwrap();
 

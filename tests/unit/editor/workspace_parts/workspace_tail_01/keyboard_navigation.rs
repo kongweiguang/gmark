@@ -1,7 +1,9 @@
 // @author kongweiguang
 
     #[gpui::test]
-    async fn editor_capture_routes_workspace_tab_navigation(cx: &mut gpui::TestAppContext) {
+    async fn editor_capture_routes_legacy_workspace_tab_zone_to_visible_body(
+        cx: &mut gpui::TestAppContext,
+    ) {
         init_workspace_test_app(cx);
         let (editor, visual) = cx.add_window_view(|_window, cx| {
             super::Editor::from_markdown(cx, "# document".to_owned(), None)
@@ -18,7 +20,11 @@
             editor.on_editor_key_down_capture(&key_event("right"), window, cx);
         });
         editor.update(visual, |editor, _cx| {
-            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Search);
+            // The former top tab strip is no longer rendered. A restored focus
+            // zone must fall back to the visible body instead of switching the
+            // workspace tab through hidden controls.
+            assert_eq!(editor.workspace.active_tab, WorkspaceTab::Files);
+            assert_eq!(editor.workspace.keyboard_zone, WorkspaceKeyboardZone::Body);
         });
     }
 

@@ -264,7 +264,14 @@ async fn closing_large_tab_cancels_copy_and_reopen_resumes_background_lifetime(
         });
     });
     visual.run_until_parked();
-    assert!(!large_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
+    let reopened_view = editor
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
+        .expect("reopened large close view");
+    assert!(
+        reopened_view != large_view,
+        "body-free closed history must rebuild a fresh Host entity"
+    );
+    assert!(!reopened_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
     assert!(editor.read_with(visual, |editor, _cx| editor.document_host.is_some()));
 }
 
@@ -307,5 +314,12 @@ async fn reopening_large_tab_restarts_an_index_cancelled_before_first_snapshot(
         large_view.read_with(visual, |view, _cx| view.recovered_text_for_test()),
         Some(text.as_bytes().to_vec())
     );
-    assert!(!large_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
+    let reopened_view = editor
+        .read_with(visual, |editor, _cx| editor.document_host.clone())
+        .expect("reopened provisional large view");
+    assert!(
+        reopened_view != large_view,
+        "body-free closed history must rebuild a fresh Host entity"
+    );
+    assert!(!reopened_view.read_with(visual, |view, _cx| { view.is_closed_suspended_for_test() }));
 }

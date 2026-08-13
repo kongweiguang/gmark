@@ -2,12 +2,14 @@
 
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 
-pub use gmark_document_core::{SourceAffinity, SourceAnchor, SourceSelection};
+pub use gmark_document_core::{SourceAffinity, SourceAnchor};
 
 use crate::{
     EncodedSavePlan, ExternalChange, FileIdentity, FileSource, LineIndex, PagedDocumentError,
-    PieceDocument, SearchCancellation, SearchMatch, SearchOptions,
+    PieceDocument, PreparedUtf8Source, SearchCancellation, SearchMatch, SearchOptions,
+    TextEncoding,
 };
 
 /// 单次视口读取的硬上限，调用方不能通过异常窗口把整条超长行物化进内存。
@@ -97,6 +99,10 @@ impl PagedDocumentBackend {
         self.generation
     }
 
+    pub fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
     pub fn read_viewport(
         &self,
         request: &ViewportRequest,
@@ -142,29 +148,69 @@ impl PagedDocumentBackend {
     }
 }
 
-/// 普通 Editor 面向大文档的契约层：选择、编辑、history 与 viewport 共用源码字节坐标。
+/// 普通 Editor 面向大文档的契约层：编辑 history 与 viewport 共用源码字节坐标；
+/// selection 由共享 Controller 按视图实例维护。
 #[derive(Clone)]
 pub struct PagedDocument {
     backend: PagedDocumentBackend,
-    selection: SourceSelection,
-    /// 与 PieceTree 持久根逐项对应；正文和 Source selection 必须作为同一个
-    /// 用户 transaction 撤销，且数量沿用 PieceTree 的固定生产上限。
-    undo_selections: Vec<SourceSelection>,
-    redo_selections: Vec<SourceSelection>,
+    encoding: PagedEncodingState,
+}
+
+#[derive(Clone)]
+struct PagedEncodingState {
+    encoding: TextEncoding,
+    original_identity: FileIdentity,
+    shadow: Option<Arc<tempfile::NamedTempFile>>,
+    save_plan: Option<EncodedSavePlan>,
 }
 
 impl PagedDocument {
     pub fn new(document: PieceDocument) -> Self {
+        let original_identity = document.base_identity();
         Self {
             backend: PagedDocumentBackend::new(document),
-            selection: SourceSelection::collapsed(0, SourceAffinity::Before),
-            undo_selections: Vec::new(),
-            redo_selections: Vec::new(),
+            encoding: PagedEncodingState {
+                encoding: TextEncoding::Utf8 { bom: false },
+                original_identity,
+                shadow: None,
+                save_plan: None,
+            },
         }
+    }
+
+    /// Construct a paged document from an IO-prepared UTF-8 shadow.  The
+    /// shadow tempfile and encoded save plan move into this value so they live
+    /// exactly as long as the shared Controller session.
+    pub fn from_prepared(
+        prepared: PreparedUtf8Source,
+        index: LineIndex,
+    ) -> Result<Self, PagedDocumentError> {
+        let (source, encoding, shadow, save_plan) = prepared.into_backend_parts();
+        let original_identity = save_plan
+            .as_ref()
+            .map(|plan| plan.original_identity().clone())
+            .unwrap_or(source.identity()?);
+        let document = PieceDocument::open(source, index)?;
+        Ok(Self {
+            backend: PagedDocumentBackend::new(document),
+            encoding: PagedEncodingState {
+                encoding,
+                original_identity,
+                shadow,
+                save_plan,
+            },
+        })
     }
 
     pub fn backend(&self) -> &PagedDocumentBackend {
         &self.backend
+    }
+
+    /// Clone the FileSource handle backing the current paged pieces.  This is
+    /// a read-only view of the same source (or UTF-8 shadow), never a second
+    /// body representation and never a fresh file open.
+    pub fn prepared_source(&self) -> Result<FileSource, PagedDocumentError> {
+        self.backend.document.base_source()
     }
 
     /// 当前 Source 内容代次。后台任务只能在代次仍一致时提交会修改正文的结果。
@@ -172,25 +218,62 @@ impl PagedDocument {
         self.backend.generation()
     }
 
-    pub fn selection(&self) -> (Range<u64>, bool) {
-        (self.selection.range(), self.selection.reversed())
+    pub fn set_revision(&mut self, revision: u64) {
+        self.backend.set_generation(revision);
     }
 
-    pub fn source_selection(&self) -> SourceSelection {
-        self.selection
+    pub fn advance_revision(&mut self) -> Result<u64, PagedDocumentError> {
+        let next = self.revision().checked_add(1).ok_or_else(|| {
+            PagedDocumentError::InvalidTransaction("document revision overflow".to_owned())
+        })?;
+        self.backend.set_generation(next);
+        Ok(next)
     }
 
-    pub fn set_selection(&mut self, range: Range<u64>, reversed: bool) {
-        let len = self.backend.document.len();
-        self.selection =
-            SourceSelection::from_range(range.start.min(len)..range.end.min(len), reversed);
+    pub fn encoding(&self) -> &TextEncoding {
+        &self.encoding.encoding
     }
 
-    pub fn set_source_selection(&mut self, mut selection: SourceSelection) {
-        let len = self.backend.document.len();
-        selection.anchor.byte_offset = selection.anchor.byte_offset.min(len);
-        selection.head.byte_offset = selection.head.byte_offset.min(len);
-        self.selection = selection;
+    /// Change the encoding metadata without touching source bytes.  A shadow
+    /// keeps an encoded plan even for UTF-8 so source identity checks remain
+    /// tied to the original on-disk file; direct UTF-8 sources stay no-plan.
+    pub fn set_encoding(&mut self, encoding: TextEncoding) -> bool {
+        if self.encoding.encoding == encoding {
+            return false;
+        }
+        self.encoding.encoding = encoding.clone();
+        if self.encoding.shadow.is_some() {
+            match self.encoding.save_plan.as_mut() {
+                Some(plan) => plan.set_encoding(encoding),
+                None => {
+                    self.encoding.save_plan = Some(EncodedSavePlan::new(
+                        encoding,
+                        self.encoding.original_identity.clone(),
+                    ));
+                }
+            }
+        } else if matches!(&encoding, TextEncoding::Utf8 { bom: false }) {
+            self.encoding.save_plan = None;
+        } else {
+            self.encoding.save_plan = Some(EncodedSavePlan::new(
+                encoding,
+                self.encoding.original_identity.clone(),
+            ));
+        }
+        true
+    }
+
+    pub fn prepared_save_plan(&self) -> Option<EncodedSavePlan> {
+        self.encoding.save_plan.clone()
+    }
+
+    /// Update the source identity captured by the internal encoded plan after
+    /// a successful save or Save As operation.
+    pub fn mark_prepared_saved(&mut self, identity: FileIdentity) {
+        self.encoding.original_identity = identity.clone();
+        if let Some(plan) = self.encoding.save_plan.as_mut() {
+            plan.mark_original_saved(identity);
+        }
     }
 
     pub fn read_viewport(
@@ -219,6 +302,10 @@ impl PagedDocument {
 
     pub fn is_pristine(&self) -> bool {
         self.backend.document.is_pristine()
+    }
+
+    pub fn mark_current_pristine(&mut self) {
+        self.backend.document.mark_current_pristine();
     }
 
     pub fn line_count(&self) -> u64 {
@@ -275,7 +362,30 @@ impl PagedDocument {
     }
 
     pub fn external_change(&self) -> Result<ExternalChange, PagedDocumentError> {
-        self.backend.document.external_change()
+        let base_identity = self.backend.document.base_identity();
+        if self.encoding.original_identity == base_identity {
+            return self.backend.document.external_change();
+        }
+
+        // An immutable snapshot save (including Save As and encoded shadow
+        // saves) advances the persisted disk identity without rebuilding the
+        // PieceTree.  Once those identities diverge, checking the old base
+        // path would report our own replacement as an external change.  Read
+        // the current persisted target instead and classify conservatively:
+        // append detection is only sound while the PieceTree still owns that
+        // same on-disk baseline.
+        let current_source = FileSource::open(&self.encoding.original_identity.path)?;
+        let current = current_source.identity()?;
+        if current == self.encoding.original_identity {
+            return Ok(ExternalChange::Unchanged);
+        }
+        if current.os_file_id != self.encoding.original_identity.os_file_id {
+            return Ok(ExternalChange::Replaced);
+        }
+        if current.len < self.encoding.original_identity.len {
+            return Ok(ExternalChange::Truncated { len: current.len });
+        }
+        Ok(ExternalChange::Modified)
     }
 
     pub fn accept_external_append(
@@ -283,11 +393,12 @@ impl PagedDocument {
         source: FileSource,
         index: LineIndex,
     ) -> Result<(), PagedDocumentError> {
+        let identity = source.identity()?;
         self.backend
             .document
             .accept_external_append(source, index)?;
+        self.mark_prepared_saved(identity);
         self.backend.mark_changed();
-        self.clamp_selection();
         Ok(())
     }
 
@@ -300,26 +411,7 @@ impl PagedDocument {
             .document
             .save_atomic_cancellable(path, cancellation)?;
         self.backend.mark_changed();
-        self.clamp_selection();
         Ok(())
-    }
-
-    pub fn save_encoded_atomic_cancellable(
-        &self,
-        plan: &EncodedSavePlan,
-        path: impl AsRef<Path>,
-        cancellation: &SearchCancellation,
-    ) -> Result<FileIdentity, PagedDocumentError> {
-        plan.save_atomic_cancellable(&self.backend.document, path, cancellation)
-    }
-
-    pub fn save_encoded_atomic_as_cancellable(
-        &self,
-        plan: &EncodedSavePlan,
-        path: impl AsRef<Path>,
-        cancellation: &SearchCancellation,
-    ) -> Result<FileIdentity, PagedDocumentError> {
-        plan.save_atomic_as_cancellable(&self.backend.document, path, cancellation)
     }
 
     pub fn save_range_atomic_cancellable(
@@ -333,14 +425,66 @@ impl PagedDocument {
             .save_range_atomic_cancellable(range, path, cancellation)
     }
 
-    pub fn save_encoded_range_atomic_cancellable(
-        &self,
-        plan: &EncodedSavePlan,
+    /// Save using the plan retained by this shared document.  The older
+    /// plan-parameter methods above remain only while application adapters
+    /// migrate; new callers must use this lifecycle-owned entry point.
+    pub fn save_prepared_atomic_cancellable(
+        &mut self,
+        path: impl AsRef<Path>,
+        cancellation: &SearchCancellation,
+    ) -> Result<FileIdentity, PagedDocumentError> {
+        let path = path.as_ref();
+        let identity = if let Some(plan) = self.encoding.save_plan.as_ref() {
+            plan.save_atomic_cancellable(&self.backend.document, path, cancellation)?
+        } else {
+            self.backend
+                .document
+                .save_atomic_cancellable(path, cancellation)?;
+            FileSource::open(path)?.identity()?
+        };
+        self.mark_prepared_saved(identity.clone());
+        Ok(identity)
+    }
+
+    pub fn save_prepared_atomic_as_cancellable(
+        &mut self,
+        path: impl AsRef<Path>,
+        cancellation: &SearchCancellation,
+    ) -> Result<FileIdentity, PagedDocumentError> {
+        let path = path.as_ref();
+        let identity = if let Some(plan) = self.encoding.save_plan.as_ref() {
+            plan.save_atomic_as_cancellable(&self.backend.document, path, cancellation)?
+        } else {
+            self.backend
+                .document
+                .save_atomic_cancellable(path, cancellation)?;
+            FileSource::open(path)?.identity()?
+        };
+        self.mark_prepared_saved(identity.clone());
+        Ok(identity)
+    }
+
+    pub fn save_prepared_range_atomic_cancellable(
+        &mut self,
         range: Range<u64>,
         path: impl AsRef<Path>,
         cancellation: &SearchCancellation,
     ) -> Result<FileIdentity, PagedDocumentError> {
-        plan.save_range_atomic_as_cancellable(&self.backend.document, range, path, cancellation)
+        let path = path.as_ref();
+        let identity = if let Some(plan) = self.encoding.save_plan.as_ref() {
+            plan.save_range_atomic_as_cancellable(
+                &self.backend.document,
+                range,
+                path,
+                cancellation,
+            )?
+        } else {
+            self.backend
+                .document
+                .save_range_atomic_cancellable(range, path, cancellation)?;
+            FileSource::open(path)?.identity()?
+        };
+        Ok(identity)
     }
 
     pub fn replace_text(
@@ -348,14 +492,9 @@ impl PagedDocument {
         range: Range<u64>,
         replacement: &str,
     ) -> Result<(), PagedDocumentError> {
-        let previous_selection = self.selection;
         self.backend
             .document
             .replace_text(range.clone(), replacement)?;
-        self.record_undo_selection(previous_selection);
-        self.redo_selections.clear();
-        let caret = range.start.saturating_add(replacement.len() as u64);
-        self.selection = SourceSelection::collapsed(caret, SourceAffinity::After);
         self.backend.mark_changed();
         Ok(())
     }
@@ -365,13 +504,9 @@ impl PagedDocument {
         range: Range<u64>,
         reader: impl std::io::Read,
     ) -> Result<(), PagedDocumentError> {
-        let previous_selection = self.selection;
         self.backend
             .document
             .replace_text_reader(range.clone(), reader)?;
-        self.record_undo_selection(previous_selection);
-        self.redo_selections.clear();
-        self.selection = SourceSelection::collapsed(range.start, SourceAffinity::After);
         self.backend.mark_changed();
         Ok(())
     }
@@ -390,18 +525,8 @@ impl PagedDocument {
             .iter()
             .map(|edit| (edit.range.clone(), edit.replacement.clone()))
             .collect::<Vec<_>>();
-        let previous_selection = self.selection;
         self.backend.document.replace_text_batch(&edits)?;
-        if let Some(first) = transaction.edits.iter().min_by_key(|edit| edit.range.start) {
-            let caret = first
-                .range
-                .start
-                .saturating_add(first.replacement.len() as u64);
-            self.selection = SourceSelection::collapsed(caret, SourceAffinity::After);
-        }
         if !edits.is_empty() {
-            self.record_undo_selection(previous_selection);
-            self.redo_selections.clear();
             self.backend.mark_changed();
         }
         Ok(())
@@ -410,12 +535,7 @@ impl PagedDocument {
     pub fn undo(&mut self) -> bool {
         let changed = self.backend.document.undo();
         if changed {
-            self.redo_selections.push(self.selection);
-            if let Some(selection) = self.undo_selections.pop() {
-                self.selection = selection;
-            }
             self.backend.mark_changed();
-            self.clamp_selection();
         }
         changed
     }
@@ -423,27 +543,9 @@ impl PagedDocument {
     pub fn redo(&mut self) -> bool {
         let changed = self.backend.document.redo();
         if changed {
-            self.record_undo_selection(self.selection);
-            if let Some(selection) = self.redo_selections.pop() {
-                self.selection = selection;
-            }
             self.backend.mark_changed();
-            self.clamp_selection();
         }
         changed
-    }
-
-    fn clamp_selection(&mut self) {
-        let len = self.backend.document.len();
-        self.selection.anchor.byte_offset = self.selection.anchor.byte_offset.min(len);
-        self.selection.head.byte_offset = self.selection.head.byte_offset.min(len);
-    }
-
-    fn record_undo_selection(&mut self, selection: SourceSelection) {
-        if self.undo_selections.len() == crate::piece::DEFAULT_HISTORY_LIMIT {
-            self.undo_selections.remove(0);
-        }
-        self.undo_selections.push(selection);
     }
 }
 

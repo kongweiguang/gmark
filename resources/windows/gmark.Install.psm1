@@ -55,11 +55,11 @@ function Register-GmarkFileAssociations {
     $progIdKey = Join-Path $ClassesRoot $script:GmarkProgId
 
     Set-RegistryDefaultValue -Path $progIdKey -Value 'Text Document'
-    Set-RegistryStringValue -Path $progIdKey -Name 'FriendlyTypeName' -Value 'gmark Text Document'
+    Set-RegistryStringValue -Path $progIdKey -Name 'FriendlyTypeName' -Value 'Gmark Text Document'
     Set-RegistryDefaultValue -Path (Join-Path $progIdKey 'DefaultIcon') -Value ('"{0}",0' -f $executable)
     Set-RegistryDefaultValue -Path (Join-Path $progIdKey 'shell\open\command') -Value $openCommand
 
-    Set-RegistryStringValue -Path $applicationKey -Name 'FriendlyAppName' -Value 'gmark'
+    Set-RegistryStringValue -Path $applicationKey -Name 'FriendlyAppName' -Value 'Gmark'
     Set-RegistryDefaultValue -Path (Join-Path $applicationKey 'shell\open\command') -Value $openCommand
     $supportedTypes = Join-Path $applicationKey 'SupportedTypes'
     foreach ($extension in $script:GmarkSupportedExtensions) {
@@ -68,7 +68,7 @@ function Register-GmarkFileAssociations {
             -Name $script:GmarkProgId -Value ''
     }
 
-    Set-RegistryStringValue -Path $capabilitiesKey -Name 'ApplicationName' -Value 'gmark'
+    Set-RegistryStringValue -Path $capabilitiesKey -Name 'ApplicationName' -Value 'Gmark'
     Set-RegistryStringValue -Path $capabilitiesKey -Name 'ApplicationDescription' `
         -Value 'Native Markdown and large text editor built with Rust and GPUI'
     $associations = Join-Path $capabilitiesKey 'FileAssociations'
@@ -83,7 +83,7 @@ function Register-GmarkFileAssociations {
     Set-RegistryStringValue -Path $appPathKey -Name 'Path' -Value $install
 
     $uninstallKey = Join-Path $UninstallRoot 'gmark'
-    Set-RegistryStringValue -Path $uninstallKey -Name 'DisplayName' -Value 'gmark'
+    Set-RegistryStringValue -Path $uninstallKey -Name 'DisplayName' -Value 'Gmark'
     Set-RegistryStringValue -Path $uninstallKey -Name 'DisplayVersion' -Value $Version
     Set-RegistryStringValue -Path $uninstallKey -Name 'Publisher' -Value 'kongweiguang'
     Set-RegistryStringValue -Path $uninstallKey -Name 'InstallLocation' -Value $install
@@ -126,7 +126,7 @@ function Unregister-GmarkFileAssociations {
     $applicationKey = Join-Path $ClassesRoot "Applications\$script:GmarkApplication"
     $applicationCommandKey = Join-Path $applicationKey 'shell\open\command'
 
-    # 已有其他 gmark 安装接管注册时，旧卸载器不得删除共享入口和值。
+    # 已有其他 Gmark 安装接管注册时，旧卸载器不得删除共享入口和值。
     if (Test-Path -LiteralPath $applicationCommandKey) {
         $registeredOpenCommand = Get-ItemPropertyValue -LiteralPath $applicationCommandKey -Name '(default)'
         if ($registeredOpenCommand -ne $expectedOpenCommand) {

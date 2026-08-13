@@ -3,17 +3,23 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gmark_paged_document::SourceAffinity;
+use gmark_document_core::SourceAffinity;
 use gpui::{Modifiers, point, px, size};
 use image::{ImageBuffer, Rgba};
 
-use super::{DocumentKind, SourceDocument, UndoSelectionSnapshot, ViewMode};
+use super::{ClosedTabSnapshot, DocumentKind, SourceDocument, UndoSelectionSnapshot, ViewMode};
 
 fn init_test_app(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         crate::i18n::I18nManager::init(cx);
         crate::theme::ThemeManager::init(cx);
         crate::components::init(cx);
+        if cx
+            .try_global::<crate::app::document_service::DocumentService>()
+            .is_none()
+        {
+            cx.set_global(crate::app::document_service::DocumentService::new());
+        }
     });
 }
 
@@ -65,15 +71,11 @@ async fn new_tab_button_keeps_layout_stable_and_isolates_document_state(
     assert!(title_before.left() > leading_before.right());
     assert!(title_before.right() <= close_before.left());
     let first_tab = visual.debug_bounds("document-tab-0").unwrap();
-    let open_bottom = visual
-        .debug_bounds("document-tab-open-bottom-0")
-        .expect("active tab must visually connect through the strip bottom");
-    assert!(open_bottom.bottom() >= strip_before.bottom());
-    assert_eq!(open_bottom.left(), first_tab.left());
-    assert_eq!(open_bottom.right(), first_tab.right());
+    assert!(visual.debug_bounds("document-tab-open-bottom-0").is_none());
     let trailing_tools = visual.debug_bounds("document-tab-trailing-tools").unwrap();
     assert!(button.left() >= first_tab.right());
-    assert!(button.right() <= trailing_tools.left());
+    assert!(button.left() >= trailing_tools.left());
+    assert!(button.right() <= trailing_tools.right());
 
     editor.update(visual, |editor, cx| {
         assert!(editor.toggle_pin_tab(0, cx));
@@ -215,7 +217,7 @@ async fn switching_tabs_restores_document_history_view_and_selection(
 #[test]
 fn closed_tab_budget_evicts_oldest_complete_snapshots() {
     let snapshot = |text: &str, path: &str| {
-        super::Editor::snapshot_for_opened_document(
+        let document = super::Editor::snapshot_for_opened_document(
             crate::document_io::OpenedMarkdown {
                 text: text.to_owned(),
                 encoding: crate::document_io::DocumentEncoding::Utf8,
@@ -224,7 +226,8 @@ fn closed_tab_budget_evicts_oldest_complete_snapshots() {
                 loading_limits: gmark_document_core::LoadingPolicy::default().effective_limits(),
             },
             PathBuf::from(path),
-        )
+        );
+        ClosedTabSnapshot::from_document(document).expect("closed snapshot conversion")
     };
     let mut closed = vec![
         snapshot("aaaa", "oldest.md"),
@@ -232,7 +235,13 @@ fn closed_tab_budget_evicts_oldest_complete_snapshots() {
         snapshot("cccc", "latest.md"),
     ];
 
-    super::enforce_closed_tab_budget(&mut closed, 20, 8);
+    // Closed-tab history retains only reopen metadata (path/identity and view
+    // state), never the resident source body.  Budget exactly the two newest
+    // metadata records so the oldest is evicted without reintroducing inline
+    // text storage into the history contract.
+    let newest_metadata_budget =
+        closed[1].retained_source_bytes() + closed[2].retained_source_bytes();
+    super::enforce_closed_tab_budget(&mut closed, 20, newest_metadata_budget);
     assert_eq!(closed.len(), 2);
     assert_eq!(
         closed[0].file_path.as_deref(),
@@ -296,8 +305,12 @@ async fn dirty_close_cancel_then_discard_is_loss_explicit(cx: &mut gpui::TestApp
 #[gpui::test]
 async fn clean_close_and_reopen_restores_document(cx: &mut gpui::TestAppContext) {
     init_test_app(cx);
-    let (editor, visual) = cx
-        .add_window_view(|_window, cx| super::Editor::from_markdown(cx, "first".to_owned(), None));
+    let tempdir = tempfile::tempdir().expect("closed tab fixture");
+    let path = tempdir.path().join("closed.md");
+    std::fs::write(&path, "first").expect("write closed tab fixture");
+    let (editor, visual) = cx.add_window_view(|_window, cx| {
+        super::Editor::from_markdown(cx, "first".to_owned(), Some(path.clone()))
+    });
     editor.update(visual, |editor, cx| {
         add_inactive_tab(
             editor,
@@ -308,12 +321,101 @@ async fn clean_close_and_reopen_restores_document(cx: &mut gpui::TestAppContext)
         assert_eq!(editor.source_document.text(), "second");
         assert_eq!(editor.tabs.closed.len(), 1);
     });
+    std::fs::write(&path, "updated").expect("update closed tab fixture");
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
             assert_eq!(editor.tabs.records.len(), 2);
             assert_eq!(editor.tabs.active, 1);
-            assert_eq!(editor.source_document.text(), "first");
+            assert_eq!(editor.source_document.text(), "updated");
+            assert!(editor.tabs.closed.is_empty());
+        });
+    });
+}
+
+#[gpui::test]
+async fn recovery_closed_tab_reopens_from_journal_without_body_cache(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test_app(cx);
+    let recovery_dir = tempfile::tempdir().expect("recovery fixture");
+    let mut journal =
+        crate::recovery::RecoveryJournal::create(recovery_dir.path(), None, "base".to_owned())
+            .expect("create recovery journal");
+    let format = SourceDocument::new("journal body").source_format();
+    let _ = journal
+        .record_formatted(
+            "journal body",
+            format,
+            crate::recovery::RecoverySelection {
+                start: 0,
+                end: 0,
+                reversed: false,
+                anchor_affinity: None,
+                head_affinity: None,
+            },
+            "rendered",
+        )
+        .expect("write recovery journal");
+    drop(journal);
+    let recovered = crate::recovery::load_recovery_documents(recovery_dir.path())
+        .expect("load recovery journal")
+        .into_iter()
+        .next()
+        .expect("recovered document");
+    let document_id = gmark_document_runtime::DocumentId::from_uuid(
+        uuid::Uuid::parse_str(&recovered.document_id).expect("recovery document id"),
+    );
+    let service = cx.update(|cx| {
+        cx.global::<crate::app::document_service::DocumentService>()
+            .clone()
+    });
+    let source = crate::app::document_service::ResidentMarkdownSource::from_recovered(
+        recovered.source.clone(),
+        recovered.file_path.clone(),
+        recovered.source_format.clone(),
+    )
+    .expect("build recovery source");
+    let shared = service
+        .open_recovery(document_id, source)
+        .expect("open shared recovery");
+    let recovered_for_editor = recovered.clone();
+    let (editor, visual) = cx.add_window_view(move |_window, cx| {
+        super::Editor::from_shared_recovery(cx, shared, recovered_for_editor)
+            .expect("construct recovery editor")
+    });
+    editor.update(visual, |editor, cx| {
+        let closed = editor.capture_active_tab(cx);
+        editor.push_closed_tab(closed, cx);
+        assert_eq!(editor.tabs.closed.len(), 1);
+        editor.tabs.closed[0].source = super::ClosedDocumentSource::Recovery {
+            document_id,
+            journal_path: Some(recovered.journal_path.clone()),
+        };
+    });
+    visual.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
+            assert_eq!(editor.source_document.text(), "journal body");
+            assert!(editor.tabs.closed.is_empty());
+        });
+    });
+}
+
+#[gpui::test]
+async fn untitled_closed_tab_without_recovery_fails_closed(cx: &mut gpui::TestAppContext) {
+    init_test_app(cx);
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| super::Editor::from_markdown(cx, "only".to_owned(), None));
+    editor.update(visual, |editor, cx| {
+        let closed = editor.capture_active_tab(cx);
+        editor.push_closed_tab(closed, cx);
+        assert_eq!(editor.tabs.closed.len(), 1);
+    });
+    visual.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
+            assert_eq!(editor.source_document.text(), "");
             assert!(editor.tabs.closed.is_empty());
         });
     });

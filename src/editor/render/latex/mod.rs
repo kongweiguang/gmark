@@ -6,13 +6,18 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
-use anyhow::{Context as _, anyhow};
-use directories::ProjectDirs;
+use anyhow::{Context as _, anyhow, bail};
 use gpui::{Hsla, Rgba};
 
 const DISPLAY_MATH_SCALE: f32 = 1.25;
 const INLINE_MATH_SCALE: f32 = 1.12;
+
+// The fallback is process-owned and randomly isolated. It is used only when
+// the persistent cache root cannot be validated; no shared/persistent temp
+// directory is introduced as a substitute.
+static PROCESS_LATEX_CACHE: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
 
 /// Parsed display-math source preserved from Markdown.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,8 +100,27 @@ fn render_latex_svg_to_cache(
     let key = latex_cache_key(latex, text_color, font_size);
     let path = latex_cache_dir()?.join(format!("{key}.svg"));
     if !path.exists() {
-        fs::write(&path, &svg)
-            .with_context(|| format!("failed to write LaTeX SVG cache '{}'", path.display()))?;
+        if let Err(error) = fs::write(&path, &svg) {
+            // A cache root can become unwritable after resolution (for
+            // example, permissions changing between frames). Retry once in
+            // the process-owned cache before surfacing a rendering error.
+            let fallback = process_latex_cache_dir()?;
+            let fallback_path = fallback.join(format!("{key}.svg"));
+            if fallback_path != path {
+                fs::write(&fallback_path, &svg).with_context(|| {
+                    format!(
+                        "failed to write process LaTeX SVG cache '{}' after persistent cache error ({error})",
+                        fallback_path.display()
+                    )
+                })?;
+                return Ok(LatexSvgRender {
+                    path: fallback_path,
+                    svg,
+                });
+            }
+            return Err(error)
+                .with_context(|| format!("failed to write LaTeX SVG cache '{}'", path.display()));
+        }
     }
     Ok(LatexSvgRender { path, svg })
 }
@@ -138,13 +162,30 @@ fn strip_display_indent(line: &str) -> Option<&str> {
 }
 
 fn latex_cache_dir() -> anyhow::Result<PathBuf> {
-    let root = ProjectDirs::from("com", "kongweiguang", "gmark")
-        .map(|dirs| dirs.cache_dir().to_path_buf())
-        .unwrap_or_else(|| std::env::temp_dir().join("gmark"));
-    let dir = root.join("latex-svg");
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create LaTeX SVG cache '{}'", dir.display()))?;
-    Ok(dir)
+    if let Ok(dirs) = gmark_config::AppDirs::from_system() {
+        let dir = dirs.latex_svg_dir();
+        if dirs
+            .ensure_cache_parent(&dir.join(".gmark-latex-cache-root"))
+            .is_ok()
+        {
+            return Ok(dir);
+        }
+    }
+
+    process_latex_cache_dir()
+}
+
+fn process_latex_cache_dir() -> anyhow::Result<PathBuf> {
+    let cache = PROCESS_LATEX_CACHE.get_or_init(|| {
+        tempfile::Builder::new()
+            .prefix("gmark-latex-")
+            .tempdir()
+            .map_err(|error| error.to_string())
+    });
+    match cache {
+        Ok(directory) => Ok(directory.path().to_path_buf()),
+        Err(error) => bail!("failed to create process LaTeX SVG cache: {error}"),
+    }
 }
 
 fn svg_color(color: Hsla) -> String {

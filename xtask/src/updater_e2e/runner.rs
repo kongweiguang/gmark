@@ -254,8 +254,8 @@ fn invoke_driver(
         options.decision.as_str().to_owned(),
         "--pid".to_owned(),
         pid.to_string(),
-        "--config-root".to_owned(),
-        paths.config_root.display().to_string(),
+        "--ui-check-root".to_owned(),
+        paths.ui_check_root.display().to_string(),
         "--updates-root".to_owned(),
         paths.updates_root.display().to_string(),
         "--current-binary".to_owned(),
@@ -338,8 +338,8 @@ fn runtime_environment(
             options.decision.as_str().into(),
         ),
         (
-            "GMARK_UI_CHECK_CONFIG_ROOT".into(),
-            paths.config_root.clone().into_os_string(),
+            "GMARK_UI_CHECK_ROOT".into(),
+            paths.ui_check_root.clone().into_os_string(),
         ),
         (
             "GMARK_UPDATER_E2E_UPDATE_ROOT".into(),

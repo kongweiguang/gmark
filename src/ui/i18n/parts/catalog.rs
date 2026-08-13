@@ -4,7 +4,7 @@
 
 use std::{path::Path, sync::Arc};
 
-use gmark_config::GmarkConfigDirs;
+use gmark_config::AppDirs;
 #[cfg(test)]
 use gmark_config::read_app_preferences;
 use gpui::{App, Global};
@@ -38,7 +38,7 @@ impl I18nManager {
     /// Installs a language selection and all persisted custom packs into GPUI.
     pub fn init_with_language_id(cx: &mut App, language_id: &str) {
         let mut manager = Self::new_with_language_id(gmark_i18n::DEFAULT_LANGUAGE_ID);
-        if let Ok(dirs) = GmarkConfigDirs::from_system()
+        if let Ok(dirs) = AppDirs::from_system()
             && let Err(error) = manager.load_custom_languages_from_dirs(&dirs)
         {
             eprintln!("failed to load custom languages: {error}");
@@ -85,23 +85,24 @@ impl I18nManager {
 
     /// Imports, persists, activates, and projects a custom JSON or JSONC pack.
     pub fn import_language_config(&mut self, path: impl AsRef<Path>) -> anyhow::Result<String> {
-        let dirs = GmarkConfigDirs::from_system()?;
+        let dirs = AppDirs::from_system()?;
         self.import_language_config_with_dirs(path, &dirs)
     }
 
     pub(in crate::ui::i18n) fn import_language_config_with_dirs(
         &mut self,
         path: impl AsRef<Path>,
-        dirs: &GmarkConfigDirs,
+        dirs: &AppDirs,
     ) -> anyhow::Result<String> {
-        let imported = self
-            .catalog
-            .import_language_file(path, dirs.languages_dir())?;
+        let languages_dir = dirs.languages_dir();
+        dirs.ensure_config_parent(&languages_dir.join(".gmark-languages-root"))?;
+        let imported = self.catalog.import_language_file(path, languages_dir)?;
         self.refresh_strings();
         Ok(imported.id)
     }
 
-    fn load_custom_languages_from_dirs(&mut self, dirs: &GmarkConfigDirs) -> anyhow::Result<()> {
+    fn load_custom_languages_from_dirs(&mut self, dirs: &AppDirs) -> anyhow::Result<()> {
+        dirs.validate_config_root()?;
         let loaded = self.catalog.load_language_directory(dirs.languages_dir())?;
         for rejected in loaded.rejected {
             eprintln!(

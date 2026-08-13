@@ -51,6 +51,9 @@ impl Editor {
         if self.dismiss_new_tab_menu() {
             changed = true;
         }
+        if self.dismiss_split_pane_menu() {
+            changed = true;
+        }
         if changed {
             cx.notify();
         }
@@ -83,7 +86,13 @@ impl Editor {
         if let Some(entity_id) = self.pending_focus.take()
             && let Some(block) = self.focusable_entity_by_id(entity_id)
         {
-            block.read(cx).focus_handle.focus(window);
+            block.update(cx, |block, cx| {
+                block.focus_handle.focus(window);
+                // A pane sibling may already have painted its text input
+                // handler for this frame. Mark the newly focused block dirty so
+                // its next paint registers the handler for this pane instead.
+                cx.notify();
+            });
         }
     }
 

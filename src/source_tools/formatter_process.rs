@@ -36,7 +36,7 @@ pub(crate) fn run_shell_formatter(
         use std::os::unix::process::CommandExt as _;
         let mut command = Command::new("/bin/sh");
         command.args(["-lc", &spec.command]);
-        // 独立进程组让取消/超时能够终止 Shell 及其所有后代，而不波及 GMark。
+        // 独立进程组让取消/超时能够终止 Shell 及其所有后代，而不波及 Gmark。
         command.process_group(0);
         command
     };

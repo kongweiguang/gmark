@@ -94,13 +94,13 @@ impl DocumentHost {
         preserve_split: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(document) = self.document.as_mut() else {
+        let Some(document) = self.document.as_ref() else {
             return;
         };
         let len = document.len();
         let start = range.start.min(len);
         let end = range.end.min(len).max(start);
-        document.set_selection(start..end, false);
+        let _ = document.set_selection(start..end, false);
         let line = document
             .line_for_offset(start)
             .and_then(|line| usize::try_from(line).ok())

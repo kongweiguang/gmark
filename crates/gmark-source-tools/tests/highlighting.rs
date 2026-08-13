@@ -1,8 +1,9 @@
 // @author kongweiguang
 
+#[cfg(feature = "code-highlight-extra")]
+use gmark_source_tools::build_source_syntax_contexts;
 use gmark_source_tools::{
-    HighlightEngine, SourceLanguage, TokenClass, build_source_syntax_contexts,
-    highlight_fenced_code, highlight_source,
+    HighlightEngine, SourceLanguage, TokenClass, highlight_fenced_code, highlight_source,
 };
 
 #[test]
@@ -32,6 +33,68 @@ fn official_grammar_bundle_produces_semantic_rust_spans() {
     assert_eq!(highlighted.language, SourceLanguage::Rust);
     assert_eq!(highlighted.engine, HighlightEngine::TreeSitter);
     assert!(!highlighted.spans.is_empty());
+}
+
+#[cfg(feature = "code-highlight-official")]
+#[test]
+fn markdown_source_highlights_structure_inline_syntax_and_fenced_code() {
+    let source = "# 标题\n\n- [x] **重要** 与 *强调* [链接](https://example.com) `let x = 1`\n\n> 引用\n\n---\n\n```rust\nfn answer() -> u8 { 42 }\n```\n";
+    let highlighted = highlight_source(SourceLanguage::Markdown, source);
+
+    assert_eq!(highlighted.engine, HighlightEngine::TreeSitter);
+    assert!(!highlighted.spans.is_empty());
+
+    for window in highlighted.spans.windows(2) {
+        assert!(
+            window[0].range.start() <= window[1].range.start(),
+            "highlight spans must be ordered: {:?} then {:?}",
+            window[0].range,
+            window[1].range
+        );
+    }
+    for span in &highlighted.spans {
+        assert!(!span.range.is_empty());
+        assert!(span.range.validate_for(source).is_ok());
+        assert!(span.range.slice(source).is_ok());
+    }
+
+    let has = |class, text: &str| {
+        highlighted
+            .spans
+            .iter()
+            .any(|span| span.class == class && span.range.slice(source).ok() == Some(text))
+    };
+    let has_fragment = |class, text: &str| {
+        highlighted.spans.iter().any(|span| {
+            span.class == class
+                && span
+                    .range
+                    .slice(source)
+                    .is_ok_and(|highlighted| highlighted.contains(text))
+        })
+    };
+    assert!(has(TokenClass::Keyword, "标题"));
+    assert!(has_fragment(TokenClass::Keyword, "#"));
+    assert!(has_fragment(TokenClass::Keyword, "-"));
+    assert!(has_fragment(TokenClass::Keyword, "[x]"));
+    assert!(has_fragment(TokenClass::Keyword, ">"));
+    assert!(has_fragment(TokenClass::Keyword, "---"));
+    assert!(has(TokenClass::Keyword, "```"));
+    assert!(has(TokenClass::Property, "rust"));
+    assert!(has(TokenClass::Keyword, "重要"));
+    assert!(has(TokenClass::Keyword, "强调"));
+    assert!(has(TokenClass::Property, "链接"));
+    assert!(has(TokenClass::String, "https://example.com"));
+    assert!(has(TokenClass::String, "let x = 1"));
+    assert!(
+        has(TokenClass::Function, "answer"),
+        "Markdown fenced code spans: {:?}",
+        highlighted
+            .spans
+            .iter()
+            .map(|span| (span.class, span.range.slice(source).ok()))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[cfg(feature = "code-highlight-config")]

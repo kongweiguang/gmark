@@ -63,7 +63,7 @@ fn check_all(root: &Path) -> Result<(), String> {
         }
     }
     if failures.is_empty() {
-        println!("gmark quality gates passed");
+        println!("Gmark quality gates passed");
         Ok(())
     } else {
         Err(failures.join("\n\n"))

@@ -333,6 +333,18 @@ fn key_binding_for(
         ShortcutCommand::ToggleDocumentSidebar => {
             KeyBinding::new(key, ToggleDocumentSidebar, context)
         }
+        ShortcutCommand::SplitRight => KeyBinding::new(key, SplitRight, context),
+        ShortcutCommand::SplitDown => KeyBinding::new(key, SplitDown, context),
+        ShortcutCommand::ClosePane => KeyBinding::new(key, ClosePane, context),
+        ShortcutCommand::FocusPaneLeft => KeyBinding::new(key, FocusPaneLeft, context),
+        ShortcutCommand::FocusPaneRight => KeyBinding::new(key, FocusPaneRight, context),
+        ShortcutCommand::FocusPaneUp => KeyBinding::new(key, FocusPaneUp, context),
+        ShortcutCommand::FocusPaneDown => KeyBinding::new(key, FocusPaneDown, context),
+        ShortcutCommand::MoveTabToPaneLeft => KeyBinding::new(key, MoveTabToPaneLeft, context),
+        ShortcutCommand::MoveTabToPaneRight => KeyBinding::new(key, MoveTabToPaneRight, context),
+        ShortcutCommand::MoveTabToPaneUp => KeyBinding::new(key, MoveTabToPaneUp, context),
+        ShortcutCommand::MoveTabToPaneDown => KeyBinding::new(key, MoveTabToPaneDown, context),
+        ShortcutCommand::BalancePanes => KeyBinding::new(key, BalancePanes, context),
         ShortcutCommand::QuickOpen => KeyBinding::new(key, QuickOpen, context),
         ShortcutCommand::CommandPalette => KeyBinding::new(key, CommandPalette, context),
         ShortcutCommand::GoToLine => KeyBinding::new(key, GoToLine, context),

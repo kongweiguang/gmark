@@ -163,6 +163,123 @@ fn command_metadata_hides_action_names_and_indexes_human_aliases() {
 }
 
 #[test]
+fn pane_actions_have_localized_labels_descriptions_and_icons() {
+    let actions: &[(&dyn gpui::Action, &str, &str, &str, &str, &str)] = &[
+        (
+            &crate::components::SplitRight,
+            "Split Right",
+            "向右拆分",
+            "Split the current pane and place a new pane on its right",
+            "在当前窗格右侧创建一个新窗格",
+            "icon/ui/panel-right.svg",
+        ),
+        (
+            &crate::components::SplitDown,
+            "Split Down",
+            "向下拆分",
+            "Split the current pane and place a new pane below it",
+            "在当前窗格下方创建一个新窗格",
+            "icon/ui/panel-bottom.svg",
+        ),
+        (
+            &crate::components::ClosePane,
+            "Close Pane",
+            "关闭窗格",
+            "Close the active pane and focus an adjacent pane",
+            "关闭当前窗格，并将焦点移到相邻窗格",
+            "icon/ui/close.svg",
+        ),
+        (
+            &crate::components::FocusPaneLeft,
+            "Focus Pane Left",
+            "聚焦左侧窗格",
+            "Focus the adjacent pane on the left",
+            "将焦点移到左侧相邻窗格",
+            "icon/ui/panel-left.svg",
+        ),
+        (
+            &crate::components::FocusPaneRight,
+            "Focus Pane Right",
+            "聚焦右侧窗格",
+            "Focus the adjacent pane on the right",
+            "将焦点移到右侧相邻窗格",
+            "icon/ui/panel-right.svg",
+        ),
+        (
+            &crate::components::FocusPaneUp,
+            "Focus Pane Up",
+            "聚焦上方窗格",
+            "Focus the adjacent pane above",
+            "将焦点移到上方相邻窗格",
+            "icon/ui/arrow-up.svg",
+        ),
+        (
+            &crate::components::FocusPaneDown,
+            "Focus Pane Down",
+            "聚焦下方窗格",
+            "Focus the adjacent pane below",
+            "将焦点移到下方相邻窗格",
+            "icon/ui/panel-bottom.svg",
+        ),
+        (
+            &crate::components::MoveTabToPaneLeft,
+            "Move Tab to Pane Left",
+            "将标签页移至左侧窗格",
+            "Move the active tab to the adjacent pane on the left",
+            "将当前标签页移到左侧相邻窗格",
+            "icon/ui/panel-left.svg",
+        ),
+        (
+            &crate::components::MoveTabToPaneRight,
+            "Move Tab to Pane Right",
+            "将标签页移至右侧窗格",
+            "Move the active tab to the adjacent pane on the right",
+            "将当前标签页移到右侧相邻窗格",
+            "icon/ui/panel-right.svg",
+        ),
+        (
+            &crate::components::MoveTabToPaneUp,
+            "Move Tab to Pane Up",
+            "将标签页移至上方窗格",
+            "Move the active tab to the adjacent pane above",
+            "将当前标签页移到上方相邻窗格",
+            "icon/ui/arrow-up.svg",
+        ),
+        (
+            &crate::components::MoveTabToPaneDown,
+            "Move Tab to Pane Down",
+            "将标签页移至下方窗格",
+            "Move the active tab to the adjacent pane below",
+            "将当前标签页移到下方相邻窗格",
+            "icon/ui/panel-bottom.svg",
+        ),
+        (
+            &crate::components::BalancePanes,
+            "Balance Panes",
+            "平衡窗格",
+            "Distribute the available space evenly across panes",
+            "均衡所有窗格的可用空间",
+            "icon/ui/align-center.svg",
+        ),
+    ];
+    let english = crate::i18n::I18nStrings::en_us();
+    let chinese = crate::i18n::I18nStrings::zh_cn();
+    for &(action, en_label, zh_label, en_description, zh_description, icon) in actions {
+        assert_eq!(localized_action_label(action, &english, "en-US"), en_label);
+        assert_eq!(localized_action_label(action, &chinese, "zh-CN"), zh_label);
+        assert_eq!(
+            localized_action_description(action, en_label, "en-US"),
+            en_description
+        );
+        assert_eq!(
+            localized_action_description(action, zh_label, "zh-CN"),
+            zh_description
+        );
+        assert_eq!(command_icon(action), icon);
+    }
+}
+
+#[test]
 fn command_filter_prefers_prefix_then_contains_then_subsequence() {
     let labels = vec![
         "Toggle Workspace".to_owned(),

@@ -56,11 +56,11 @@ impl MarkdownTableIndex {
         if line_count < 2 {
             return Ok(Vec::new());
         }
+        if cancellation.is_cancelled() {
+            return Err(PagedDocumentError::Cancelled);
+        }
 
-        let file = File::open(source.path()).map_err(|source_error| PagedDocumentError::Io {
-            path: source.path().to_path_buf(),
-            source: source_error,
-        })?;
+        let file = source.try_clone_file()?;
         let mut reader = BufReader::with_capacity(TABLE_SCAN_BUFFER_BYTES, file);
         let mut previous = Vec::new();
         if !read_next_line(&mut reader, &mut previous, source)? {

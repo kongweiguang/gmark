@@ -17,9 +17,14 @@ enum ExistingSaveOutcome {
         source: String,
         source_format: gmark_document::SourceFormatSnapshot,
         revision: gmark_document::Revision,
+        identity: gmark_document_runtime::FileIdentity,
     },
-    Conflict(ExternalConflictPreview),
+    Conflict {
+        revision: gmark_document::Revision,
+        preview: ExternalConflictPreview,
+    },
     Failed {
+        revision: gmark_document::Revision,
         detail: String,
         target_may_have_changed: bool,
     },
@@ -61,24 +66,76 @@ pub(super) fn safe_code_fence_with_info(content: &str, info: Option<&str>) -> St
 }
 
 impl Editor {
-    fn prepare_background_save(
-        &mut self,
+    /// Reserve a Save As target in the process-wide resident registry before
+    /// any bytes are written.  The registry key is based on the normalized
+    /// target path (not the source snapshot identity), so a second open
+    /// document cannot be silently overwritten or merged into this save.
+    pub(super) fn reserve_save_as_target(
+        &self,
+        path: &Path,
         cx: &App,
-    ) -> (
-        gmark_document::DocumentSnapshot,
-        gmark_document::SourceFormatSnapshot,
-    ) {
-        if matches!(
-            self.view_mode,
-            super::ViewMode::Source | super::ViewMode::Split
-        ) {
-            let source = self.document.raw_source_text(cx);
+    ) -> Result<crate::app::document_service::SaveAsTargetReservation, String> {
+        let Some(service) = cx.try_global::<crate::app::document_service::DocumentService>() else {
+            return Err("document registry is not initialized".to_owned());
+        };
+        let handle = self
+            .source_document
+            .handle()
+            .map_err(|error| error.to_string())?;
+        service
+            .reserve_save_as_target(&handle, path)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn switch_to_shared_save_as_target(
+        &mut self,
+        target: crate::app::document_service::SharedSaveAsTarget,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, String> {
+        match target
+            .into_existing_open()
+            .map_err(|error| error.to_string())?
+        {
+            crate::app::document_service::SharedExistingOpen::Resident(open) => {
+                let source_document =
+                    super::document_session::EditorDocumentSession::from_lease(open.lease)
+                        .map_err(|error| error.to_string())?;
+                Ok(self.open_shared_document_tab(
+                    source_document,
+                    open.file_path,
+                    open.encoding,
+                    cx,
+                ))
+            }
+            crate::app::document_service::SharedExistingOpen::Host(open) => {
+                Ok(self.open_shared_document_host_tab(open, cx))
+            }
+        }
+    }
+
+    pub(super) fn prepare_background_save(
+        &mut self,
+        _cx: &App,
+    ) -> Result<
+        Option<(
+            gmark_document_runtime::DocumentSaveSnapshot,
+            gmark_document::SourceFormatSnapshot,
+        )>,
+        String,
+    > {
+        // The shared Controller is the save authority even in rendered mode.
+        // A completed block edit records the exact projection in
+        // `pending_dirty_source`; publish that text before taking an
+        // immutable snapshot.  Format-only changes (for example an explicit
+        // legacy-encoding conversion) deliberately leave this marker empty:
+        // rebuilding a rendered projection would strip Markdown syntax such
+        // as heading prefixes from an otherwise unchanged source document.
+        if let Some(source) = self.pending_dirty_source.clone() {
             self.sync_source_document_from_projection(&source);
         }
-        (
-            self.source_document.snapshot(),
-            self.source_document.source_format(),
-        )
+        self.source_document
+            .try_request_save_context()
+            .map_err(|error| error.to_string())
     }
 
     pub(super) fn serialized_document_text(&self, cx: &App) -> String {
@@ -91,21 +148,6 @@ impl Editor {
         } else {
             self.source_document.text()
         }
-    }
-
-    /// 将可能尚停留在 Source 投影中的最后一次输入提交后，生成实际落盘字节。
-    pub(super) fn serialized_document_bytes(
-        &mut self,
-        cx: &App,
-    ) -> (String, gmark_document::SourceFormatSnapshot, Vec<u8>) {
-        let source = self.serialized_document_text(cx);
-        self.sync_source_document_from_projection(&source);
-        let source_format = self.source_document.source_format();
-        let bytes = self
-            .source_document
-            .serialized_bytes_for_text(&source)
-            .expect("保存源码必须与已提交的 SourceDocument 一致");
-        (source, source_format, bytes)
     }
 
     pub(super) fn save_dialog_defaults(&self) -> (PathBuf, Option<String>) {
@@ -156,7 +198,6 @@ impl Editor {
             self.restart_file_watcher(cx);
         }
         self.document_dirty = false;
-        self.source_document.mark_persisted();
         self.pending_window_edited = false;
         self.pending_window_title_refresh = true;
         self.pending_close_after_save = false;
@@ -213,7 +254,6 @@ impl Editor {
         if path_changed {
             self.restart_file_watcher(cx);
         }
-        self.source_document.mark_persisted_snapshot(&saved_source);
         self.checkpoint_recovery_journal_with_snapshot(saved_source, saved_format);
         self.document_dirty = true;
         self.pending_window_edited = true;

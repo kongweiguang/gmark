@@ -20,7 +20,9 @@ use crate::ui::visual_preferences::VisualPreferencesManager;
 #[cfg(test)]
 use gmark_config::ResolvedVisualPreferences;
 
-const TITLEBAR_MIN_HEIGHT: f32 = 38.0;
+// Keep the custom chrome compact enough to match Zed while preserving a
+// comfortable pointer target for the window drag region.
+const TITLEBAR_MIN_HEIGHT: f32 = 34.0;
 const TITLEBAR_BUTTON_WIDTH: f32 = 46.0;
 const TITLEBAR_ICON_SIZE: f32 = 12.0;
 const TITLEBAR_LEADING_ICON_SLOT: f32 = 24.0;
@@ -52,7 +54,7 @@ pub(crate) fn middle_ellipsis(text: &str, max_chars: usize) -> String {
     compact
 }
 
-/// Selects whether gmark or the platform should render window controls.
+/// Selects whether Gmark or the platform should render window controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TitlebarControlMode {
     NativeTrafficLights,

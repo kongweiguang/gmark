@@ -103,7 +103,7 @@ pub enum SystemTrust {
     NotApplicable,
 }
 
-/// Accepts only the GitHub release namespace used by signed GMark manifests.
+/// Accepts only the GitHub release namespace used by signed Gmark manifests.
 pub fn validate_official_release_url(value: &str, label: &str) -> Result<()> {
     let url = Url::parse(value)
         .map_err(|error| UpdateCoreError::Manifest(format!("invalid {label}: {error}")))?;

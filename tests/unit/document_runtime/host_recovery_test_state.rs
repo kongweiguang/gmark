@@ -31,6 +31,11 @@ impl DocumentHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn is_saving_for_test(&self) -> bool {
+        self.saving
+    }
+
+    #[cfg(test)]
     pub(crate) fn has_structure_view(&self) -> bool {
         self.structured_index.is_some()
     }
@@ -258,11 +263,14 @@ impl DocumentHost {
 
     #[cfg(test)]
     pub(crate) fn document_view_ids_for_test(&self) -> Option<(String, Option<String>)> {
-        let document = self.document.as_ref()?;
+        self.document.as_ref()?;
         Some((
-            document.active_view.as_str().to_owned(),
-            document
-                .view_state
+            self.tab_view_state
+                .active_view
+                .as_ref()?
+                .as_str()
+                .to_owned(),
+            self.tab_view_state
                 .active_view
                 .as_ref()
                 .map(|view| view.as_str().to_owned()),
@@ -291,7 +299,7 @@ impl DocumentHost {
         self.source_drag_anchor = self
             .document
             .as_ref()
-            .map(DocumentSession::source_selection)
+            .map(SharedDocument::source_selection)
             .map(|selection| selection.anchor);
         self.start_source_drag_autoscroll(direction, cx);
     }
@@ -389,7 +397,7 @@ impl DocumentHost {
         let Some(document) = self.document.as_mut() else {
             return;
         };
-        document.set_selection(range.clone(), reversed);
+        let _ = document.set_selection(range.clone(), reversed);
         let start_line = document
             .line_for_offset(range.start)
             .and_then(|line| usize::try_from(line).ok())
@@ -405,9 +413,7 @@ impl DocumentHost {
 
     #[cfg(test)]
     pub(crate) fn source_selection_for_test(&self) -> Option<SourceSelection> {
-        self.document
-            .as_ref()
-            .map(DocumentSession::source_selection)
+        self.document.as_ref().map(SharedDocument::source_selection)
     }
 
     #[cfg(test)]

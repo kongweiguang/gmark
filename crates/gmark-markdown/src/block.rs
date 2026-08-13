@@ -117,7 +117,7 @@ pub struct Block {
     pub children: Vec<Block>,
     /// Original source text for this exact block range.
     pub raw_source: String,
-    /// Standalone GMark resource-card metadata when this block represents one.
+    /// Standalone Gmark resource-card metadata when this block represents one.
     pub resource: Option<ResourceRecord>,
 }
 

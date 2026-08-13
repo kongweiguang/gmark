@@ -1,0 +1,339 @@
+// @author kongweiguang
+
+//! Registry key、并发打开和 Save As 临时占用。
+
+use super::super::*;
+
+impl DocumentRegistryKey {
+    /// 规范化路径作为共享 key；Windows 不区分大小写，因此统一比较形式。
+    pub fn for_file(identity: &FileIdentity) -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            Self::File(PathBuf::from(
+                identity
+                    .canonical_path
+                    .as_os_str()
+                    .to_string_lossy()
+                    .to_lowercase(),
+            ))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Self::File(identity.canonical_path.clone())
+        }
+    }
+}
+
+impl Default for DocumentRegistry {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(RegistryInner {
+                documents: Mutex::new(BTreeMap::new()),
+            }),
+        }
+    }
+}
+
+impl RegistryInner {
+    /// 只在最后租约释放后删除同一 handle 的槽位，避免旧句柄误删新打开的文档。
+    pub(super) fn remove_if_unleased(
+        &self,
+        key: &DocumentRegistryKey,
+        handle: &DocumentHandle,
+    ) -> Result<bool, ControllerError> {
+        if handle.lease_count() != 0 {
+            return Ok(false);
+        }
+        let mut documents = self
+            .documents
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?;
+        let Some(slot) = documents.get(key).cloned() else {
+            return Ok(false);
+        };
+        let state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+        let matches = matches!(&*state, RegistrySlotState::Ready(registered) if Arc::ptr_eq(&registered.0, &handle.0));
+        drop(state);
+        if matches {
+            documents.remove(key);
+            handle.clear_registry_binding();
+        }
+        Ok(matches)
+    }
+}
+
+impl DocumentRegistry {
+    /// 在并发打开时只允许一个线程执行 create，其余线程等待同一槽位结果。
+    pub fn open_or_insert_leased(
+        &self,
+        key: DocumentRegistryKey,
+        create: impl FnOnce() -> Result<DocumentController, ControllerError>,
+    ) -> Result<(DocumentHandle, DocumentLease, RegistryOpen), ControllerError> {
+        let mut create = Some(create);
+        loop {
+            let (slot, owner) = {
+                let mut documents = self
+                    .inner
+                    .documents
+                    .lock()
+                    .map_err(|_| ControllerError::Poisoned)?;
+                match documents.get(&key).cloned() {
+                    Some(slot) => (slot, false),
+                    None => {
+                        let slot = Arc::new(RegistrySlot {
+                            state: Mutex::new(RegistrySlotState::Opening),
+                            ready: Condvar::new(),
+                        });
+                        documents.insert(key.clone(), slot.clone());
+                        (slot, true)
+                    }
+                }
+            };
+
+            if owner {
+                let Some(create) = create.take() else {
+                    return Err(ControllerError::open_failed(
+                        "registry opening owner lost its create closure",
+                    ));
+                };
+                let result = create();
+                return match result {
+                    Ok(controller) => {
+                        let handle = DocumentHandle::new(controller);
+                        let lease = handle.lease();
+                        handle.attach_registry(Arc::downgrade(&self.inner), key.clone())?;
+                        let mut state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+                        *state = RegistrySlotState::Ready(handle.clone());
+                        slot.ready.notify_all();
+                        Ok((handle, lease, RegistryOpen::Inserted))
+                    }
+                    Err(error) => {
+                        let mut state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+                        *state = RegistrySlotState::Failed(error.clone());
+                        slot.ready.notify_all();
+                        Err(error)
+                    }
+                };
+            }
+
+            let mut state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+            match &*state {
+                RegistrySlotState::Ready(handle) => {
+                    let handle = handle.clone();
+                    drop(state);
+                    return Ok((handle.clone(), handle.lease(), RegistryOpen::Existing));
+                }
+                RegistrySlotState::Reserved(_) => {
+                    return Err(ControllerError::KeyReserved(key.clone()));
+                }
+                RegistrySlotState::Failed(_) => {
+                    // A caller arriving after the failed opening may retry.  Waiters that
+                    // observed Opening take the branch below and receive the shared error.
+                    drop(state);
+                    let mut documents = self
+                        .inner
+                        .documents
+                        .lock()
+                        .map_err(|_| ControllerError::Poisoned)?;
+                    if documents
+                        .get(&key)
+                        .is_some_and(|registered| Arc::ptr_eq(registered, &slot))
+                    {
+                        documents.remove(&key);
+                    }
+                    continue;
+                }
+                RegistrySlotState::Opening => {
+                    while matches!(&*state, RegistrySlotState::Opening) {
+                        state = slot
+                            .ready
+                            .wait(state)
+                            .map_err(|_| ControllerError::Poisoned)?;
+                    }
+                    match &*state {
+                        RegistrySlotState::Ready(handle) => {
+                            let handle = handle.clone();
+                            drop(state);
+                            return Ok((handle.clone(), handle.lease(), RegistryOpen::Existing));
+                        }
+                        RegistrySlotState::Failed(error) => return Err(error.clone()),
+                        RegistrySlotState::Reserved(_) => {
+                            return Err(ControllerError::KeyReserved(key.clone()));
+                        }
+                        RegistrySlotState::Opening => unreachable!(),
+                    }
+                }
+            }
+        }
+    }
+
+    /// 保留兼容入口；新调用方应持有显式租约以表达视图生命周期。
+    pub fn open_or_insert(
+        &self,
+        key: DocumentRegistryKey,
+        create: impl FnOnce() -> Result<DocumentController, ControllerError>,
+    ) -> Result<(DocumentHandle, RegistryOpen), ControllerError> {
+        let (handle, lease, open) = self.open_or_insert_leased(key, create)?;
+        drop(lease);
+        Ok((handle, open))
+    }
+
+    /// 为 Save As 目标创建暂时占用，提交前其它打开操作只能看到 KeyReserved。
+    pub fn reserve_save_as(
+        &self,
+        source: &DocumentHandle,
+        target: DocumentRegistryKey,
+    ) -> Result<SaveAsReservation, ControllerError> {
+        let mut documents = self
+            .inner
+            .documents
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?;
+        if let Some(slot) = documents.get(&target).cloned() {
+            let state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+            return match &*state {
+                RegistrySlotState::Reserved(_) => Err(ControllerError::KeyReserved(target)),
+                RegistrySlotState::Opening => Err(ControllerError::KeyReserved(target)),
+                RegistrySlotState::Ready(_) => Err(ControllerError::KeyOccupied(target)),
+                RegistrySlotState::Failed(_) => Err(ControllerError::KeyOccupied(target)),
+            };
+        }
+        documents.insert(
+            target.clone(),
+            Arc::new(RegistrySlot {
+                state: Mutex::new(RegistrySlotState::Reserved(source.clone())),
+                ready: Condvar::new(),
+            }),
+        );
+        Ok(SaveAsReservation {
+            registry: Arc::downgrade(&self.inner),
+            target,
+            source: source.clone(),
+            committed: false,
+        })
+    }
+
+    /// 对已有目标返回一个真实 lease；目标空闲时才创建 reservation。
+    pub fn reserve_save_as_outcome(
+        &self,
+        source: &DocumentHandle,
+        target: DocumentRegistryKey,
+    ) -> Result<SaveAsReserveOutcome, ControllerError> {
+        let slot = self
+            .inner
+            .documents
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?
+            .get(&target)
+            .cloned();
+        if let Some(slot) = slot {
+            let state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+            return match &*state {
+                RegistrySlotState::Ready(handle) => Ok(SaveAsReserveOutcome::Occupied {
+                    handle: handle.clone(),
+                    lease: handle.lease(),
+                }),
+                RegistrySlotState::Reserved(_) | RegistrySlotState::Opening => {
+                    Err(ControllerError::KeyReserved(target))
+                }
+                RegistrySlotState::Failed(_) => Err(ControllerError::KeyOccupied(target)),
+            };
+        }
+        self.reserve_save_as(source, target)
+            .map(SaveAsReserveOutcome::Reserved)
+    }
+
+    /// 兼容旧生命周期调用，仅在句柄没有租约时移除匹配 key。
+    pub fn release_if_unused(
+        &self,
+        key: &DocumentRegistryKey,
+        handle: &DocumentHandle,
+    ) -> Result<bool, ControllerError> {
+        self.inner.remove_if_unleased(key, handle)
+    }
+}
+
+impl SaveAsReservation {
+    /// 释放尚未提交的目标占用，令失败的 Save As 可安全重试。
+    pub fn release(mut self) {
+        if self.committed {
+            return;
+        }
+        if let Some(registry) = self.registry.upgrade()
+            && let Ok(mut documents) = registry.documents.lock()
+            && let Some(slot) = documents.get(&self.target).cloned()
+            && let Ok(state) = slot.state.lock()
+        {
+            let matches = matches!(&*state, RegistrySlotState::Reserved(handle) if Arc::ptr_eq(&handle.0, &self.source.0));
+            drop(state);
+            if matches {
+                documents.remove(&self.target);
+            }
+        }
+        self.committed = true;
+    }
+
+    /// 将目标槽位转为 source handle，并删除旧路径 key，保证 Save As 后只有新 key 可打开。
+    pub fn commit(mut self) -> Result<DocumentHandle, ControllerError> {
+        let registry = self
+            .registry
+            .upgrade()
+            .ok_or(ControllerError::SaveAsReservationMissing)?;
+        let mut documents = registry
+            .documents
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?;
+        let slot = documents
+            .get(&self.target)
+            .cloned()
+            .ok_or(ControllerError::SaveAsReservationMissing)?;
+        let mut state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+        let valid = matches!(&*state, RegistrySlotState::Reserved(handle) if Arc::ptr_eq(&handle.0, &self.source.0));
+        if !valid {
+            return Err(ControllerError::SaveAsReservationMissing);
+        }
+        let source = self.source.clone();
+        *state = RegistrySlotState::Ready(source.clone());
+        drop(state);
+        slot.ready.notify_all();
+        let stale_keys = documents
+            .iter()
+            .filter_map(|(key, slot)| {
+                if key == &self.target {
+                    return None;
+                }
+                let state = slot.state.lock().ok()?;
+                matches!(&*state, RegistrySlotState::Ready(handle) if Arc::ptr_eq(&handle.0, &source.0))
+                    .then(|| key.clone())
+            })
+            .collect::<Vec<_>>();
+        for key in stale_keys {
+            documents.remove(&key);
+        }
+        source.attach_registry(Arc::downgrade(&registry), self.target.clone())?;
+        self.committed = true;
+        Ok(source)
+    }
+}
+
+impl Drop for SaveAsReservation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // Drop cannot report an error; release is deliberately best-effort and
+        // the explicit method remains available to callers that need ownership.
+        if let Some(registry) = self.registry.upgrade()
+            && let Ok(mut documents) = registry.documents.lock()
+            && let Some(slot) = documents.get(&self.target).cloned()
+            && let Ok(state) = slot.state.lock()
+        {
+            let matches = matches!(&*state, RegistrySlotState::Reserved(handle) if Arc::ptr_eq(&handle.0, &self.source.0));
+            drop(state);
+            if matches {
+                documents.remove(&self.target);
+            }
+        }
+        self.committed = true;
+    }
+}

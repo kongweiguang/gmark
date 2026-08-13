@@ -8,6 +8,7 @@ use super::*;
 pub(crate) struct UpdateService {
     pub(super) state: UpdateState,
     pub(super) updates_root: PathBuf,
+    pub(super) available: bool,
     pub(super) worker: Option<Task<()>>,
     pub(super) download_control: Option<DownloadControl>,
     pub(super) progress_started_at: Option<(Instant, u64)>,
@@ -35,6 +36,34 @@ impl UpdateService {
         Self {
             state,
             updates_root,
+            available: true,
+            worker: None,
+            download_control: None,
+            progress_started_at: None,
+            pending_install: None,
+            pending_install_v2: None,
+            retry_install: None,
+            retry_redownload: false,
+            install_monitor: None,
+            prepare_claimed: false,
+            auto_check_enabled,
+            last_progress_refresh: Instant::now() - Duration::from_secs(1),
+        }
+    }
+
+    pub(super) fn new_unavailable(message: String, auto_check_enabled: bool) -> Self {
+        Self {
+            state: UpdateState::Failed {
+                release: None,
+                message,
+                retryable: false,
+            },
+            // No path is retained when the configured root could not be
+            // resolved.  Keeping an empty sentinel avoids manufacturing a
+            // second transaction root while all filesystem operations remain
+            // guarded by `available`.
+            updates_root: PathBuf::new(),
+            available: false,
             worker: None,
             download_control: None,
             progress_started_at: None,
@@ -50,6 +79,9 @@ impl UpdateService {
     }
 
     pub(super) fn automatic_check_due(&self) -> bool {
+        if !self.available {
+            return false;
+        }
         let path = self.updates_root.join("last-successful-check");
         let Ok(value) = std::fs::read_to_string(path) else {
             return true;
@@ -65,6 +97,9 @@ impl UpdateService {
     }
 
     pub(super) fn refresh_apply_result(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.available {
+            return false;
+        }
         if let Some(state) = restored_startup_state(&self.updates_root)
             && !matches!(
                 self.state,
@@ -80,6 +115,9 @@ impl UpdateService {
     }
 
     pub(super) fn check(&mut self, origin: CheckOrigin, cx: &mut Context<Self>) {
+        if !self.available {
+            return;
+        }
         if !self.state.accepts(UpdateCommand::Check) {
             return;
         }
@@ -266,6 +304,9 @@ impl UpdateService {
     }
 
     pub(super) fn dismiss(&mut self, cx: &mut Context<Self>) {
+        if !self.available {
+            return;
+        }
         if !self.state.accepts(UpdateCommand::Dismiss) {
             return;
         }
@@ -496,6 +537,9 @@ impl UpdateService {
         release: &UpdateRelease,
         artifact_path: &std::path::Path,
     ) -> Result<PreparedInstall, String> {
+        if !self.available {
+            return Err("update cache root is unavailable".to_owned());
+        }
         install::prepare_apply_plan(&self.updates_root, release, artifact_path)
     }
 

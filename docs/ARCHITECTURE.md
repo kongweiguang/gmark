@@ -27,6 +27,32 @@ application shell, GPUI, accessibility, window/platform integration, editor,
 and app-level adapters. Domain crates expose reusable functionality to that
 shell; they do not import the shell back.
 
+## User data directory boundary
+
+`gmark_config::AppDirs` is the only production authority for platform user
+data paths. It resolves paths without creating them; the subsystem performing
+the first write validates and creates its owned root on demand.
+
+| Root | Owned data |
+| --- | --- |
+| `config_root` | `config.toml`, `languages/` |
+| `state_root` | `.history`, workspace sessions, installation ID, recovery, crash reports |
+| `cache_root` | updater transactions, large-document indexes, LaTeX and Mermaid SVGs |
+| `runtime_root` | `instance.lock` |
+
+Production resolves one `~/.gmark` application root from `BaseDirs::home_dir()`
+and derives `config/`, `state/`, `cache/`, and `runtime/` below it. UI checks
+use one absolute `GMARK_UI_CHECK_ROOT` sandbox and derive the same four child
+roots. Business modules must not resolve platform directories directly.
+
+The cutover is intentionally one-way: current code does not inspect, migrate,
+delete, or fall back to the old state/cache locations. The only cross-root
+read is the launch-scoped updater V2 acknowledgement described in the update
+protocol; it authorizes one explicit transaction plan and capability, not an
+old-root scan. Render caches may fall back to a process-owned temporary cache,
+large-document indexes fall back to uncached computation, and updater
+transactions never use a temporary fallback root.
+
 ## Markdown HTML boundary
 
 `crates/gmark-markdown/src/html.rs` owns the HTML safety boundary. It parses

@@ -125,7 +125,9 @@ impl Editor {
                     div()
                         .id("document-sidebar-header")
                         .debug_selector(|| "document-sidebar-header".to_owned())
-                        .h(px(44.0))
+                        // Match the 36px global and pane-local tab rows so the
+                        // three workbench columns share one visual baseline.
+                        .h(px(36.0))
                         .px(px(12.0))
                         .flex()
                         .items_center()

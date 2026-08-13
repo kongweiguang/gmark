@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 use url::Url;
 
-/// Link-title marker used by GMark resource cards.
+/// Link-title marker used by Gmark resource cards.
 pub const RESOURCE_MARKER: &str = "gmark:resource";
 
 /// The visual resource-card kind after automatic classification.
@@ -137,7 +137,7 @@ impl ResourceRecord {
         record
     }
 
-    /// Returns canonical GMark Markdown for a newly created or edited card.
+    /// Returns canonical Gmark Markdown for a newly created or edited card.
     pub fn to_markdown(&self) -> String {
         let marker = match self.explicit_kind {
             Some(kind) => format!("{RESOURCE_MARKER};type={}", kind.as_str()),
@@ -175,7 +175,7 @@ impl ResourceRecord {
     }
 }
 
-/// Parsed components of one standalone GMark resource link.
+/// Parsed components of one standalone Gmark resource link.
 ///
 /// This stays separate from [`ResourceRecord`] so syntax validation does not
 /// need to choose a filesystem base directory.

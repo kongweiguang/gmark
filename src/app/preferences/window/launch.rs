@@ -10,7 +10,7 @@ fn try_open_preferences_window_with_state(
     title: String,
 ) -> anyhow::Result<WindowHandle<PreferencesWindow>> {
     let bounds = Bounds::centered(None, size(px(860.0), px(620.0)), cx);
-    let window_title = SharedString::from(format!("gmark - {title}"));
+    let window_title = SharedString::from(format!("Gmark - {title}"));
     let handle = cx
         .open_window(
             gmark_window_options(window_title, bounds),

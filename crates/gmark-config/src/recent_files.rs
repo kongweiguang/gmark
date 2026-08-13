@@ -6,18 +6,19 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::{ConfigDirs, persistence::atomic_write};
+use crate::{AppDirs, persistence::atomic_write_private};
 
 /// 历史文件中最多保留的路径数。
 pub const RECENT_FILES_LIMIT: usize = 20;
 
 /// 从系统配置目录读取最近文件。
 pub fn read_recent_files() -> Result<Vec<PathBuf>> {
-    read_recent_files_with_dirs(&ConfigDirs::from_system()?)
+    read_recent_files_with_dirs(&AppDirs::from_system()?)
 }
 
 /// 从显式配置目录读取最近文件。
-pub fn read_recent_files_with_dirs(dirs: &ConfigDirs) -> Result<Vec<PathBuf>> {
+pub fn read_recent_files_with_dirs(dirs: &AppDirs) -> Result<Vec<PathBuf>> {
+    dirs.validate_state_root()?;
     let path = dirs.history_file();
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -31,11 +32,11 @@ pub fn read_recent_files_with_dirs(dirs: &ConfigDirs) -> Result<Vec<PathBuf>> {
 
 /// 将路径提升到系统配置目录中的历史首位。
 pub fn record_recent_file(path: &Path) -> Result<Vec<PathBuf>> {
-    record_recent_file_with_dirs(path, &ConfigDirs::from_system()?)
+    record_recent_file_with_dirs(path, &AppDirs::from_system()?)
 }
 
 /// 将路径提升到显式配置目录中的历史首位。
-pub fn record_recent_file_with_dirs(path: &Path, dirs: &ConfigDirs) -> Result<Vec<PathBuf>> {
+pub fn record_recent_file_with_dirs(path: &Path, dirs: &AppDirs) -> Result<Vec<PathBuf>> {
     if path.to_string_lossy().trim().is_empty() {
         bail!("recent file path cannot be empty");
     }
@@ -53,11 +54,11 @@ pub fn record_recent_file_with_dirs(path: &Path, dirs: &ConfigDirs) -> Result<Ve
 
 /// 从系统配置目录中的历史移除路径。
 pub fn remove_recent_file(path: &Path) -> Result<Vec<PathBuf>> {
-    remove_recent_file_with_dirs(path, &ConfigDirs::from_system()?)
+    remove_recent_file_with_dirs(path, &AppDirs::from_system()?)
 }
 
 /// 从显式配置目录中的历史移除路径。
-pub fn remove_recent_file_with_dirs(path: &Path, dirs: &ConfigDirs) -> Result<Vec<PathBuf>> {
+pub fn remove_recent_file_with_dirs(path: &Path, dirs: &AppDirs) -> Result<Vec<PathBuf>> {
     let mut paths = read_recent_files_with_dirs(dirs)?;
     paths.retain(|existing| !same_recent_path(existing, path));
     write_recent_files_with_dirs(&paths, dirs)?;
@@ -90,7 +91,7 @@ pub fn normalize_recent_files(paths: impl IntoIterator<Item = PathBuf>) -> Vec<P
     normalized
 }
 
-fn write_recent_files_with_dirs(paths: &[PathBuf], dirs: &ConfigDirs) -> Result<()> {
+fn write_recent_files_with_dirs(paths: &[PathBuf], dirs: &AppDirs) -> Result<()> {
     let history_file = dirs.history_file();
     let normalized = normalize_recent_files(paths.iter().cloned());
     if normalized.is_empty() {
@@ -104,16 +105,13 @@ fn write_recent_files_with_dirs(paths: &[PathBuf], dirs: &ConfigDirs) -> Result<
         }
         return Ok(());
     }
-    if let Some(parent) = history_file.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create '{}'", parent.display()))?;
-    }
+    dirs.ensure_state_parent(&history_file)?;
     let mut content = String::new();
     for path in normalized {
         content.push_str(&path.to_string_lossy());
         content.push('\n');
     }
-    atomic_write(&history_file, content.as_bytes())
+    atomic_write_private(&history_file, content.as_bytes())
 }
 
 fn is_recordable_recent_file_path(path: &Path) -> bool {

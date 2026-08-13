@@ -246,7 +246,7 @@ pub fn run(args: AgentArgs) -> i32 {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some(SharedString::from("GMark Update")),
+                title: Some(SharedString::from("Gmark Update")),
                 ..TitlebarOptions::default()
             }),
             window_background: WindowBackgroundAppearance::Opaque,
@@ -379,7 +379,7 @@ impl Render for UpdateAgentWindow {
                 div()
                     .text_size(px(20.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("GMark update"),
+                    .child("Gmark update"),
             )
             .child(
                 div()

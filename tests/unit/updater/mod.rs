@@ -10,6 +10,17 @@ fn automatic_check_is_due_without_a_success_marker() {
 }
 
 #[test]
+fn updater_root_creation_does_not_follow_a_file_component() {
+    let root = tempfile::tempdir().unwrap();
+    let blocked = root.path().join("blocked");
+    std::fs::write(&blocked, b"not a directory").unwrap();
+    let requested = blocked.join("updates");
+
+    assert!(ensure_real_directory_tree(&requested).is_err());
+    assert!(!requested.exists());
+}
+
+#[test]
 fn recent_success_marker_suppresses_the_daily_check() {
     let root = tempfile::tempdir().unwrap();
     let now = SystemTime::now()

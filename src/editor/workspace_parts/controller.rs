@@ -5,6 +5,10 @@ use crate::ui::motion::MotionTokens;
 use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
+    pub(in crate::editor) fn workspace_search_active(&self) -> bool {
+        self.workspace.active_tab == WorkspaceTab::Search
+    }
+
     pub(in crate::editor) fn workspace_docked_open_preference(&self) -> bool {
         self.workspace.docked_open_preference.unwrap_or(true)
     }
@@ -236,20 +240,6 @@ impl Editor {
             .clone()
     }
 
-    pub(super) fn ensure_workspace_header_focus_handles(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> [FocusHandle; 3] {
-        if self.workspace.header_focus_handles.is_none() {
-            self.workspace.header_focus_handles = Some(std::array::from_fn(|_| cx.focus_handle()));
-        }
-        self.workspace
-            .header_focus_handles
-            .as_ref()
-            .expect("workspace header focus handles must be initialized")
-            .clone()
-    }
-
     pub(super) fn on_workspace_resize_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -383,14 +373,58 @@ impl Editor {
             self.close_menu_bar(cx);
             self.dismiss_contextual_overlays(cx);
             self.workspace.is_open = true;
+            // The Files/Search controls live in the status bar. Reopening the
+            // workspace from its sidebar button always returns to the file
+            // tree, while preserving any search query and result cache.
+            self.workspace.active_tab = WorkspaceTab::Files;
+            self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;
             self.sync_workspace_models(cx);
-            self.workspace.keyboard_zone = WorkspaceKeyboardZone::Tabs;
             self.ensure_workspace_focus_handle(cx).focus(window);
         }
         if !compact {
             self.workspace.docked_open_preference = Some(self.workspace.is_open);
             self.schedule_workspace_session_save(cx);
         }
+        cx.notify();
+    }
+
+    /// Toggle the workspace search view from the status bar. Search is a
+    /// view inside the existing left drawer, so cancelling it keeps the drawer
+    /// open and only switches back to the Files tree.
+    pub(crate) fn toggle_workspace_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let was_closed = !self.workspace.is_open;
+        let compact = workspace_uses_overlay(f32::from(window.viewport_size().width));
+        if was_closed {
+            self.close_menu_bar(cx);
+            self.dismiss_contextual_overlays(cx);
+            self.workspace.is_open = true;
+            self.sync_workspace_models(cx);
+            if !compact {
+                self.workspace.docked_open_preference = Some(true);
+                self.schedule_workspace_session_save(cx);
+            }
+        }
+
+        if !was_closed && self.workspace.active_tab == WorkspaceTab::Search {
+            self.workspace.active_tab = WorkspaceTab::Files;
+            self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;
+            self.ensure_workspace_focus_handle(cx).focus(window);
+        } else {
+            self.workspace.active_tab = WorkspaceTab::Search;
+            self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;
+            self.sync_workspace_models(cx);
+            let input = self.ensure_workspace_search_input(cx);
+            self.schedule_workspace_search(cx);
+            input.read(cx).focus_handle.focus(window);
+        }
+        cx.notify();
+    }
+
+    /// Leave workspace search without closing the workspace drawer.
+    pub(super) fn cancel_workspace_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.workspace.active_tab = WorkspaceTab::Files;
+        self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;
+        self.ensure_workspace_focus_handle(cx).focus(window);
         cx.notify();
     }
 

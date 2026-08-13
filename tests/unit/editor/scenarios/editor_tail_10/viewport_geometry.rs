@@ -21,10 +21,7 @@ fn centered_column_ratio_stays_full_before_shrink_start() {
         1.0
     );
     assert_eq!(
-        crate::ui::centered_column_ratio(
-            theme.dimensions.centered_shrink_start,
-            &theme.dimensions,
-        ),
+        crate::ui::centered_column_ratio(theme.dimensions.centered_shrink_start, &theme.dimensions,),
         1.0
     );
 }
@@ -52,15 +49,34 @@ fn centered_column_width_caps_wide_viewports_and_yields_to_compact_space() {
 }
 
 #[test]
-fn reading_padding_uses_fixed_top_typewriter_target_and_half_viewport_bottom() {
+/// 锁定四种模式的 Source 基准，防止后续为阅读视图单独加回额外顶距。
+fn document_modes_share_source_top_padding_and_keep_typewriter_target() {
     let theme = Theme::default_theme();
-    assert_eq!(super::render::editor_top_padding(false, 700.0), 48.0);
-    assert_eq!(super::render::editor_top_padding(true, 700.0), 315.0);
-    assert_eq!(super::render::editor_top_padding(true, 80.0), 48.0);
+    let top_padding = |view_mode, typewriter_mode, viewport_height| {
+        super::render::editor_top_padding(
+            view_mode,
+            typewriter_mode,
+            viewport_height,
+            &theme.dimensions,
+        )
+    };
+    for view_mode in [
+        ViewMode::Source,
+        ViewMode::Rendered,
+        ViewMode::Preview,
+        ViewMode::Split,
+    ] {
+        assert_eq!(
+            top_padding(view_mode, false, 700.0),
+            theme.dimensions.editor_padding
+        );
+    }
+    assert_eq!(top_padding(ViewMode::Rendered, true, 700.0), 315.0);
     assert_eq!(
-        super::render::source_editor_top_padding(&theme.dimensions),
+        top_padding(ViewMode::Preview, true, 700.0),
         theme.dimensions.editor_padding
     );
+    assert_eq!(top_padding(ViewMode::Rendered, true, 80.0), 48.0);
     assert_eq!(
         super::render::editor_bottom_padding(700.0, &theme.dimensions),
         theme.dimensions.editor_padding

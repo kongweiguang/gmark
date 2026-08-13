@@ -2,10 +2,10 @@
 
 #[test]
 fn resident_editor_selection_is_owned_by_the_unified_document_session() {
-    let mut document = super::document_session::EditorDocumentSession::new(
+    let document = super::document_session::EditorDocumentSession::new(
         gmark_document::SourceDocument::new("alpha\nbeta"),
     );
-    let selection = gmark_paged_document::SourceSelection::from_range(2..8, true);
+    let selection = gmark_document_core::SourceSelection::from_range(2..8, true);
 
     document.sync_source_selection(selection);
 
@@ -77,7 +77,9 @@ async fn csv_preview_and_live_tables_expose_draggable_vertical_scrollbars(cx: &m
             .is_some(),
         "CSV Live editing must keep the vertical scrollbar"
     );
-    editor.update(visual, |editor, cx| editor.set_view_mode(ViewMode::Source, cx));
+    editor.update(visual, |editor, cx| {
+        editor.set_view_mode(ViewMode::Source, cx)
+    });
     visual.run_until_parked();
     assert_eq!(
         document_host.read_with(visual, |view, _cx| view.document_view_ids_for_test()),

@@ -42,91 +42,8 @@ impl Editor {
             visual_preferences,
         );
         let content_material = c.workbench.material(SurfaceKind::Solid, visual_preferences);
-        let transparent = c.workbench.control_surface.opacity(0.0);
         let resize_focus_handle = resizable.then(|| self.ensure_workspace_resize_focus_handle(cx));
-        let header_focus_handles = self.ensure_workspace_header_focus_handles(cx);
         let resize_active = self.workspace.resize_session.is_some();
-
-        let tab = |label: String, icon: &'static str, tab: WorkspaceTab, active: bool| {
-            let tab_editor = editor.clone();
-            let tab_key_editor = editor.clone();
-            let hover_editor = editor.clone();
-            let tab_id = match tab {
-                WorkspaceTab::Files => "workspace-tab-files",
-                WorkspaceTab::Outline => "workspace-tab-outline",
-                WorkspaceTab::Search => "workspace-tab-search",
-            };
-            let tab_focus_handle = header_focus_handles[match tab {
-                WorkspaceTab::Files => 0,
-                WorkspaceTab::Outline => 1,
-                WorkspaceTab::Search => 2,
-            }]
-            .clone();
-            let pointer_focus_handle = tab_focus_handle.clone();
-            div()
-                .id(tab_id)
-                .debug_selector(move || tab_id.to_owned())
-                .relative()
-                .size(px(32.0))
-                .tab_index(0)
-                .track_focus(&tab_focus_handle)
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(5.0))
-                .border(px(1.0))
-                .border_color(if active {
-                    c.workbench.border_subtle
-                } else {
-                    transparent
-                })
-                .bg(if active {
-                    c.workbench.control_hover
-                } else {
-                    transparent
-                })
-                .hover(|this| this.bg(c.workbench.control_hover))
-                .focus(|this| this.border_color(c.workbench.focus_ring))
-                .cursor_pointer()
-                .text_color(if active {
-                    c.workbench.text_primary
-                } else {
-                    c.workbench.text_secondary
-                })
-                // GPUI 的 SVG 不稳定继承父级 currentColor，chrome 图标必须显式着色。
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(16.0))
-                        .text_color(if active {
-                            c.workbench.text_primary
-                        } else {
-                            c.workbench.text_secondary
-                        })
-                        .debug_selector(move || format!("{tab_id}-icon")),
-                )
-                .children(
-                    (self.workspace.tooltip_visible == Some(tab_id))
-                        .then(|| render_workspace_tooltip(label, 36.0, theme)),
-                )
-                .on_hover(move |hovered, _window, cx| {
-                    let _ = hover_editor.update(cx, |editor, cx| {
-                        editor.set_workspace_tooltip_hover(tab_id, *hovered, cx);
-                    });
-                })
-                .on_click(move |_event, window, cx| {
-                    pointer_focus_handle.focus(window);
-                    let _ = tab_editor.update(cx, |editor, cx| {
-                        editor.set_workspace_tab(tab, cx);
-                    });
-                })
-                .on_key_down(move |event, _window, cx| {
-                    let _ = tab_key_editor.update(cx, |editor, cx| {
-                        editor.on_workspace_tab_key_down(tab, event, cx);
-                    });
-                })
-        };
 
         let body = match self.workspace.active_tab {
             WorkspaceTab::Files => self.render_workspace_files_tree(theme, strings, &editor),
@@ -148,31 +65,9 @@ impl Editor {
                 .bg(panel_material.background)
                 .border_r(px(d.dialog_border_width))
                 .border_color(panel_material.border)
-                .child(
-                    div()
-                        .id("workspace-panel-header")
-                        .debug_selector(|| "workspace-panel-header".to_owned())
-                        .h(px(44.0))
-                        .px(px(10.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .border_b(px(1.0))
-                        .border_color(panel_material.border)
-                        .child(tab(
-                            strings.workspace_tab_files.clone(),
-                            FILES_TAB_ICON,
-                            WorkspaceTab::Files,
-                            self.workspace.active_tab == WorkspaceTab::Files,
-                        ))
-                        .child(tab(
-                            strings.workspace_tab_search.clone(),
-                            SEARCH_TAB_ICON,
-                            WorkspaceTab::Search,
-                            self.workspace.active_tab == WorkspaceTab::Search,
-                        ))
-                        .child(div().flex_1().min_w(px(0.0))),
-                )
+                // Files and Search no longer live in a permanent top chrome;
+                // the panel body starts at the top edge and the status bar owns
+                // the two navigation actions, matching Zed's workbench.
                 .child(
                     div()
                         .id("workspace-panel-scroll")

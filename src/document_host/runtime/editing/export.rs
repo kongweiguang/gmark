@@ -54,13 +54,6 @@ impl DocumentHost {
             format!("{file_name}.selection.txt")
         };
         let prompt = cx.prompt_for_new_path(&default_dir, Some(&suggested_name));
-        let encoded_plan: Option<EncodedSavePlan> = (!force_utf8)
-            .then(|| {
-                self.prepared_source
-                    .as_ref()
-                    .and_then(PreparedUtf8Source::save_plan)
-            })
-            .flatten();
         if let Some(cancellation) = self.selection_export_cancellation.take() {
             cancellation.cancel();
         }
@@ -100,21 +93,24 @@ impl DocumentHost {
             };
             let result = cx
                 .background_spawn(async move {
-                    if let Some(plan) = encoded_plan {
-                        let encoding = plan.encoding_name();
-                        document
-                            .save_encoded_range_atomic_cancellable(
-                                &plan,
-                                range,
-                                path,
-                                &cancellation,
-                            )
-                            .map(|_| encoding)
-                    } else {
-                        document
-                            .save_range_atomic_cancellable(range, path, &cancellation)
-                            .map(|_| "UTF-8".to_owned())
+                    if cancellation.is_cancelled() {
+                        return Err(PagedDocumentError::Cancelled);
                     }
+                    let bytes = document.read_range(range.clone())?;
+                    if cancellation.is_cancelled() {
+                        return Err(PagedDocumentError::Cancelled);
+                    }
+                    gmark_document::atomic_write(&path, &bytes).map_err(|error| {
+                        PagedDocumentError::Io {
+                            path: path.clone(),
+                            source: std::io::Error::other(error.to_string()),
+                        }
+                    })?;
+                    Ok::<_, PagedDocumentError>(if force_utf8 {
+                        "UTF-8".to_owned()
+                    } else {
+                        "UTF-8".to_owned()
+                    })
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
@@ -237,37 +233,45 @@ impl DocumentHost {
                 .unwrap_or(start);
             (start, end)
         });
-        let Some(mut next_document) = self.document.clone() else {
+        let Some(document) = self.document.clone() else {
             return;
         };
-        match next_document.replace_text(range.clone(), &replacement) {
-            Ok(()) => {
+        match document.replace_range(range.clone(), replacement.as_str()) {
+            Ok(_) => {
                 // 先在持久根的廉价快照上验证范围与 UTF-8 边界，再追加恢复记录；
                 // 失败输入不得留下一个正文从未接受过的 journal 事务。
-                if let Some(journal) = self.coordinator.recovery_journal.as_mut()
-                    && let Err(error) = record_recovery_transaction(
-                        journal,
-                        &next_document,
-                        next_document.revision().saturating_sub(1),
-                        range.clone(),
-                        replacement.as_str(),
-                        recovery_selection,
-                        DocumentViewId::source(),
-                    )
-                {
-                    self.coordinator.recovery_error = Some(error.to_string().into());
+                if let Some(journal) = self.coordinator.recovery_journal.as_mut() {
+                    let result = document.with_session(|session| {
+                        record_recovery_transaction(
+                            journal,
+                            session,
+                            document.revision().saturating_sub(1),
+                            range.clone(),
+                            replacement.as_str(),
+                            recovery_selection,
+                            DocumentViewId::source(),
+                        )
+                    });
+                    match result {
+                        Ok(Err(error)) => {
+                            self.coordinator.recovery_error = Some(error.to_string().into())
+                        }
+                        Err(error) => {
+                            self.coordinator.recovery_error = Some(error.to_string().into())
+                        }
+                        Ok(Ok(())) => {}
+                    }
                 }
                 let reanchored = text
                     .contains(['\r', '\n'])
                     .then(|| {
                         let caret_offset = range.start.saturating_add(caret_in_text as u64);
-                        let line =
-                            next_document.line_for_offset(caret_offset.min(next_document.len()))?;
-                        let line_range = next_document.line_range(line)?;
+                        let line = document.line_for_offset(caret_offset.min(document.len()))?;
+                        let line_range = document.line_range(line)?;
                         let requested = caret_offset
                             .saturating_sub(line_range.start)
                             .saturating_sub(MAX_RENDERED_LINE_BYTES / 2);
-                        let windowed = read_bounded_line_window(&next_document, line, requested)
+                        let windowed = read_bounded_line_window(&document, line, requested)
                             .ok()
                             .flatten()?;
                         let caret = usize::try_from(
@@ -314,7 +318,7 @@ impl DocumentHost {
                     active.range = range.start..range.start + replacement.len() as u64;
                 }
                 if let Some(selection) = recovery_selection {
-                    next_document.set_source_selection(selection);
+                    let _ = document.set_source_selection(selection);
                 }
                 if let Some((start_line, end_line)) = edit_lines {
                     self.fold_projection.apply_source_edit(
@@ -324,9 +328,6 @@ impl DocumentHost {
                         &replacement,
                     );
                 }
-                let dirty = !next_document.is_pristine();
-                next_document.dirty = dirty;
-                self.install_document_session(next_document);
                 self.tail_enabled = false;
                 self.coordinator.external_status = Some(
                     cx.global::<I18nManager>()

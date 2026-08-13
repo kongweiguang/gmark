@@ -3,6 +3,40 @@
 //! DocumentHost test-only interaction helpers.
 
 use super::*;
+use gmark_document_core::{DocumentRevision, DocumentSnapshot, SnapshotError};
+use std::sync::Arc;
+
+/// Immutable selection view passed to the runtime's encoded snapshot writer.
+/// It keeps selection export lock-free without reviving a host-owned save plan.
+struct SelectionSnapshot {
+    source: Arc<dyn DocumentSnapshot>,
+    range: Range<u64>,
+}
+
+impl DocumentSnapshot for SelectionSnapshot {
+    fn revision(&self) -> DocumentRevision {
+        self.source.revision()
+    }
+
+    fn len(&self) -> u64 {
+        self.range.end.saturating_sub(self.range.start)
+    }
+
+    fn read_range(&self, requested: Range<u64>) -> Result<Vec<u8>, SnapshotError> {
+        let len = self.len();
+        if requested.start > requested.end || requested.end > len {
+            return Err(SnapshotError::InvalidRange {
+                start: requested.start,
+                end: requested.end,
+                len,
+            });
+        }
+        self.source.read_range(
+            self.range.start.saturating_add(requested.start)
+                ..self.range.start.saturating_add(requested.end),
+        )
+    }
+}
 
 /// Test-only snapshot so assertions can observe viewport cache accounting
 /// without making the production metrics state part of the host API.
@@ -44,7 +78,7 @@ impl DocumentHost {
             .keys()
             .all(|line| self.source_row_epochs.get(line) == Some(&screen.cache_epoch));
         let revision_matches =
-            screen.document_revision == self.document.as_ref().map_or(0, DocumentSession::revision);
+            screen.document_revision == self.document.as_ref().map_or(0, SharedDocument::revision);
         (
             screen.document_revision,
             screen.generation,
@@ -101,22 +135,34 @@ impl DocumentHost {
             .document
             .as_ref()
             .ok_or_else(|| PagedDocumentError::InvalidTransaction("missing document".into()))?;
-        if !force_utf8
-            && let Some(plan) = self
-                .prepared_source
-                .as_ref()
-                .and_then(PreparedUtf8Source::save_plan)
-        {
+        // Keep the test on the same immutable snapshot boundary as production
+        // saves.  The encoded range operation remains owned by the runtime
+        // backend; the host no longer exposes a plan or range-save wrapper.
+        let snapshot = document
+            .with_session(gmark_document_runtime::DocumentSession::save_snapshot)
+            .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))?;
+        let selection = SelectionSnapshot {
+            source: snapshot.snapshot.clone(),
+            range,
+        };
+        if !force_utf8 && let Some(plan) = snapshot.paged_save_plan.as_ref() {
             let encoding = plan.encoding_name();
-            document.save_encoded_range_atomic_cancellable(
-                &plan,
-                range,
+            plan.save_snapshot_atomic_as_cancellable(
+                &selection,
                 path,
                 &SearchCancellation::default(),
             )?;
             return Ok(encoding);
         }
-        document.save_range_atomic_cancellable(range, path, &SearchCancellation::default())?;
+        let bytes = selection
+            .read_range(0..selection.len())
+            .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))?;
+        gmark_document::atomic_write(path, &bytes).map_err(|error| {
+            PagedDocumentError::Persist {
+                path: path.to_path_buf(),
+                source: std::io::Error::other(error.to_string()),
+            }
+        })?;
         Ok("UTF-8".to_owned())
     }
 

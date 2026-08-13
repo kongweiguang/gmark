@@ -122,3 +122,79 @@ fn legacy_save_refuses_characters_the_original_encoding_cannot_represent() {
     );
     assert_eq!(fs::read(&path).unwrap(), b"cafe\xe9");
 }
+
+#[test]
+fn paged_document_owns_prepared_shadow_and_updates_plan_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("owned-utf16.txt");
+    let mut encoded = vec![0xff, 0xfe];
+    for unit in "alpha\n世界".encode_utf16() {
+        encoded.extend_from_slice(&unit.to_le_bytes());
+    }
+    fs::write(&source_path, encoded).unwrap();
+
+    let prepared = prepare_utf8_source(
+        FileSource::open(&source_path).unwrap(),
+        TextEncoding::Utf16Le,
+    )
+    .unwrap();
+    let source = prepared.source().clone();
+    let index = LineIndex::build(&source).unwrap();
+    let mut document = PagedDocument::from_prepared(prepared, index).unwrap();
+    assert_eq!(document.encoding(), &TextEncoding::Utf16Le);
+    assert_eq!(
+        document
+            .prepared_save_plan()
+            .unwrap()
+            .original_identity()
+            .path
+            .file_name(),
+        source_path.file_name()
+    );
+    document.replace_text(0..5, "bravo").unwrap();
+
+    let copy_path = dir.path().join("owned-copy.txt");
+    document
+        .save_prepared_atomic_as_cancellable(&copy_path, &SearchCancellation::default())
+        .unwrap();
+    assert!(fs::read(&copy_path).unwrap().starts_with(&[0xff, 0xfe]));
+    assert_eq!(
+        document
+            .prepared_save_plan()
+            .unwrap()
+            .original_identity()
+            .path
+            .file_name(),
+        copy_path.file_name()
+    );
+
+    // Cloning and dropping the original document must not remove the shadow
+    // while another shared Controller/session still holds it.
+    let retained = document.clone();
+    drop(document);
+    assert_eq!(retained.read_range(0..9).unwrap(), b"bravo\n\xe4\xb8\x96");
+    let retained_source = retained.prepared_source().unwrap();
+    assert_eq!(
+        retained_source.read_range(0, 9).unwrap(),
+        b"alpha\n\xe4\xb8\x96"
+    );
+}
+
+#[test]
+fn direct_utf8_documents_start_without_a_plan_and_encoding_changes_are_metadata_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("utf8.txt");
+    fs::write(&path, b"alpha").unwrap();
+    let source = FileSource::open(&path).unwrap();
+    let index = LineIndex::build(&source).unwrap();
+    let mut document = PagedDocument::new(PieceDocument::open(source, index).unwrap());
+    assert!(document.prepared_save_plan().is_none());
+    let before = document.read_range(0..5).unwrap();
+
+    assert!(document.set_encoding(TextEncoding::Utf16Le));
+    assert!(document.prepared_save_plan().is_some());
+    assert_eq!(document.read_range(0..5).unwrap(), before);
+    assert!(document.set_encoding(TextEncoding::Utf8 { bom: false }));
+    assert!(document.prepared_save_plan().is_none());
+    assert_eq!(document.read_range(0..5).unwrap(), before);
+}

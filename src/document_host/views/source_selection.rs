@@ -20,11 +20,10 @@ impl DocumentHost {
         selection: SourceSelection,
         cx: &mut Context<Self>,
     ) {
-        let Some(document) = self.document.as_mut() else {
+        let Some(document) = self.document.as_ref() else {
             return;
         };
-        document.set_source_selection(selection);
-        document.view_state.source.selection = document.source_selection();
+        let _ = document.set_source_selection(selection);
         let normalized = document.source_selection().range();
         let start_line = document
             .line_for_offset(normalized.start)

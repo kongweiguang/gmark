@@ -10,7 +10,6 @@ use crate::components::{
     install_keybindings, normalize_shortcut_config, normalize_shortcut_keys,
     resolved_shortcut_keys, shortcut_conflict_for, shortcut_definitions, switch::Switch,
 };
-use crate::config::GmarkConfigDirs;
 use crate::i18n::{I18nManager, LanguageCatalogEntry, language_id_for_locale_preferences};
 use crate::theme::{Theme, ThemeAppearance, ThemeManager, ThemePalette};
 use crate::window_chrome::{custom_titlebar_height, gmark_window_options, render_custom_titlebar};

@@ -98,6 +98,18 @@ actions!(
         ToggleViewMode,
         ToggleWorkspace,
         ToggleDocumentSidebar,
+        SplitRight,
+        SplitDown,
+        ClosePane,
+        FocusPaneLeft,
+        FocusPaneRight,
+        FocusPaneUp,
+        FocusPaneDown,
+        MoveTabToPaneLeft,
+        MoveTabToPaneRight,
+        MoveTabToPaneUp,
+        MoveTabToPaneDown,
+        BalancePanes,
         QuickOpen,
         CommandPalette,
         GoToLine,
@@ -159,7 +171,7 @@ pub struct SelectLanguage {
 #[action(namespace = gmark)]
 #[serde(deny_unknown_fields)]
 pub struct OpenRecentFile {
-    /// Path stored in gmark's recent-file history.
+    /// Path stored in Gmark's recent-file history.
     pub path: String,
 }
 
@@ -246,6 +258,18 @@ pub(crate) enum ShortcutCommand {
     ToggleViewMode,
     ToggleWorkspace,
     ToggleDocumentSidebar,
+    SplitRight,
+    SplitDown,
+    ClosePane,
+    FocusPaneLeft,
+    FocusPaneRight,
+    FocusPaneUp,
+    FocusPaneDown,
+    MoveTabToPaneLeft,
+    MoveTabToPaneRight,
+    MoveTabToPaneUp,
+    MoveTabToPaneDown,
+    BalancePanes,
     QuickOpen,
     CommandPalette,
     GoToLine,

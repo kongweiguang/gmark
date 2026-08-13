@@ -309,6 +309,11 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.tabs.dismiss_new_or_split_menu() {
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         if self.handle_update_panel_key(event, window, cx)
             || self.handle_workspace_link_completion_key(event, cx)
             || self.handle_diagram_overlay_key(event, window, cx)

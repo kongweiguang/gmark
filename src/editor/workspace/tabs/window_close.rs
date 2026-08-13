@@ -10,10 +10,14 @@ impl Editor {
             .enumerate()
             .find_map(|(index, record)| {
                 (index != self.tabs.active
-                    && record
-                        .snapshot
-                        .as_ref()
-                        .is_some_and(|snapshot| snapshot.document_dirty))
+                    && record.snapshot.as_ref().is_some_and(|snapshot| {
+                        let dirty = if snapshot.document_host.is_some() {
+                            snapshot.document_dirty
+                        } else {
+                            snapshot.source_document.is_dirty()
+                        };
+                        dirty && snapshot.source_document.lease_count() <= 1
+                    }))
                 .then_some(index)
             })
     }
@@ -22,7 +26,9 @@ impl Editor {
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.is_document_dirty() {
+        if self.is_document_dirty()
+            && (self.document_host.is_some() || self.source_document.lease_count() <= 1)
+        {
             return true;
         }
         self.dirty_tab_index_except_active()

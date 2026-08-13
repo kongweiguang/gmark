@@ -109,14 +109,14 @@ pub(super) fn expand_ancestors(
 }
 
 pub(super) fn bounded_node_content(
-    document: Option<&DocumentSession>,
+    document: Option<&SharedDocument>,
     node: &JsonGraphNode,
 ) -> SharedString {
     bounded_graph_content(document, node.source.range.clone(), &node.label)
 }
 
 pub(super) fn bounded_graph_content(
-    document: Option<&DocumentSession>,
+    document: Option<&SharedDocument>,
     range: Range<u64>,
     fallback: &str,
 ) -> SharedString {

@@ -25,7 +25,7 @@ impl DocumentHost {
         cx: &mut Context<Self>,
     ) -> SourceSurfaceMetrics {
         self.maybe_schedule_fold_refresh(cx);
-        window.set_window_edited(document_dirty_state(&self.document, &self.pending_dirty));
+        window.set_window_edited(document_dirty_state(&self.document));
         let line_count = self.line_count();
         let folding_enabled = crate::preferences::EditorSettings::code_folding(cx);
         if self.folding_enabled != folding_enabled {

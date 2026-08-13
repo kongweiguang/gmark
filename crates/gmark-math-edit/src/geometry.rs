@@ -9,7 +9,7 @@
 //! is intentionally source/slot oriented rather than tied to any UI toolkit.
 //!
 //! Geometry algorithms adapted from `packetThrower/zorite@86a52230cbc6d1cd75f4d0a635643a5c9402b021`,
-//! GPL-3.0-or-later.  This module is a clean-room adaptation to GMark's
+//! GPL-3.0-or-later.  This module is a clean-room adaptation to Gmark's
 //! `MathNode`/`MathSlot` model and does not depend on the referenced source.
 
 use super::{MathAst, MathCursor2D, MathDocument, MathNode, MathPath, MathSelection, MathSlot};

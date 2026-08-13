@@ -12,7 +12,19 @@ impl Global for UpdateCoordinator {}
 
 impl UpdateCoordinator {
     pub(crate) fn init(auto_check: bool, cx: &mut App) {
-        let updates_root = update_cache_root();
+        let updates_root = match update_cache_root() {
+            Ok(root) => root,
+            Err(error) => {
+                let service = cx.new(|_| {
+                    UpdateService::new_unavailable(
+                        format!("software updater is unavailable: {error:#}"),
+                        auto_check,
+                    )
+                });
+                cx.set_global(Self(service));
+                return;
+            }
+        };
         let service = cx.new(|_| UpdateService::new(updates_root, auto_check));
         cx.set_global(Self(service.clone()));
 

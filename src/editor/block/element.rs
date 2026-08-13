@@ -79,6 +79,12 @@ fn build_text_runs(
         boundaries.push(diagnostic.range.start.min(display_text.len()));
         boundaries.push(diagnostic.range.end.min(display_text.len()));
     }
+    // IME composition and a sibling split view can briefly expose a stale
+    // marked/style range while the shared UTF-8 text has already advanced.
+    // GPUI requires every TextRun boundary to be a valid byte boundary; passing
+    // a UTF-16-style or out-of-range offset reaches DirectWrite as an invalid
+    // string slice and panics the whole window.
+    boundaries.retain(|offset| display_text.is_char_boundary(*offset));
     boundaries.sort_unstable();
     boundaries.dedup();
 
@@ -215,6 +221,7 @@ fn build_code_text_runs(
         boundaries.push(marked_range.start);
         boundaries.push(marked_range.end);
     }
+    boundaries.retain(|offset| display_text.is_char_boundary(*offset));
     boundaries.sort_unstable();
     boundaries.dedup();
 

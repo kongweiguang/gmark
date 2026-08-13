@@ -56,10 +56,14 @@ pub(super) fn session_plan(
 }
 
 /// Probe 后只在这里安装正文后端；格式 Controller 之后只能持有统一 session。
-pub(super) fn build_document_session(
+/// Build the single runtime session from the IO-prepared source.  The
+/// `PreparedUtf8Source` is moved into the Paged backend so its shadow and
+/// encoded save plan have exactly the same lifetime as the shared Controller
+/// body.  No host-side copy of either value is retained.
+pub(super) fn build_document_session_from_prepared(
     probe: &OpenProbe,
     original_source: &FileSource,
-    utf8_source: FileSource,
+    prepared: PreparedUtf8Source,
     index: LineIndex,
     retain_resident_session: bool,
 ) -> Result<DocumentSession, PagedDocumentError> {
@@ -70,8 +74,9 @@ pub(super) fn build_document_session(
         return Err(PagedDocumentError::SourceChanged);
     }
     let file_identity = gmark_document_runtime::FileIdentity::from(&source_identity);
+    let prepared_source = prepared.source().clone();
     let store = if probe.strategy == OpenStrategy::Resident {
-        let bytes = utf8_source.read_range(0, utf8_source.identity()?.len)?;
+        let bytes = prepared_source.read_range(0, prepared_source.identity()?.len)?;
         if original_source.identity()? != probe.identity {
             return Err(PagedDocumentError::SourceChanged);
         }
@@ -84,14 +89,44 @@ pub(super) fn build_document_session(
             ),
         ))
     } else {
-        let document = PieceDocument::open(utf8_source, index)?;
-        gmark_document_runtime::DocumentStore::Paged(Box::new(PagedDocumentAdapter::new(document)))
+        let document = PagedDocumentAdapter::from_prepared(prepared, index)?;
+        gmark_document_runtime::DocumentStore::Paged(Box::new(document))
     };
     if original_source.identity()? != probe.identity {
         return Err(PagedDocumentError::SourceChanged);
     }
     DocumentSession::new(profile, store, plan, file_identity)
         .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))
+}
+
+/// Test-only compatibility fixture for callers that already own a source and
+/// index.  Production indexing/reload always pass the prepared source above;
+/// this adapter prepares a fresh source solely to keep older unit fixtures
+/// concise and never installs a second runtime body.
+#[cfg(test)]
+pub(super) fn build_document_session(
+    probe: &OpenProbe,
+    original_source: &FileSource,
+    _utf8_source: FileSource,
+    index: LineIndex,
+    retain_resident_session: bool,
+) -> Result<DocumentSession, PagedDocumentError> {
+    if original_source.identity()? != probe.identity {
+        return Err(PagedDocumentError::SourceChanged);
+    }
+    let prepared = prepare_utf8_source(original_source.clone(), probe.encoding.clone())?;
+    let index = if matches!(probe.encoding, TextEncoding::Utf8 { .. }) {
+        index
+    } else {
+        LineIndex::build(prepared.source())?
+    };
+    build_document_session_from_prepared(
+        probe,
+        original_source,
+        prepared,
+        index,
+        retain_resident_session,
+    )
 }
 
 pub(super) fn build_paged_session(
@@ -147,16 +182,12 @@ type StructureInput = (FileSource, LineIndex, Option<Arc<[u8]>>);
 
 pub(super) fn structure_input_for_session(
     document: &DocumentSession,
-    prepared_source: &PreparedUtf8Source,
+    prepared_source: &FileSource,
     prepared_index: &LineIndex,
     cancellation: &SearchCancellation,
 ) -> Result<StructureInput, PagedDocumentError> {
     if document.store.kind() == gmark_document_core::DocumentBackendKind::Paged {
-        return Ok((
-            prepared_source.source().clone(),
-            prepared_index.clone(),
-            None,
-        ));
+        return Ok((prepared_source.clone(), prepared_index.clone(), None));
     }
     if cancellation.is_cancelled() {
         return Err(PagedDocumentError::Cancelled);
@@ -166,11 +197,7 @@ pub(super) fn structure_input_for_session(
         .read_range(0..document.len())
         .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))?
         .into();
-    Ok((
-        prepared_source.source().clone(),
-        prepared_index.clone(),
-        Some(bytes),
-    ))
+    Ok((prepared_source.clone(), prepared_index.clone(), Some(bytes)))
 }
 
 pub(super) fn modifier_horizontal_wheel_delta(
@@ -249,9 +276,7 @@ impl DocumentRecoveryJournal {
                     .record_formatted(
                         &source_document.text(),
                         source_document.source_format(),
-                        record
-                            .selection
-                            .unwrap_or_else(|| document.source_selection()),
+                        record.selection.unwrap_or_default(),
                         record.view_id.as_str(),
                     )
                     .map(|_| ())

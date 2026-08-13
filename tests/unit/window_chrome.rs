@@ -5,9 +5,9 @@ use gpui::Tiling;
 
 #[test]
 fn titlebar_options_enable_transparency_on_mac_and_windows() {
-    assert!(titlebar_options_for_target_os("windows", "gmark".into()).appears_transparent);
-    assert!(titlebar_options_for_target_os("macos", "gmark".into()).appears_transparent);
-    assert!(!titlebar_options_for_target_os("linux", "gmark".into()).appears_transparent);
+    assert!(titlebar_options_for_target_os("windows", "Gmark".into()).appears_transparent);
+    assert!(titlebar_options_for_target_os("macos", "Gmark".into()).appears_transparent);
+    assert!(!titlebar_options_for_target_os("linux", "Gmark".into()).appears_transparent);
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn custom_titlebar_height_respects_platform_and_decorations() {
     let dimensions = Theme::default_theme().dimensions;
     assert_eq!(
         custom_titlebar_height_for_target_os("windows", Decorations::Server, &dimensions),
-        38.0
+        34.0
     );
     assert_eq!(
         custom_titlebar_height_for_target_os("windows", Decorations::Server, &dimensions),

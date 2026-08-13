@@ -230,12 +230,7 @@ impl DocumentHost {
                     cx.notify();
                     return;
                 }
-                let mut next = current;
-                let transaction = Transaction::new(
-                    gmark_document_core::DocumentRevision(revision),
-                    vec![SourceEdit::new(range.clone(), candidate.clone())],
-                );
-                if let Err(error) = next.apply_source_transaction(&transaction) {
+                if let Err(error) = current.replace_range(range.clone(), candidate.clone()) {
                     view.save_after_format = None;
                     view.error = Some(localized_document_error(&error, cx));
                     cx.notify();
@@ -243,7 +238,7 @@ impl DocumentHost {
                 }
                 // 格式化后的后台重解析会按结构路径恢复仍匹配的折叠项；这里保留旧状态
                 // 作为匹配基线，不按“普通编辑命中即展开”的规则提前清空。
-                view.install_source_replacement(next, range, &candidate, false, false, true, cx);
+                view.install_source_replacement(range, &candidate, false, false, true, cx);
                 if let Some(window) = view.save_after_format.take() {
                     view.start_save(view.path.clone(), false, window, cx);
                 }

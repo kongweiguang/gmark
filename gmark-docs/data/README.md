@@ -2,7 +2,7 @@
 
 # JSON、JSONL、CSV、TSV 与 SVG
 
-GMark 不只渲染 Markdown。这个目录也放了几份很小的结构化数据和矢量图测试文件，方便观察 JSON Graph、记录导航、表格编辑和 SVG 预览。
+Gmark 不只渲染 Markdown。这个目录也放了几份很小的结构化数据和矢量图测试文件，方便观察 JSON Graph、记录导航、表格编辑和 SVG 预览。
 
 ## 文件清单
 

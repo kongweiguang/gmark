@@ -193,7 +193,7 @@ impl DocumentTaskStamp {
     pub(super) fn capture(view: &DocumentHost, generation: u64) -> Self {
         Self {
             document_epoch: view.document_epoch,
-            document_revision: view.document.as_ref().map(DocumentSession::revision),
+            document_revision: view.document.as_ref().map(SharedDocument::revision),
             generation,
         }
     }
@@ -204,13 +204,13 @@ impl DocumentTaskStamp {
 
     pub(super) fn accepts_strict(self, view: &DocumentHost, generation: u64) -> bool {
         self.accepts_identity(view, generation)
-            && self.document_revision == view.document.as_ref().map(DocumentSession::revision)
+            && self.document_revision == view.document.as_ref().map(SharedDocument::revision)
     }
 }
 
 #[derive(Clone)]
 pub(super) enum SourceViewportReader {
-    Indexed(Box<DocumentSession>),
+    Indexed(Box<SharedDocument>),
     Provisional {
         source: FileSource,
         estimated_lines: u64,

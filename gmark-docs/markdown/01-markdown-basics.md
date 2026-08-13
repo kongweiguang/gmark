@@ -6,7 +6,7 @@
 
 ## 段落、引用和分隔线
 
-连续文字组成段落。段落之间保留空行可以让结构更清楚，也便于 GMark 的 Live 视图逐块编辑。
+连续文字组成段落。段落之间保留空行可以让结构更清楚，也便于 Gmark 的 Live 视图逐块编辑。
 
 ---
 
@@ -54,10 +54,10 @@
 
 也可以把引用链接集中放在文档末尾：[项目仓库][gmark-repo] 和 [本地图片][gmark-icon]。
 
-![GMark 图标](../../assets/icon/gmark-icon-128.png "本地图片")
+![Gmark 图标](../../assets/icon/gmark-icon-128.png "本地图片")
 
-[gmark-repo]: https://github.com/kongweiguang/gmark "GMark repository"
-[gmark-icon]: ../../assets/icon/gmark-icon-64.png "GMark icon"
+[gmark-repo]: https://github.com/kongweiguang/gmark "Gmark repository"
+[gmark-icon]: ../../assets/icon/gmark-icon-64.png "Gmark icon"
 
 ## Callout 与嵌套块
 
@@ -80,12 +80,12 @@
 脚注定义支持行内格式：
 
 [^markdown]: Markdown 是一种轻量标记语言，强调源文件可读性。
-[^gmark]: GMark 保留源文件，同时提供 Live、Source、Split 和 Preview 视图。
+[^gmark]: Gmark 保留源文件，同时提供 Live、Source、Split 和 Preview 视图。
 [^gfm]: GFM 扩展包含表格、任务列表、删除线和 Callout 等常见能力。
 
 ## 安全 HTML
 
-GMark 会对 HTML 做安全清理，只保留受支持的语义标签和安全属性。
+Gmark 会对 HTML 做安全清理，只保留受支持的语义标签和安全属性。
 
 <details open>
 <summary>展开查看 HTML 内容</summary>

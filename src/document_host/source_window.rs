@@ -187,8 +187,42 @@ pub(super) fn decode_provisional_bytes(
     }
 }
 
+pub(super) trait BoundedSourceDocument {
+    fn line_range(&self, line: u64) -> Option<Range<u64>>;
+    fn read_range(
+        &self,
+        range: Range<u64>,
+    ) -> Result<Vec<u8>, gmark_paged_document::PagedDocumentError>;
+}
+
+impl BoundedSourceDocument for SharedDocument {
+    fn line_range(&self, line: u64) -> Option<Range<u64>> {
+        SharedDocument::line_range(self, line)
+    }
+
+    fn read_range(
+        &self,
+        range: Range<u64>,
+    ) -> Result<Vec<u8>, gmark_paged_document::PagedDocumentError> {
+        SharedDocument::read_range(self, range)
+    }
+}
+
+impl BoundedSourceDocument for DocumentSession {
+    fn line_range(&self, line: u64) -> Option<Range<u64>> {
+        DocumentSession::line_range(self, line)
+    }
+
+    fn read_range(
+        &self,
+        range: Range<u64>,
+    ) -> Result<Vec<u8>, gmark_paged_document::PagedDocumentError> {
+        DocumentSession::read_range(self, range)
+    }
+}
+
 pub(super) fn read_bounded_line_window(
-    document: &DocumentSession,
+    document: &impl BoundedSourceDocument,
     line: u64,
     requested_start: u64,
 ) -> Result<Option<BoundedLineWindow>, gmark_paged_document::PagedDocumentError> {

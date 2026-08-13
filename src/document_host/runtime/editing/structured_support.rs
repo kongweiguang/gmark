@@ -43,11 +43,7 @@ impl DocumentHost {
                     if cancellation.is_cancelled() {
                         return Err(PagedDocumentError::Cancelled);
                     }
-                    let bytes: Arc<[u8]> = document
-                        .snapshot()
-                        .read_range(0..document.len())
-                        .map_err(|error| PagedDocumentError::InvalidTransaction(error.to_string()))?
-                        .into();
+                    let bytes: Arc<[u8]> = document.read_range(0..document.len())?.into();
                     let index = DelimitedIndex::build_snapshot_cancellable(
                         bytes,
                         DelimitedIndexOptions {

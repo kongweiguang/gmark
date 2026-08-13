@@ -6,11 +6,14 @@
 use std::path::PathBuf;
 
 #[cfg(test)]
-use super::GmarkConfigDirs;
+use super::AppDirs;
 
 pub(crate) use gmark_config::{
-    WorkspaceSession, WorkspaceSessionSelection, WorkspaceSessionTab, WorkspaceSessionWindow,
-    WorkspaceSessionWindowState, read_workspace_sessions, remove_paths_from_workspace_sessions,
+    WorkspaceSession, WorkspaceSessionDocumentRef, WorkspaceSessionPane, WorkspaceSessionPaneId,
+    WorkspaceSessionPaneNode, WorkspaceSessionPaneTree, WorkspaceSessionPaneViewState,
+    WorkspaceSessionSelection, WorkspaceSessionSplitAxis, WorkspaceSessionTab,
+    WorkspaceSessionWindow, WorkspaceSessionWindowState, read_workspace_sessions,
+    remove_paths_from_workspace_sessions,
 };
 
 #[cfg(not(test))]
@@ -20,7 +23,7 @@ pub(crate) use gmark_config::{remove_workspace_session, upsert_workspace_session
 use gmark_config::WorkspaceSessionStore;
 
 #[cfg(test)]
-fn store(dirs: &GmarkConfigDirs) -> WorkspaceSessionStore {
+fn store(dirs: &AppDirs) -> WorkspaceSessionStore {
     WorkspaceSessionStore::new(dirs.clone())
 }
 
@@ -28,32 +31,27 @@ fn store(dirs: &GmarkConfigDirs) -> WorkspaceSessionStore {
 // isolated while delegating all decoding, migration, limits, and atomic writes
 // to `gmark-config`.
 #[cfg(test)]
-fn read_workspace_sessions_with_dirs(
-    dirs: &GmarkConfigDirs,
-) -> anyhow::Result<Vec<WorkspaceSession>> {
+fn read_workspace_sessions_with_dirs(dirs: &AppDirs) -> anyhow::Result<Vec<WorkspaceSession>> {
     store(dirs).read()
 }
 
 #[cfg(test)]
 fn upsert_workspace_session_with_dirs(
     session: &WorkspaceSession,
-    dirs: &GmarkConfigDirs,
+    dirs: &AppDirs,
 ) -> anyhow::Result<()> {
     store(dirs).upsert(session)
 }
 
 #[cfg(test)]
-fn remove_workspace_session_with_dirs(
-    id: uuid::Uuid,
-    dirs: &GmarkConfigDirs,
-) -> anyhow::Result<()> {
+fn remove_workspace_session_with_dirs(id: uuid::Uuid, dirs: &AppDirs) -> anyhow::Result<()> {
     store(dirs).remove(id)
 }
 
 #[cfg(test)]
 fn remove_paths_from_workspace_sessions_with_dirs(
     paths: &[PathBuf],
-    dirs: &GmarkConfigDirs,
+    dirs: &AppDirs,
 ) -> anyhow::Result<()> {
     store(dirs).remove_paths(paths)
 }

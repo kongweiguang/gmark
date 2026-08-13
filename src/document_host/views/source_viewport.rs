@@ -279,7 +279,7 @@ impl DocumentHost {
                                 .clone()
                                 .unwrap_or_else(|| installed_range.clone());
                             let document_revision =
-                                view.document.as_ref().map_or(0, DocumentSession::revision);
+                                view.document.as_ref().map_or(0, SharedDocument::revision);
                             view.displayed_screen_lines = Arc::new(ScreenLines {
                                 document_revision,
                                 generation,

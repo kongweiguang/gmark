@@ -191,7 +191,7 @@ fn split_standalone_image_width(markdown: &str) -> Option<(&str, u8)> {
     (10..=100).contains(&width).then_some((base, width))
 }
 
-/// Updates only gmark's trailing image-width attribute and preserves the image expression bytes.
+/// Updates only Gmark's trailing image-width attribute and preserves the image expression bytes.
 pub(crate) fn rewrite_standalone_image_width(markdown: &str, width_percent: u8) -> Option<String> {
     let width_percent = width_percent.clamp(10, 100);
     parse_standalone_image(markdown)?;

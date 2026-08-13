@@ -40,6 +40,10 @@ impl PieceDocument {
         })
     }
 
+    pub fn base_source(&self) -> Result<FileSource, PagedDocumentError> {
+        self.source().cloned()
+    }
+
     pub(super) fn slice_piece(
         &self,
         piece: &Piece,

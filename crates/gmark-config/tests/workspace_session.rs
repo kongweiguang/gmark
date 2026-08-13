@@ -4,8 +4,10 @@ use std::{fs, path::PathBuf};
 
 use anyhow::Result;
 use gmark_config::{
-    ConfigDirs, SessionSelection, WORKSPACE_SESSION_VERSION, WorkspaceSession,
-    WorkspaceSessionAffinity, WorkspaceSessionSelection, WorkspaceSessionStore,
+    AppDirs, SessionSelection, WORKSPACE_SESSION_VERSION, WorkspaceSession,
+    WorkspaceSessionAffinity, WorkspaceSessionDocumentRef, WorkspaceSessionPane,
+    WorkspaceSessionPaneId, WorkspaceSessionPaneNode, WorkspaceSessionPaneViewState,
+    WorkspaceSessionSelection, WorkspaceSessionSplitAxis, WorkspaceSessionStore,
     WorkspaceSessionTab, WorkspaceSessionWindow, WorkspaceSessionWindowState,
 };
 use tempfile::TempDir;
@@ -13,7 +15,7 @@ use uuid::Uuid;
 
 fn temporary_store() -> Result<(TempDir, WorkspaceSessionStore)> {
     let temporary = TempDir::new()?;
-    let store = WorkspaceSessionStore::new(ConfigDirs::from_root(temporary.path()));
+    let store = WorkspaceSessionStore::new(AppDirs::from_root(temporary.path()));
     Ok((temporary, store))
 }
 
@@ -22,11 +24,28 @@ fn tab(path: &str, pinned: bool) -> WorkspaceSessionTab {
 }
 
 fn session(id: Uuid, path: &str, pinned: bool) -> WorkspaceSession {
-    WorkspaceSession::new(id, vec![tab(path, pinned)], 0, None)
+    session_with_tabs(id, vec![tab(path, pinned)], 0, None)
+}
+
+fn session_with_tabs(
+    id: Uuid,
+    tabs: Vec<WorkspaceSessionTab>,
+    active_index: usize,
+    workspace_root: Option<PathBuf>,
+) -> WorkspaceSession {
+    let mut session = WorkspaceSession::single_pane(id, workspace_root);
+    let pane_id = session.focused_pane;
+    let active_tab = tabs
+        .get(active_index.min(tabs.len().saturating_sub(1)))
+        .map(|tab| tab.id);
+    session
+        .panes
+        .insert(pane_id, WorkspaceSessionPane::new(tabs, active_tab));
+    session
 }
 
 fn write_registry(store: &WorkspaceSessionStore, contents: impl AsRef<[u8]>) -> Result<()> {
-    fs::create_dir_all(store.dirs().root())?;
+    fs::create_dir_all(store.dirs().state_root())?;
     fs::write(store.dirs().workspace_session_file(), contents)?;
     Ok(())
 }
@@ -40,8 +59,14 @@ fn reads_v1_through_v8_compatibility_samples() -> Result<()> {
     )?;
     let v1 = store.read()?;
     assert_eq!(v1.len(), 1);
-    assert_eq!(v1[0].tabs[0].path, PathBuf::from("v1.md"));
-    assert!(v1[0].tabs[0].pinned);
+    let v1_pane = v1[0]
+        .focused()
+        .ok_or_else(|| anyhow::anyhow!("missing v1 pane"))?;
+    assert_eq!(
+        v1_pane.tabs[0].document.file_path(),
+        Some(PathBuf::from("v1.md").as_path())
+    );
+    assert!(v1_pane.tabs[0].pinned);
 
     for version in 2..=8 {
         let id = Uuid::new_v4();
@@ -76,14 +101,26 @@ fn reads_v1_through_v8_compatibility_samples() -> Result<()> {
         let restored_session = &restored[0];
         assert_eq!(restored_session.id, id);
         match version {
-            2 => assert!(restored_session.tabs[0].view_mode.is_none()),
-            3 => assert_eq!(restored_session.tabs[0].view_mode.as_deref(), Some("split")),
+            2 => assert!(
+                restored_session.focused().unwrap().tabs[0]
+                    .state
+                    .view_mode
+                    .is_none()
+            ),
+            3 => assert_eq!(
+                restored_session.focused().unwrap().tabs[0]
+                    .state
+                    .view_mode
+                    .as_deref(),
+                Some("split")
+            ),
             4 => assert!(restored_session.window.is_some()),
             5 => assert_eq!(restored_session.workspace_panel_width, Some(318.0)),
             6 => assert_eq!(restored_session.split_pane_ratio, Some(0.62)),
             7 => {
                 assert_eq!(restored_session.workspace_docked_open, Some(false));
-                let selection = restored_session.tabs[0]
+                let selection = restored_session.focused().unwrap().tabs[0]
+                    .state
                     .selection
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("v7 selection missing"))?;
@@ -96,7 +133,8 @@ fn reads_v1_through_v8_compatibility_samples() -> Result<()> {
             8 => {
                 assert_eq!(restored_session.document_sidebar_width, Some(300.0));
                 assert_eq!(restored_session.document_sidebar_docked_open, Some(true));
-                let selection = restored_session.tabs[0]
+                let selection = restored_session.focused().unwrap().tabs[0]
+                    .state
                     .selection
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("v8 selection missing"))?;
@@ -142,7 +180,10 @@ fn migrates_transitional_v9_without_board_data_and_rejects_board_markers() -> Re
         ),
     )?;
     let restored = store.read()?;
-    assert_eq!(restored[0].tabs[0].path, PathBuf::from("ordinary.md"));
+    assert_eq!(
+        restored[0].focused().unwrap().tabs[0].document.file_path(),
+        Some(PathBuf::from("ordinary.md").as_path())
+    );
     store.upsert(&restored[0])?;
     let written: serde_json::Value =
         serde_json::from_slice(&fs::read(store.dirs().workspace_session_file())?)?;
@@ -166,17 +207,17 @@ fn normalizes_session_state_and_uses_neutral_selection_types() -> Result<()> {
     let (_temporary, store) = temporary_store()?;
     let id = Uuid::new_v4();
     let mut regular = tab("regular.md", false);
-    regular.view_mode = Some("unsupported".into());
-    regular.selection = Some(WorkspaceSessionSelection {
+    regular.state.view_mode = Some("unsupported".into());
+    regular.state.selection = Some(WorkspaceSessionSelection {
         start: 9,
         end: 2,
         reversed: true,
         anchor_affinity: None,
         head_affinity: None,
     });
-    regular.scroll_x = Some(50_000_000.0);
-    regular.scroll_y = Some(-50_000_000.0);
-    let mut value = WorkspaceSession::new(
+    regular.state.scroll_x = Some(50_000_000.0);
+    regular.state.scroll_y = Some(-50_000_000.0);
+    let mut value = session_with_tabs(
         id,
         vec![
             tab("   ", false),
@@ -202,12 +243,20 @@ fn normalizes_session_state_and_uses_neutral_selection_types() -> Result<()> {
 
     let restored = store.read()?;
     let restored = &restored[0];
-    assert_eq!(restored.tabs.len(), 2);
-    assert_eq!(restored.tabs[0].path, PathBuf::from("pinned.md"));
-    assert_eq!(restored.tabs[1].path, PathBuf::from("regular.md"));
-    assert_eq!(restored.active_index, 1);
-    assert!(restored.tabs[1].view_mode.is_none());
-    let selection = restored.tabs[1]
+    let restored_pane = restored.focused().unwrap();
+    assert_eq!(restored_pane.tabs.len(), 2);
+    assert_eq!(
+        restored_pane.tabs[0].document.file_path(),
+        Some(PathBuf::from("pinned.md").as_path())
+    );
+    assert_eq!(
+        restored_pane.tabs[1].document.file_path(),
+        Some(PathBuf::from("regular.md").as_path())
+    );
+    assert_eq!(restored_pane.active_tab, Some(restored_pane.tabs[1].id));
+    assert!(restored_pane.tabs[1].state.view_mode.is_none());
+    let selection = restored_pane.tabs[1]
+        .state
         .selection
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("selection missing after normalization"))?;
@@ -216,8 +265,8 @@ fn normalizes_session_state_and_uses_neutral_selection_types() -> Result<()> {
         selection.selection_for_range(2..9),
         SessionSelection::from_range(2..9, true)
     );
-    assert_eq!(restored.tabs[1].scroll_x, Some(10_000_000.0));
-    assert_eq!(restored.tabs[1].scroll_y, Some(-10_000_000.0));
+    assert_eq!(restored_pane.tabs[1].state.scroll_x, Some(10_000_000.0));
+    assert_eq!(restored_pane.tabs[1].state.scroll_y, Some(-10_000_000.0));
     assert!(restored.workspace_root.is_none());
     assert_eq!(restored.workspace_panel_width, Some(360.0));
     assert!(restored.document_sidebar_width.is_none());
@@ -249,7 +298,12 @@ fn updates_windows_atomically_and_removes_paths_with_active_index_repair() -> Re
             .collect::<Vec<_>>(),
         vec![second_id, first_id]
     );
-    assert_eq!(after_update[1].tabs[0].path, PathBuf::from("updated.md"));
+    assert_eq!(
+        after_update[1].focused().unwrap().tabs[0]
+            .document
+            .file_path(),
+        Some(PathBuf::from("updated.md").as_path())
+    );
 
     store.upsert(&session(third_id, "updated.md", true))?;
     let after_duplicate = store.read()?;
@@ -258,12 +312,12 @@ fn updates_windows_atomically_and_removes_paths_with_active_index_repair() -> Re
             .iter()
             .map(|value| value.id)
             .collect::<Vec<_>>(),
-        vec![second_id, third_id]
+        vec![second_id, first_id, third_id]
     );
-    assert!(after_duplicate[1].tabs[0].pinned);
+    assert!(after_duplicate[2].focused().unwrap().tabs[0].pinned);
 
     let before_invalid_update = fs::read(store.dirs().workspace_session_file())?;
-    let invalid = WorkspaceSession::new(
+    let invalid = session_with_tabs(
         Uuid::new_v4(),
         (0..101)
             .map(|index| tab(&format!("{index}.md"), false))
@@ -314,5 +368,234 @@ fn rejects_unknown_corrupt_and_over_limit_registries() -> Result<()> {
         .join(",");
     write_registry(&store, format!(r#"{{"version":8,"windows":[{windows}]}}"#))?;
     assert!(store.read().is_err());
+    Ok(())
+}
+
+#[test]
+fn v10_round_trips_recursive_panes_references_and_view_state() -> Result<()> {
+    let (_temporary, store) = temporary_store()?;
+    let first_id = Uuid::new_v4();
+    let recovery_id = Uuid::new_v4();
+    let mut first = WorkspaceSessionTab::new(PathBuf::from("same.md"), true);
+    first.state = WorkspaceSessionPaneViewState {
+        selection: Some(WorkspaceSessionSelection {
+            start: 9,
+            end: 2,
+            reversed: true,
+            anchor_affinity: None,
+            head_affinity: None,
+        }),
+        scroll_x: Some(12.0),
+        scroll_y: Some(-4.0),
+        view_mode: Some("split".to_owned()),
+        split_ratio: Some(0.25),
+        markdown_fold: Some(serde_json::json!({"heading": 2})),
+        markdown_folds: Vec::new(),
+        table_layout: Some(serde_json::json!({"columns": [0.4, 0.6]})),
+        forward: (0..40).map(|value| serde_json::json!(value)).collect(),
+        back: (0..40).map(|value| serde_json::json!(value)).collect(),
+    };
+    let recovery = WorkspaceSessionTab::recovery(recovery_id, false);
+    let mut session = session_with_tabs(first_id, vec![first], 0, None);
+    let left = session.focused_pane;
+    let right = WorkspaceSessionPaneId::new();
+    session
+        .panes
+        .insert(right, WorkspaceSessionPane::new(vec![recovery], None));
+    session.root = WorkspaceSessionPaneNode::Split {
+        axis: WorkspaceSessionSplitAxis::Vertical,
+        ratio: 0.1,
+        first: Box::new(WorkspaceSessionPaneNode::Leaf(left)),
+        second: Box::new(WorkspaceSessionPaneNode::Leaf(right)),
+    };
+    session.focused_pane = right;
+    store.upsert(&session)?;
+
+    let restored = store.read()?;
+    let restored = &restored[0];
+    assert!(matches!(
+        &restored.root,
+        WorkspaceSessionPaneNode::Split {
+            axis: WorkspaceSessionSplitAxis::Vertical,
+            ratio,
+            ..
+        } if (*ratio - 0.1).abs() < f32::EPSILON
+    ));
+    assert_eq!(restored.panes.len(), 2);
+    assert_eq!(restored.focused_pane, right);
+    let focused = restored
+        .panes
+        .get(&right)
+        .ok_or_else(|| anyhow::anyhow!("missing right pane"))?;
+    assert!(
+        matches!(focused.tabs[0].document, WorkspaceSessionDocumentRef::Recovery(id) if id == recovery_id)
+    );
+    assert_eq!(focused.active_tab, Some(focused.tabs[0].id));
+    let left = restored
+        .panes
+        .get(&left)
+        .ok_or_else(|| anyhow::anyhow!("missing left pane"))?;
+    let state = &left.tabs[0].state;
+    assert_eq!(state.forward.len(), 32);
+    assert_eq!(state.back.len(), 32);
+    assert_eq!(state.split_ratio, Some(0.25));
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(|value| (value.start, value.end)),
+        Some((2, 9))
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(store.dirs().workspace_session_file())?)?;
+    assert_eq!(json["version"], serde_json::json!(10));
+    assert!(json["windows"][0].get("tabs").is_none());
+    Ok(())
+}
+
+#[test]
+fn same_pane_paths_are_deduplicated_but_other_panes_and_windows_keep_them() -> Result<()> {
+    let (_temporary, store) = temporary_store()?;
+    let first_id = Uuid::new_v4();
+    let second_id = Uuid::new_v4();
+    let mut session = session_with_tabs(
+        first_id,
+        vec![
+            tab("same.md", false),
+            tab("same.md", true),
+            tab("other.md", false),
+        ],
+        0,
+        None,
+    );
+    let left = session.focused_pane;
+    let right = WorkspaceSessionPaneId::new();
+    session.panes.insert(
+        right,
+        WorkspaceSessionPane::new(vec![tab("same.md", false)], None),
+    );
+    session.root = WorkspaceSessionPaneNode::Split {
+        axis: WorkspaceSessionSplitAxis::Horizontal,
+        ratio: 0.5,
+        first: Box::new(WorkspaceSessionPaneNode::Leaf(left)),
+        second: Box::new(WorkspaceSessionPaneNode::Leaf(right)),
+    };
+    store.upsert(&session)?;
+    store.upsert(&session_with_tabs(
+        second_id,
+        vec![tab("same.md", false)],
+        0,
+        None,
+    ))?;
+    let restored = store.read()?;
+    assert_eq!(restored.len(), 2);
+    let first = restored
+        .iter()
+        .find(|value| value.id == first_id)
+        .ok_or_else(|| anyhow::anyhow!("first missing"))?;
+    assert_eq!(first.panes.get(&left).map(|pane| pane.tabs.len()), Some(2));
+    assert_eq!(first.panes.get(&right).map(|pane| pane.tabs.len()), Some(1));
+    Ok(())
+}
+
+#[test]
+fn malformed_v10_pane_references_fail_closed() -> Result<()> {
+    let (_temporary, store) = temporary_store()?;
+    let id = Uuid::new_v4();
+    let missing = WorkspaceSessionPaneId::new();
+    write_registry(
+        &store,
+        serde_json::json!({
+            "version": 10,
+            "windows": [{
+                "id": id,
+                "root": {"leaf": missing},
+                "panes": {},
+                "focused_pane": missing
+            }]
+        })
+        .to_string(),
+    )?;
+    assert!(store.read().is_err());
+    Ok(())
+}
+
+#[test]
+fn malformed_v10_view_ids_fail_closed() -> Result<()> {
+    let (_temporary, store) = temporary_store()?;
+    let id = Uuid::new_v4();
+    let pane_id = Uuid::new_v4();
+    let nil = Uuid::nil();
+    let base = |tabs: serde_json::Value| {
+        serde_json::json!({
+            "version": 10,
+            "windows": [{
+                "id": id,
+                "root": {"leaf": pane_id},
+                "panes": {
+                    pane_id.to_string(): {"tabs": tabs, "active_tab": nil}
+                },
+                "focused_pane": pane_id
+            }]
+        })
+    };
+
+    write_registry(
+        &store,
+        base(serde_json::json!([{
+            "id": nil,
+            "document": {"file": "nil.md"},
+            "state": {}
+        }]))
+        .to_string(),
+    )?;
+    assert!(store.read().is_err());
+
+    let duplicate = Uuid::new_v4();
+    write_registry(
+        &store,
+        base(serde_json::json!([
+            {"id": duplicate, "document": {"file": "a.md"}, "state": {}},
+            {"id": duplicate, "document": {"file": "b.md"}, "state": {}}
+        ]))
+        .to_string(),
+    )?;
+    assert!(store.read().is_err());
+    Ok(())
+}
+
+#[test]
+fn first_pre_v10_write_creates_non_overwriting_backup() -> Result<()> {
+    let (_temporary, store) = temporary_store()?;
+    let id = Uuid::new_v4();
+    let legacy = format!(
+        r#"{{"version":8,"windows":[{{"id":"{id}","tabs":[{{"path":"old.md","pinned":false}}],"active_index":0}}]}}"#
+    );
+    write_registry(&store, &legacy)?;
+    let restored = store.read()?;
+    store.upsert(&restored[0])?;
+    let backup = store.pre_v10_backup_path();
+    assert_eq!(fs::read(&backup)?, legacy.as_bytes());
+    let original_backup = fs::read(&backup)?;
+    store.upsert(&session_with_tabs(id, vec![tab("new.md", false)], 0, None))?;
+    assert_eq!(fs::read(backup)?, original_backup);
+    Ok(())
+}
+
+#[test]
+fn failed_pre_v10_backup_keeps_original_session_untouched() -> Result<()> {
+    let (_temporary, store) = temporary_store()?;
+    let id = Uuid::new_v4();
+    let legacy = format!(
+        r#"{{"version":8,"windows":[{{"id":"{id}","tabs":[{{"path":"old.md","pinned":false}}],"active_index":0}}]}}"#
+    );
+    write_registry(&store, &legacy)?;
+    fs::create_dir(store.pre_v10_backup_path())?;
+    let restored = store.read()?;
+    assert!(store.upsert(&restored[0]).is_err());
+    assert_eq!(
+        fs::read(store.dirs().workspace_session_file())?,
+        legacy.as_bytes()
+    );
     Ok(())
 }

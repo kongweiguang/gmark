@@ -32,7 +32,7 @@ pub(crate) fn write_apply_plan(
     if !is_real_regular_file(&artifact_metadata) || !is_real_regular_file(&envelope_metadata) {
         return Err("verified update manifest is missing from the cache".to_owned());
     }
-    let target = current_update_target()?;
+    let target = super::lifecycle::current_update_target()?;
     let base_plan = ApplyPlanV1 {
         schema_version: ApplyPlanV1::SCHEMA_VERSION,
         parent_pid: std::process::id(),

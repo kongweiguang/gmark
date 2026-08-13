@@ -2,9 +2,7 @@
 
 use std::fs;
 
-use gmark_document_core::{
-    DocumentFormat, LoadingPolicy, SourceAffinity, SourceAnchor, SourceEdit, TextEncoding,
-};
+use gmark_document_core::{DocumentFormat, LoadingPolicy, SourceEdit, TextEncoding};
 use gmark_paged_document::{FileSource, LineIndex, PieceDocument};
 
 use super::*;
@@ -48,17 +46,11 @@ fn resident_session_owns_revision_dirty_selection_and_allowed_views() {
     )
     .unwrap();
     let transaction = Transaction::new(DocumentRevision(0), vec![SourceEdit::new(5..6, "2")]);
-    let selection = SourceSelection {
-        anchor: SourceAnchor::new(6, SourceAffinity::After),
-        head: SourceAnchor::new(6, SourceAffinity::After),
-    };
-
     assert_eq!(
-        session.apply_transaction(&transaction, selection).unwrap(),
+        session.apply_transaction(&transaction).unwrap(),
         DocumentRevision(1)
     );
     assert!(session.dirty);
-    assert_eq!(session.view_state.source.selection, selection);
     assert_eq!(session.snapshot().read_range(0..7).unwrap(), b"{\"a\":2}");
     assert!(
         session
@@ -132,14 +124,18 @@ fn paged_plan_rejects_derived_views_and_stale_transactions() {
     .unwrap();
 
     assert_eq!(session.allowed_views(), &[DocumentViewId::source()]);
-    assert!(
-        session
-            .set_active_view(DocumentViewId::delimited_table())
-            .is_err()
-    );
     let stale = Transaction::new(DocumentRevision(9), vec![SourceEdit::new(0..1, "x")]);
     assert!(matches!(
-        session.apply_transaction(&stale, SourceSelection::default()),
+        session.apply_transaction(&stale),
         Err(SessionEditError::Edit(EditError::StaleRevision { .. }))
     ));
+
+    let body_before = session.snapshot().read_range(0..session.len()).unwrap();
+    assert!(session.set_encoding(TextEncoding::Utf16Le).unwrap());
+    assert_eq!(session.profile.encoding, TextEncoding::Utf16Le);
+    assert_eq!(
+        session.snapshot().read_range(0..session.len()).unwrap(),
+        body_before
+    );
+    assert!(session.save_snapshot().paged_save_plan.is_some());
 }

@@ -68,6 +68,25 @@ fn built_in_themes_have_stable_names_and_distinct_surfaces() {
     );
 }
 
+/// 浅色主题必须把标签栏底与编辑器表面分层，避免未选中区域和活动内容融合后失去当前边界。
+#[test]
+fn light_builtin_theme_tab_strip_and_editor_surfaces_remain_distinct() {
+    let themes = [
+        Theme::xcode_light(),
+        Theme::fleet_light(),
+        Theme::obsidian_light(),
+        Theme::claude_light(),
+    ];
+
+    for theme in themes {
+        assert_ne!(
+            theme.colors.tab_strip_background, theme.colors.workbench.editor_surface,
+            "{}: light tab strip and editor surfaces must remain distinct",
+            theme.name
+        );
+    }
+}
+
 #[test]
 fn built_in_code_themes_keep_operators_and_punctuation_quiet() {
     let themes = [

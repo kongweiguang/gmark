@@ -11,10 +11,15 @@ impl DocumentHost {
         source: FileSource,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Compatibility callers still begin with a bounded provisional source
+        // window.  The single async indexing path below installs the one
+        // Controller-backed session once its identity/index are ready; keeping
+        // this phase provisional preserves read-only rows and avoids a second
+        // temporary body while the worker is running.
         Self::new_with_source(path, probe, Some(source), cx)
     }
 
-    fn new_with_source(
+    pub(super) fn new_with_source(
         path: PathBuf,
         probe: OpenProbe,
         source: Option<FileSource>,
@@ -138,7 +143,6 @@ impl DocumentHost {
             probe,
             index: None,
             document: None,
-            prepared_source: None,
             provisional_source: source,
             structured_index: None,
             structured_rows: BTreeMap::new(),
@@ -169,6 +173,8 @@ impl DocumentHost {
             json_expand_cancellation: None,
             view_registry,
             tab_view_state: DocumentViewState::default(),
+            view_back_history: VecDeque::new(),
+            view_forward_history: VecDeque::new(),
             selected_projection_view,
             document_epoch: 1,
             derived_projection_generation: 0,
@@ -259,7 +265,9 @@ impl DocumentHost {
             search_error: None,
             mode_notice: None,
             tail_enabled,
-            pending_dirty: Some(false),
+            external_monitor_owned: file_backed,
+            controller_events: None,
+            controller_event_task: Task::ready(()),
             saving: false,
             reloading: false,
             error: None,
@@ -269,6 +277,7 @@ impl DocumentHost {
             structured_scroll_handle: UniformListScrollHandle::new(),
             structured_horizontal_scroll_handle: ScrollHandle::new(),
             source_window_start: 0,
+            pending_source_collapsed_folds: BTreeSet::new(),
             provisional_anchor: Some(SourceAnchor::new(0, SourceAffinity::Before)),
             closed_suspended: false,
             structured_task: Task::ready(()),

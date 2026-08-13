@@ -344,10 +344,10 @@ fn menu_button_width_expands_for_long_ascii_labels() {
     );
     assert!(menu_bar_button_width("Language", dimensions) > dimensions.menu_bar_button_width);
     assert_eq!(
-        top_level_menu_button_width(0, "gmark", dimensions),
-        menu_bar_button_width("gmark", dimensions)
+        top_level_menu_button_width(0, "Gmark", dimensions),
+        menu_bar_button_width("Gmark", dimensions)
     );
-    assert!(top_level_menu_button_width(0, "gmark", dimensions) > dimensions.status_bar_height);
+    assert!(top_level_menu_button_width(0, "Gmark", dimensions) > dimensions.status_bar_height);
 }
 
 #[test]

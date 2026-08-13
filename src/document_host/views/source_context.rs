@@ -26,7 +26,7 @@ impl DocumentHost {
         let existing = self
             .document
             .as_ref()
-            .map(DocumentSession::source_selection)
+            .map(SharedDocument::source_selection)
             .unwrap_or_default();
         if existing.range().is_empty() || !existing.range().contains(&offset) {
             let caret = SourceAnchor::new(offset, SourceAffinity::After);

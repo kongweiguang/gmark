@@ -35,6 +35,8 @@ def fail(path: Path, message: str) -> None:
 def validate_release_contract(
     path: Path, document: dict[str, object], jobs: dict[str, object]
 ) -> None:
+    """锁定发布身份与签名清单契约，避免语法正确的工作流悄悄降级用户更新体验。"""
+
     triggers = document.get("on")
     dispatch = triggers.get("workflow_dispatch") if isinstance(triggers, dict) else None
     inputs = dispatch.get("inputs") if isinstance(dispatch, dict) else None
@@ -80,6 +82,32 @@ def validate_release_contract(
         or "existing GitHub release is not a prerelease" in tag_script
     ):
         fail(path, "same-version rerun must explicitly permit moving an existing release tag")
+
+    manifest_step = None
+    if isinstance(steps, list):
+        manifest_step = next(
+            (
+                step
+                for step in steps
+                if isinstance(step, dict)
+                and step.get("name") == "Create and verify signed manifests"
+            ),
+            None,
+        )
+    manifest_env = manifest_step.get("env") if isinstance(manifest_step, dict) else None
+    manifest_script = manifest_step.get("run") if isinstance(manifest_step, dict) else None
+    if (
+        not isinstance(manifest_env, dict)
+        or manifest_env.get("RELEASE_NOTES") != "${{ inputs.release_notes }}"
+        or not isinstance(manifest_script, str)
+        or 'manifest_notes="$RELEASE_NOTES"' not in manifest_script
+        or 'manifest_notes="$RELEASE_TITLE"' not in manifest_script
+        or '--notes "$manifest_notes"' not in manifest_script
+    ):
+        fail(
+            path,
+            "signed v2 update notes must use release notes with a release-title fallback",
+        )
 
     for platform in ("windows", "linux", "macos"):
         job = jobs.get(platform)

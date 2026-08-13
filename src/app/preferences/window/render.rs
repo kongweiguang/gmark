@@ -5,6 +5,8 @@
 use super::*;
 
 impl Render for PreferencesWindow {
+    // The localized window title already identifies this surface, so matching
+    // the main window's text-only chrome avoids a competing brand mark here.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<ThemeManager>().current().clone();
         let strings = cx.global::<I18nManager>().strings().clone();
@@ -34,7 +36,7 @@ impl Render for PreferencesWindow {
         let clear_search_tooltip: SharedString = strings.ui_clear_search.clone().into();
         let search_results = self.preference_search_results(&strings, cx);
         let window_title =
-            SharedString::from(format!("gmark - {}", strings.preferences_window_title));
+            SharedString::from(format!("Gmark - {}", strings.preferences_window_title));
         window.set_window_title(window_title.as_ref());
         let titlebar_height = custom_titlebar_height(window, d);
         let cancel_focus_handle = self.action_focus_handles[0].clone();
@@ -463,7 +465,7 @@ impl Render for PreferencesWindow {
         if let Some(titlebar) = render_custom_titlebar(
             "preferences-titlebar",
             Some(window_title),
-            Some("icon/gmark-icon.svg"),
+            None,
             &theme,
             window,
             cx,

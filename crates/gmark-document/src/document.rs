@@ -5,7 +5,7 @@ use std::{collections::VecDeque, fmt, ops::Range, sync::Arc};
 use thiserror::Error;
 use zed_rope::Rope;
 
-use crate::source_format::{FormatPatch, SourceFormat};
+use crate::source_format::{FormatOperation, FormatPatch, SourceFormat};
 use crate::{LineEnding, SourceFormatSnapshot, SourceFormatSummary};
 
 /// 单调递增的文档版本号。
@@ -243,6 +243,24 @@ impl SourceDocument {
         self.revision
     }
 
+    /// Set the externally coordinated revision after replacing a prepared
+    /// session. The replacement owns fresh history, so no old undo entry can
+    /// cross the revision boundary.
+    pub fn set_revision(&mut self, revision: Revision) {
+        self.revision = revision;
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    /// Advance the externally visible revision without recording a content
+    /// transaction.  Metadata-only changes (for example source encoding)
+    /// must invalidate stale writers while preserving the body undo history.
+    pub fn advance_revision(&mut self) -> Result<Revision, DocumentError> {
+        let next_revision = self.revision.next()?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// 返回当前不可变快照。
     pub fn snapshot(&self) -> DocumentSnapshot {
         DocumentSnapshot {
@@ -307,6 +325,41 @@ impl SourceDocument {
         };
         self.source_format = format;
         true
+    }
+
+    /// 恢复格式并作为可撤销 revision 提交。恢复日志回放仍使用
+    /// [`restore_source_format`] 的无 revision 入口，避免打开阶段改变正文代次。
+    pub fn restore_source_format_transaction(
+        &mut self,
+        format: SourceFormatSnapshot,
+    ) -> Result<Option<DocumentSnapshot>, DocumentError> {
+        let source = self.source.to_string();
+        let Some(next_format) = SourceFormat::from_normalized(&source, format) else {
+            return Ok(None);
+        };
+        let current = self.source_format.snapshot();
+        let next_snapshot = next_format.snapshot();
+        if current == next_snapshot {
+            return Ok(None);
+        }
+        let next_revision = self.revision.next()?;
+        let format_patch = FormatPatch {
+            operations: vec![FormatOperation {
+                newline_index: 0,
+                removed: current.endings,
+                inserted: next_snapshot.endings.clone(),
+            }],
+            dominant_override: Some((current.dominant, next_snapshot.dominant)),
+        };
+        self.source_format = next_format;
+        self.revision = next_revision;
+        self.record_undo(HistoryEntry {
+            forward: Vec::new(),
+            inverse: Vec::new(),
+            format_patch,
+        });
+        self.redo.clear();
+        Ok(Some(self.snapshot()))
     }
 
     /// 显式把所有换行规范化为目标样式，并作为可撤销的格式事务分配新 revision。

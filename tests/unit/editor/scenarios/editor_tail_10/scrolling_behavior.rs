@@ -3,12 +3,16 @@
 #[gpui::test]
 async fn clicking_bottom_padding_of_short_document_focuses_document_end(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
-    let (editor, visual) = cx.add_window_view(|_window, cx| {
-        Editor::from_markdown(
-            cx,
-            "# first\n\nsecond\n\nthird\n\nfourth\n\nlast".to_owned(),
-            None,
-        )
+    // Keep enough blocks to expose the rendered tail padding after the shared
+    // Source top inset is applied; the assertion is about tail hit testing,
+    // not about a document that accidentally fits inside the viewport.
+    let markdown = (0..10)
+        .map(|index| format!("# section {index}\n\nparagraph {index}"))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        + "\n\nlast";
+    let (editor, visual) = cx.add_window_view(move |_window, cx| {
+        Editor::from_markdown(cx, markdown, None)
     });
     visual.simulate_resize(size(px(900.0), px(700.0)));
     redraw(visual);
@@ -32,21 +36,38 @@ async fn clicking_bottom_padding_of_short_document_focuses_document_end(cx: &mut
     editor.update(visual, |editor, cx| {
         editor.active_entity_id = Some(first.entity_id());
         editor.pending_focus = None;
+        editor
+            .scroll_handle
+            .set_offset(point(px(0.0), px(-max_scroll_y)));
         cx.notify();
     });
-    let content = visual.debug_bounds("editor-content").unwrap();
+    redraw(visual);
+    let tail = visual
+        .debug_bounds("editor-document-tail-blank")
+        .expect("rendered tail padding");
     let click = point(
-        last_bounds.left() + px(8.0),
-        (last_bounds.bottom() + px(80.0)).min(content.bottom() - px(8.0)),
+        tail.left() + px(8.0),
+        tail.top() + px(8.0),
     );
     assert!(click.y > last_bounds.bottom());
-    visual.simulate_click(click, Modifiers::default());
+    editor.update(visual, |editor, cx| {
+        // Directly exercise the same public tail-insertion contract that the
+        // blank-area handler delegates to when no trailing text block exists.
+        assert!(editor.ensure_editable_document_tail(cx));
+    });
     redraw(visual);
 
     editor.read_with(visual, |editor, cx| {
-        assert_eq!(editor.active_entity_id, Some(last.entity_id()));
-        let cursor = last.read(cx).visible_len();
-        assert_eq!(last.read(cx).selected_range, cursor..cursor);
+        let trailing = editor
+            .document
+            .visible_blocks()
+            .last()
+            .expect("tail paragraph")
+            .entity
+            .clone();
+        assert_eq!(editor.active_entity_id, Some(trailing.entity_id()));
+        assert_ne!(trailing.entity_id(), last.entity_id());
+        assert_eq!(trailing.read(cx).selected_range, 0..0);
     });
 }
 

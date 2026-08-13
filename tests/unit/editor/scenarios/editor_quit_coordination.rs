@@ -74,7 +74,7 @@ async fn quit_application_prompts_dirty_editor_without_quitting(cx: &mut TestApp
         .add_window_view(|_window, cx| Editor::from_markdown(cx, "second".to_string(), None));
     let second_window = activate_visual_window(cx);
 
-    second_editor.update(cx, |editor, cx| editor.mark_dirty(cx));
+    second_editor.update(cx, |editor, _cx| editor.set_document_dirty_for_test(true));
     assert_eq!(cx.cx.windows().len(), 2);
 
     cx.cx.update(|cx| {
@@ -107,9 +107,8 @@ async fn update_quit_cancels_when_an_external_conflict_is_already_unresolved(
     cx: &mut TestAppContext,
 ) {
     init_editor_test_app(cx);
-    let (editor, visual) = cx.add_window_view(|_window, cx| {
-        Editor::from_markdown(cx, "conflicted".to_owned(), None)
-    });
+    let (editor, visual) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "conflicted".to_owned(), None));
 
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {

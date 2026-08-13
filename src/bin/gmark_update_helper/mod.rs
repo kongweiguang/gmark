@@ -134,7 +134,7 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
     progress
         .publish(
             ApplyPhaseV1::WaitingForExit,
-            "Waiting for GMark to release the update lock",
+            "Waiting for Gmark to release the update lock",
         )
         .map_err(|error| failure_io(ApplyFailureCode::HelperLaunchFailed, error))?;
 
@@ -149,7 +149,7 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
             let failure = V2Failure::new(
                 ApplyFailureCode::WaitingForExitTimeout,
                 RecoveryAction::ReattemptInstall,
-                "timed out waiting for GMark to release the update lock",
+                "timed out waiting for Gmark to release the update lock",
             );
             persist_failure(plan, &mut progress, failure.clone());
             return Err(failure);
@@ -158,7 +158,7 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
             let failure = V2Failure::new(
                 ApplyFailureCode::Cancelled,
                 RecoveryAction::ReattemptInstall,
-                "installation was cancelled while waiting for GMark to release the update lock",
+                "installation was cancelled while waiting for Gmark to release the update lock",
             );
             persist_failure(plan, &mut progress, failure.clone());
             return Err(failure);
@@ -359,21 +359,21 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
         }
         let _ = progress.publish(
             ApplyPhaseV1::RollingBack,
-            "Restoring the previous GMark installation after installer failure",
+            "Restoring the previous Gmark installation after installer failure",
         );
         let failure = match rollback_platform(plan) {
             Err(error) => failure.rollback_failed(error),
             Ok(()) => match relaunch_previous_after_rollback(plan) {
                 Ok(()) => failure,
                 Err(error) => failure.rollback_failed(format!(
-                    "rollback succeeded but old GMark could not be relaunched: {error}"
+                    "rollback succeeded but old Gmark could not be relaunched: {error}"
                 )),
             },
         };
         persist_failure(plan, &mut progress, failure.clone());
         return Err(failure);
     }
-    if let Err(error) = progress.publish(ApplyPhaseV1::Relaunching, "Launching the updated GMark") {
+    if let Err(error) = progress.publish(ApplyPhaseV1::Relaunching, "Launching the updated Gmark") {
         let failure = failure_io(ApplyFailureCode::HelperLaunchFailed, error);
         persist_failure(plan, &mut progress, failure.clone());
         return Err(failure);
@@ -397,7 +397,7 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
 
     if let Err(error) = progress.publish(
         ApplyPhaseV1::Confirming,
-        "Waiting for the updated GMark startup acknowledgement",
+        "Waiting for the updated Gmark startup acknowledgement",
     ) {
         let stop = stop_child(&mut child);
         let message = match stop {
@@ -498,7 +498,7 @@ fn recover_after_launch_failure(
 ) -> V2Failure {
     let _ = progress.publish(
         ApplyPhaseV1::RollingBack,
-        "Restoring the previous GMark installation",
+        "Restoring the previous Gmark installation",
     );
     match rollback_platform(plan) {
         Ok(()) => {
@@ -512,7 +512,7 @@ fn recover_after_launch_failure(
                 }
                 Err(error) => {
                     let failure = failure.rollback_failed(format!(
-                        "rollback succeeded but old GMark could not be relaunched: {error}"
+                        "rollback succeeded but old Gmark could not be relaunched: {error}"
                     ));
                     persist_failure(plan, progress, failure.clone());
                     failure

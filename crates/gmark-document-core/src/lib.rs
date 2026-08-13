@@ -17,8 +17,8 @@ pub use policy::{
 pub use recovery::{RecoveryAction, RecoveryBackend, RecoveryRecord};
 pub use snapshot::{DocumentSnapshot, SnapshotError};
 pub use transaction::{
-    DocumentRevision, EditError, SourceAffinity, SourceAnchor, SourceEdit, SourceSelection,
-    Transaction,
+    DocumentMutationMap, DocumentRevision, DocumentViewInstanceId, EditError, MutationEdit,
+    SourceAffinity, SourceAnchor, SourceEdit, SourceSelection, Transaction,
 };
 pub use view::{
     DEFAULT_DELIMITED_COLUMN_WINDOW, DEFAULT_DELIMITED_ROW_WINDOW, DelimitedCellProjection,

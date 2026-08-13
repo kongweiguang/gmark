@@ -18,7 +18,7 @@ impl Editor {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn about_dialog_body_lines(strings: &I18nStrings) -> Vec<String> {
         vec![
-            format!("gmark {}", env!("CARGO_PKG_VERSION")),
+            format!("Gmark {}", env!("CARGO_PKG_VERSION")),
             strings.help_about_message.clone(),
             format!("{}: {}", strings.help_about_github_label, ABOUT_GITHUB_URL),
         ]
@@ -46,7 +46,7 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .gap(px(d.dialog_gap * 0.5))
-                .child(body_style(div()).child(format!("gmark {}", env!("CARGO_PKG_VERSION"))))
+                .child(body_style(div()).child(format!("Gmark {}", env!("CARGO_PKG_VERSION"))))
                 .child(body_style(div()).child(strings.help_about_message.clone()))
                 .child(
                     body_style(div())
@@ -230,6 +230,7 @@ impl Editor {
         self.on_workspace_resize_mouse_up(event, window, cx);
     }
 
+    /// Split 预览拥有独立滚动容器，因此显式复用 Source 顶距才能与左侧首行对齐。
     pub(super) fn render_split_preview_pane(
         &mut self,
         theme: &Theme,
@@ -260,7 +261,7 @@ impl Editor {
         } else {
             fallback_viewport_height.max(1.0)
         };
-        let top_padding = editor_top_padding(false, viewport_height);
+        let top_padding = editor_top_padding(super::ViewMode::Split, false, viewport_height, d);
         let bottom_padding = editor_bottom_padding(viewport_height, d);
         let centered_width = crate::ui::centered_column_width(pane_width, d);
         let max_scroll_y = f32::from(scroll_handle.max_offset().height.max(px(0.0)));

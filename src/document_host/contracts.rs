@@ -60,7 +60,7 @@ pub(super) fn localized_document_error(error: &PagedDocumentError, cx: &App) -> 
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DocumentHostViewMode {
+pub(crate) enum DocumentHostViewMode {
     Live,
     Source,
     Structure,

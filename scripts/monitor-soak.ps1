@@ -87,9 +87,9 @@ foreach ($path in @($samplesPath, $summaryPath, $stdoutPath, $stderrPath, $ready
 }
 
 $runId = [Guid]::NewGuid().ToString('N')
-$configRoot = Join-Path $output "isolated-config-$runId"
-# Isolate preferences, recovery state, and the single-instance lock from the user's app.
-[IO.Directory]::CreateDirectory($configRoot) | Out-Null
+$sandboxRoot = Join-Path $output "isolated-config-$runId"
+# Isolate the app sandbox from the user's preferences, recovery state, and single-instance lock.
+[IO.Directory]::CreateDirectory($sandboxRoot) | Out-Null
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $writer = [IO.StreamWriter]::new($samplesPath, $false, $utf8NoBom)
 # Flush every sample so a crash still leaves the last complete JSONL record.
@@ -180,7 +180,7 @@ try {
     }
     # Windows PowerShell 5.1 lacks ProcessStartInfo.ArgumentList and Environment.
     # Use APIs shared by Windows PowerShell and PowerShell 7.
-    $startInfo.EnvironmentVariables['GMARK_UI_CHECK_CONFIG_ROOT'] = $configRoot
+    $startInfo.EnvironmentVariables['GMARK_UI_CHECK_ROOT'] = $sandboxRoot
     $startInfo.EnvironmentVariables['GMARK_SOAK_MODE'] = 'idle-stability'
     if ($RequireReadyMarker) {
         $startInfo.EnvironmentVariables['GMARK_SOAK_READY_PATH'] = $readyPath
@@ -488,7 +488,7 @@ finally {
         fixture = $fixtureInfo
         fixture_after = $fixtureAfter
         fixture_unchanged = $fixtureUnchanged
-        isolated_config_root = $configRoot
+        isolated_config_root = $sandboxRoot
         process_id = $trackedProcessId
         start_arguments = if ($null -ne $startInfo) { $startInfo.Arguments } else { $null }
         started_at_utc = if ($null -ne $startedAt) { $startedAt.ToString('o') } else { $null }

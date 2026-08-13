@@ -37,6 +37,7 @@ const MENU_SHORTCUT_SLOT: f32 = 64.0;
 const MENU_SHORTCUT_MAX_WIDTH: f32 = 100.0;
 #[derive(Clone, Copy)]
 pub(super) enum DocumentToolbarAction {
+    SplitPane,
     QuickOpen,
     Find,
     CommandPalette,
@@ -45,9 +46,10 @@ pub(super) enum DocumentToolbarAction {
 impl DocumentToolbarAction {
     pub(super) fn index(self) -> usize {
         match self {
-            Self::QuickOpen => 0,
-            Self::Find => 1,
-            Self::CommandPalette => 2,
+            Self::SplitPane => 0,
+            Self::QuickOpen => 1,
+            Self::Find => 2,
+            Self::CommandPalette => 3,
         }
     }
 }
@@ -59,7 +61,7 @@ const SPLIT_KEYBOARD_STEP: f32 = 0.01;
 const SPLIT_KEYBOARD_LARGE_STEP: f32 = 0.05;
 const EDITOR_SCROLLBAR_HIT_WIDTH: f32 = 14.0;
 const EDITOR_SCROLLBAR_HOVER_WIDTH: f32 = 10.0;
-const EDITOR_READING_TOP_PADDING: f32 = 48.0;
+const TYPEWRITER_MIN_TOP_PADDING: f32 = 48.0;
 
 fn split_pane_ratio_bounds(available_width: f32) -> (f32, f32) {
     let available_width = available_width.max(1.0);
@@ -76,18 +78,21 @@ fn editor_tab_strip_insets(docked_workspace_width: f32) -> (f32, f32) {
     (docked_workspace_width, 0.0)
 }
 
-pub(crate) fn editor_top_padding(typewriter_mode: bool, viewport_height: f32) -> f32 {
-    if typewriter_mode {
+/// 四种文档模式以 Source 的主题间距为共同基准，避免切换模式时首行上下跳动；
+/// 仅 Live 的打字机模式保留显式的视口定位，因为那是用户主动开启的阅读行为。
+pub(crate) fn editor_top_padding(
+    view_mode: ViewMode,
+    typewriter_mode: bool,
+    viewport_height: f32,
+    dimensions: &ThemeDimensions,
+) -> f32 {
+    let source_top_padding = dimensions.editor_padding;
+    if view_mode == ViewMode::Rendered && typewriter_mode {
         (viewport_height.max(0.0) * super::focus_modes::TYPEWRITER_VIEWPORT_RATIO)
-            .max(EDITOR_READING_TOP_PADDING)
+            .max(TYPEWRITER_MIN_TOP_PADDING)
     } else {
-        EDITOR_READING_TOP_PADDING
+        source_top_padding
     }
-}
-
-/// Source 是同一种代码阅读表面，不因 Resident/SourceBacked 或文件格式改变顶部节奏。
-pub(crate) fn source_editor_top_padding(dimensions: &ThemeDimensions) -> f32 {
-    dimensions.editor_padding
 }
 
 pub(super) fn editor_bottom_padding(viewport_height: f32, dimensions: &ThemeDimensions) -> f32 {

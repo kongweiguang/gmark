@@ -376,7 +376,7 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
         large_view.read_with(visual, |view, _cx| view.scroll_top_line_for_test());
     assert!(scroll_top_before_save > 0);
     visual.simulate_keystrokes("ctrl-s");
-    visual.run_until_parked();
+    wait_for_large_document_save(&large_view, visual);
     redraw(visual);
     assert!(!editor.read_with(visual, |editor, _cx| editor.document_dirty));
     let scroll_top_after_save =
@@ -422,7 +422,7 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
             view.save_as_path(saved_as_for_action, window_handle, cx);
         });
     });
-    visual.run_until_parked();
+    wait_for_large_document_save(&large_view, visual);
     redraw(visual);
     assert!(!editor.read_with(visual, |editor, _cx| editor.document_dirty));
     assert_eq!(
@@ -434,4 +434,24 @@ async fn large_document_uses_the_standard_editor_shell(cx: &mut TestAppContext) 
             .expect("saved large document")
             .starts_with(b"saved-as large\n document line 0\n")
     );
+}
+
+fn wait_for_large_document_save(
+    view: &gpui::Entity<crate::document_host::DocumentHost>,
+    cx: &mut gpui::VisualTestContext,
+) {
+    for _ in 0..5_000 {
+        cx.run_until_parked();
+        let (saving, dirty) = view.read_with(cx, |view, _cx| {
+            (view.is_saving_for_test(), view.is_dirty())
+        });
+        if !saving && !dirty {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (saving, dirty, error) = view.read_with(cx, |view, _cx| {
+        (view.is_saving_for_test(), view.is_dirty(), view.error_for_test())
+    });
+    panic!("large document save did not finish within the bounded test wait (saving={saving}, dirty={dirty}, error={error:?})");
 }

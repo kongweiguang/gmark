@@ -9,27 +9,33 @@ impl DocumentHost {
         if self.saving || self.reloading {
             return;
         }
-        if self
+        let changed = self
             .document
-            .as_mut()
-            .is_some_and(|document| document.undo())
-        {
-            let restored_selection = self
-                .document
-                .as_ref()
-                .map(DocumentSession::source_selection);
+            .as_ref()
+            .is_some_and(|document| document.undo_changed().unwrap_or(false));
+        if changed {
+            let restored_selection = self.document.as_ref().map(SharedDocument::source_selection);
             if let (Some(journal), Some(document)) = (
                 self.coordinator.recovery_journal.as_mut(),
                 self.document.as_ref(),
-            ) && let Err(error) = journal.record_after_change(
-                document,
-                &RecoveryRecord {
-                    action: RecoveryAction::Undo,
-                    selection: restored_selection,
-                    view_id: DocumentViewId::source(),
-                },
             ) {
-                self.coordinator.recovery_error = Some(error.to_string().into());
+                let result = document.with_session(|session| {
+                    journal.record_after_change(
+                        session,
+                        &RecoveryRecord {
+                            action: RecoveryAction::Undo,
+                            selection: restored_selection,
+                            view_id: DocumentViewId::source(),
+                        },
+                    )
+                });
+                match result {
+                    Ok(Err(error)) => {
+                        self.coordinator.recovery_error = Some(error.to_string().into())
+                    }
+                    Err(error) => self.coordinator.recovery_error = Some(error.to_string().into()),
+                    Ok(Ok(())) => {}
+                }
             }
             self.active_edit = None;
             if let Some(selection) = restored_selection {
@@ -41,7 +47,6 @@ impl DocumentHost {
                 .document
                 .as_ref()
                 .is_some_and(|document| !document.is_pristine());
-            set_document_dirty_state(&mut self.document, &mut self.pending_dirty, dirty);
             self.schedule_search(cx);
             let preserve_live_table = self.is_delimited_document()
                 && matches!(
@@ -74,27 +79,33 @@ impl DocumentHost {
         if self.saving || self.reloading {
             return;
         }
-        if self
+        let changed = self
             .document
-            .as_mut()
-            .is_some_and(|document| document.redo())
-        {
-            let restored_selection = self
-                .document
-                .as_ref()
-                .map(DocumentSession::source_selection);
+            .as_ref()
+            .is_some_and(|document| document.redo_changed().unwrap_or(false));
+        if changed {
+            let restored_selection = self.document.as_ref().map(SharedDocument::source_selection);
             if let (Some(journal), Some(document)) = (
                 self.coordinator.recovery_journal.as_mut(),
                 self.document.as_ref(),
-            ) && let Err(error) = journal.record_after_change(
-                document,
-                &RecoveryRecord {
-                    action: RecoveryAction::Redo,
-                    selection: restored_selection,
-                    view_id: DocumentViewId::source(),
-                },
             ) {
-                self.coordinator.recovery_error = Some(error.to_string().into());
+                let result = document.with_session(|session| {
+                    journal.record_after_change(
+                        session,
+                        &RecoveryRecord {
+                            action: RecoveryAction::Redo,
+                            selection: restored_selection,
+                            view_id: DocumentViewId::source(),
+                        },
+                    )
+                });
+                match result {
+                    Ok(Err(error)) => {
+                        self.coordinator.recovery_error = Some(error.to_string().into())
+                    }
+                    Err(error) => self.coordinator.recovery_error = Some(error.to_string().into()),
+                    Ok(Ok(())) => {}
+                }
             }
             self.active_edit = None;
             if let Some(selection) = restored_selection {
@@ -102,11 +113,6 @@ impl DocumentHost {
             }
             self.focus_handle.focus(window);
             self.invalidate_source_rows();
-            let dirty = self
-                .document
-                .as_ref()
-                .is_some_and(|document| !document.is_pristine());
-            set_document_dirty_state(&mut self.document, &mut self.pending_dirty, dirty);
             let preserve_live_table = self.is_delimited_document()
                 && matches!(
                     self.view_mode,
