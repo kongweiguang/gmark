@@ -11,7 +11,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write as _},
-    path::Path,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -31,10 +31,7 @@ mod transaction;
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub use launch::{
-    FeedbackAgent, STARTUP_CONFIRMATION_TIMEOUT, confirm_startup, launch_updated,
-    relaunch_previous_after_rollback, stop_child,
-};
+pub use launch::{FeedbackAgent, STARTUP_CONFIRMATION_TIMEOUT, confirm_startup, launch_updated};
 pub use transaction::{
     LIFETIME_LOCK_TIMEOUT, LOCK_POLL, LifetimeLock, LockError, ProgressWriter,
     acquire_lifetime_lock, acquire_lifetime_lock_until,
@@ -48,11 +45,48 @@ pub struct V2Failure {
     pub code: ApplyFailureCode,
     pub recovery_action: RecoveryAction,
     pub message: String,
-    /// True once an installed target may need restoration.
-    pub rollback_required: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InstallCommitState {
+    Uncommitted,
+    CommittedOrUnknown,
+}
+
+/// 平台安装器必须显式标记错误是否发生在提交边界之后，避免 UI 建议重复执行可能已经生效的安装。
+#[derive(Debug)]
+struct PlatformInstallFailure {
+    commit_state: InstallCommitState,
+    message: String,
+}
+
+impl PlatformInstallFailure {
+    /// 提交前失败可安全创建新事务重试，因为可见安装目标尚未改变。
+    fn uncommitted(message: impl Into<String>) -> Self {
+        Self {
+            commit_state: InstallCommitState::Uncommitted,
+            message: message.into(),
+        }
+    }
+
+    /// 提交后或安装器状态不确定时必须转人工恢复，禁止假设旧版本仍完整存在。
+    fn committed_or_unknown(message: impl Into<String>) -> Self {
+        Self {
+            commit_state: InstallCommitState::CommittedOrUnknown,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<String> for PlatformInstallFailure {
+    fn from(message: String) -> Self {
+        Self::uncommitted(message)
+    }
 }
 
 impl V2Failure {
+    /// Bounds helper diagnostics before they cross the result/progress
+    /// protocol, keeping recovery guidance readable and serializable.
     #[must_use]
     pub fn new(
         code: ApplyFailureCode,
@@ -63,27 +97,7 @@ impl V2Failure {
             code,
             recovery_action,
             message: bound_message(message.into()),
-            rollback_required: false,
         }
-    }
-
-    #[must_use]
-    pub fn after_install(mut self) -> Self {
-        self.rollback_required = true;
-        self
-    }
-
-    #[must_use]
-    pub fn rollback_failed(mut self, detail: impl Into<String>) -> Self {
-        self.code = ApplyFailureCode::RollbackFailed;
-        self.recovery_action = RecoveryAction::Manual;
-        self.rollback_required = false;
-        self.message = bound_message(format!(
-            "{}; rollback failed: {}",
-            self.message,
-            detail.into()
-        ));
-        self
     }
 }
 
@@ -125,10 +139,14 @@ pub fn run(plan_path: &Path) -> Result<(), V2RunError> {
     run_v2(plan_path)
 }
 
+/// Executes a plan that was already validated by the caller while retaining
+/// the same lock, verification, and terminal-result guarantees as `run_v2`.
 pub fn run_validated_plan(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
     execute_v2(plan_path, plan)
 }
 
+/// Owns the helper transaction from lifecycle-lock acquisition through the
+/// durable result so a committed installation is never silently undone.
 fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
     let mut progress = ProgressWriter::new(plan);
     progress
@@ -239,6 +257,16 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
         }
     }
 
+    if let Err(error) = claim_install_attempt(plan) {
+        let failure = V2Failure::new(
+            ApplyFailureCode::InvalidPlan,
+            RecoveryAction::Recheck,
+            error,
+        );
+        persist_failure(plan, &mut progress, failure.clone());
+        return Err(failure);
+    }
+
     let cancelled = match cancellation_requested(&plan.cancellation_path) {
         Ok(cancelled) => cancelled,
         Err(error) => {
@@ -337,60 +365,34 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
             FeedbackAgent::disabled()
         }
     };
-    let backup_preexisting = fs::symlink_metadata(&plan.backup_path).is_ok();
     if let Err(error) = install_platform(plan, &mut artifact) {
-        let code = classify_install_failure(&error);
-        let failure = V2Failure::new(
-            code,
-            if code == ApplyFailureCode::PathViolation {
-                RecoveryAction::Manual
-            } else {
-                RecoveryAction::ReattemptInstall
-            },
-            error,
-        );
-        // A platform adapter rejects a pre-existing UUID backup before any
-        // install side effect. Never treat that refusal as a signal to
-        // restore an unrelated backup left by another transaction.
-        let backup_created = !backup_preexisting && fs::symlink_metadata(&plan.backup_path).is_ok();
-        if !backup_created {
-            persist_failure(plan, &mut progress, failure.clone());
-            return Err(failure);
-        }
-        let _ = progress.publish(
-            ApplyPhaseV1::RollingBack,
-            "Restoring the previous Gmark installation after installer failure",
-        );
-        let failure = match rollback_platform(plan) {
-            Err(error) => failure.rollback_failed(error),
-            Ok(()) => match relaunch_previous_after_rollback(plan) {
-                Ok(()) => failure,
-                Err(error) => failure.rollback_failed(format!(
-                    "rollback succeeded but old Gmark could not be relaunched: {error}"
-                )),
-            },
+        let code = classify_install_failure(&error.message);
+        let failure = if error.commit_state == InstallCommitState::CommittedOrUnknown {
+            post_install_failure(plan, code, error.message)
+        } else {
+            V2Failure::new(
+                code,
+                if code == ApplyFailureCode::PathViolation {
+                    RecoveryAction::Manual
+                } else {
+                    RecoveryAction::ReattemptInstall
+                },
+                error.message,
+            )
         };
         persist_failure(plan, &mut progress, failure.clone());
         return Err(failure);
     }
     if let Err(error) = progress.publish(ApplyPhaseV1::Relaunching, "Launching the updated Gmark") {
-        let failure = failure_io(ApplyFailureCode::HelperLaunchFailed, error);
+        let failure = post_install_failure(plan, ApplyFailureCode::HelperLaunchFailed, error);
         persist_failure(plan, &mut progress, failure.clone());
         return Err(failure);
     }
-    let mut child = match launch_updated(plan) {
+    let child = match launch_updated(plan) {
         Ok(child) => child,
         Err(error) => {
-            let failure = recover_after_launch_failure(
-                plan,
-                &mut progress,
-                V2Failure::new(
-                    ApplyFailureCode::RelaunchFailed,
-                    RecoveryAction::ReattemptInstall,
-                    error,
-                )
-                .after_install(),
-            );
+            let failure = post_install_failure(plan, ApplyFailureCode::RelaunchFailed, error);
+            persist_failure(plan, &mut progress, failure.clone());
             return Err(failure);
         }
     };
@@ -399,60 +401,112 @@ fn execute_v2(plan_path: &Path, plan: &ApplyPlanV2) -> Result<(), V2Failure> {
         ApplyPhaseV1::Confirming,
         "Waiting for the updated Gmark startup acknowledgement",
     ) {
-        let stop = stop_child(&mut child);
-        let message = match stop {
-            Ok(()) => error,
-            Err(stop_error) => format!("{error}; failed to stop updated gmark: {stop_error}"),
-        };
-        let failure = recover_after_launch_failure(
-            plan,
-            &mut progress,
-            V2Failure::new(
-                ApplyFailureCode::HelperLaunchFailed,
-                RecoveryAction::Recheck,
-                message,
-            )
-            .after_install(),
-        );
+        let failure = post_install_failure(plan, ApplyFailureCode::HelperLaunchFailed, error);
+        // Dropping the handle only detaches observation; it deliberately does
+        // not terminate a process that may still finish starting normally.
+        drop(child);
+        persist_failure(plan, &mut progress, failure.clone());
         return Err(failure);
     }
     if let Err(error) = confirm_startup(plan, child) {
-        let failure = recover_after_launch_failure(
-            plan,
-            &mut progress,
-            V2Failure::new(
-                if error.contains("timed out") {
-                    ApplyFailureCode::StartupConfirmationTimeout
-                } else {
-                    ApplyFailureCode::RelaunchFailed
-                },
-                RecoveryAction::ReattemptInstall,
-                error,
-            )
-            .after_install(),
-        );
+        let code = if error.contains("timed out") {
+            ApplyFailureCode::StartupConfirmationTimeout
+        } else {
+            ApplyFailureCode::RelaunchFailed
+        };
+        let failure = post_install_failure(plan, code, error);
+        persist_failure(plan, &mut progress, failure.clone());
         return Err(failure);
     }
 
-    // The result and terminal progress are durable before any best-effort
-    // cleanup.  Keep the lock alive until both atomic writes have completed.
-    progress
-        .publish(ApplyPhaseV1::Succeeded, "Update installed and acknowledged")
-        .map_err(|error| failure_io(ApplyFailureCode::HelperLaunchFailed, error))?;
+    // 终态结果是权威事实，必须先于展示用途的 progress 落盘；progress 故障不能把成功安装改写成失败。
     let result = ApplyResultV2::succeeded(
         plan.transaction_id,
         plan.current_version.clone(),
         plan.target_version.clone(),
     );
-    write_apply_result_for_plan(plan, &result)
-        .map_err(|error| failure_io(ApplyFailureCode::HelperLaunchFailed, error.to_string()))?;
+    if let Err(error) = write_apply_result_for_plan(plan, &result) {
+        let failure = post_install_failure(
+            plan,
+            ApplyFailureCode::HelperLaunchFailed,
+            error.to_string(),
+        );
+        persist_failure(plan, &mut progress, failure.clone());
+        return Err(failure);
+    }
+    if let Err(error) =
+        progress.publish(ApplyPhaseV1::Succeeded, "Update installed and acknowledged")
+    {
+        append_log(
+            plan,
+            &format!(
+                "terminal result persisted but success progress could not be updated: {error}"
+            ),
+        );
+    }
     feedback.mark_successful();
-    let _ = lock;
-    let _ = cleanup_backup(plan);
     let _ = fs::remove_file(plan_path);
     Ok(())
 }
 
+/// Adds recovery details after commit because the new version must remain in
+/// place and the user needs a copyable manual download and diagnostic path.
+fn post_install_failure(
+    plan: &ApplyPlanV2,
+    code: ApplyFailureCode,
+    message: impl Into<String>,
+) -> V2Failure {
+    V2Failure::new(
+        code,
+        RecoveryAction::Manual,
+        format!(
+            "{}; new version {} is installed and will not be rolled back automatically; manual action: open the installed Gmark or download the package; open helper log: {}; open installer log: {}; package: {}",
+            message.into(),
+            plan.target_version,
+            plan.helper_log_path.display(),
+            plan.installer_log_path.display(),
+            plan.artifact_url,
+        ),
+    )
+}
+
+/// 单次执行声明在任何平台写入前使用 create_new 落盘；即使结果文件随后 I/O 失败，重复 helper 也不能再次运行安装器。
+fn claim_install_attempt(plan: &ApplyPlanV2) -> Result<PathBuf, String> {
+    let transaction_dir = plan
+        .transaction_dir()
+        .ok_or_else(|| "update plan has no transaction directory".to_owned())?;
+    let path = transaction_dir.join("execution.claim");
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        #[cfg(target_os = "linux")]
+        options.custom_flags(0x2_0000); // O_NOFOLLOW
+        #[cfg(target_os = "macos")]
+        options.custom_flags(0x100); // O_NOFOLLOW
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let mut file = options.open(&path).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            "update transaction execution was already claimed and cannot be replayed".to_owned()
+        } else {
+            format!("failed to claim update transaction execution: {error}")
+        }
+    })?;
+    writeln!(file, "{}", plan.transaction_id)
+        .map_err(|error| format!("failed to write update execution claim: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("failed to sync update execution claim: {error}"))?;
+    Ok(path)
+}
+
+/// Persists a terminal failure even when progress output is unavailable, so
+/// the next invocation cannot replay an already attempted transaction.
 fn persist_failure(plan: &ApplyPlanV2, progress: &mut ProgressWriter<'_>, failure: V2Failure) {
     let _ = progress.publish(ApplyPhaseV1::Failed, &failure.message);
     let result = ApplyResultV2::failed(
@@ -470,15 +524,17 @@ fn persist_failure(plan: &ApplyPlanV2, progress: &mut ProgressWriter<'_>, failur
     );
 }
 
+/// Records failures that happen before the main execution path can persist a
+/// result, while never replacing an existing terminal transaction result.
 pub fn report_v2_failure(plan: &ApplyPlanV2, failure: &V2Failure) {
-    append_log(
-        plan,
-        &format!("failed ({:?}): {}", failure.code, failure.message),
-    );
-    // The execution path persists its result before returning.  This write is
+    // The execution path persists its result before returning. This write is
     // deliberately best-effort for failures that occurred before a lock was
     // acquired or while another invocation owns the transaction.
     if read_apply_result_v2(&plan.result_path).is_err() {
+        append_log(
+            plan,
+            &format!("failed ({:?}): {}", failure.code, failure.message),
+        );
         let result = ApplyResultV2::failed(
             plan.transaction_id,
             plan.current_version.clone(),
@@ -488,42 +544,6 @@ pub fn report_v2_failure(plan: &ApplyPlanV2, failure: &V2Failure) {
             failure.message.clone(),
         );
         let _ = write_apply_result_for_plan(plan, &result);
-    }
-}
-
-fn recover_after_launch_failure(
-    plan: &ApplyPlanV2,
-    progress: &mut ProgressWriter<'_>,
-    failure: V2Failure,
-) -> V2Failure {
-    let _ = progress.publish(
-        ApplyPhaseV1::RollingBack,
-        "Restoring the previous Gmark installation",
-    );
-    match rollback_platform(plan) {
-        Ok(()) => {
-            // Do not relaunch the old binary until the entire rollback has
-            // completed.  A mixed installation must never be advertised as
-            // recoverable.
-            match relaunch_previous_after_rollback(plan) {
-                Ok(()) => {
-                    persist_failure(plan, progress, failure.clone());
-                    failure
-                }
-                Err(error) => {
-                    let failure = failure.rollback_failed(format!(
-                        "rollback succeeded but old Gmark could not be relaunched: {error}"
-                    ));
-                    persist_failure(plan, progress, failure.clone());
-                    failure
-                }
-            }
-        }
-        Err(error) => {
-            let failure = failure.rollback_failed(error);
-            persist_failure(plan, progress, failure.clone());
-            failure
-        }
     }
 }
 
@@ -603,36 +623,10 @@ fn append_log(plan: &ApplyPlanV2, message: &str) {
     let _ = file.sync_all();
 }
 
-fn cleanup_backup(plan: &ApplyPlanV2) -> Result<(), String> {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        if fs::symlink_metadata(&plan.backup_path)
-            .map(|metadata| metadata.file_type().is_dir() && !metadata.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            fs::remove_dir_all(&plan.backup_path)
-                .map_err(|error| format!("failed to remove update backup: {error}"))?;
-        }
-        Ok(())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        match fs::symlink_metadata(&plan.backup_path) {
-            Ok(metadata)
-                if metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
-            {
-                fs::remove_file(&plan.backup_path)
-                    .map_err(|error| format!("failed to remove update backup: {error}"))?;
-            }
-            Ok(_) => return Err("update backup is not a regular file".to_owned()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("failed to inspect update backup: {error}")),
-        }
-        Ok(())
-    }
-}
-
-fn install_platform(plan: &ApplyPlanV2, artifact: &mut StagedApplyArtifact) -> Result<(), String> {
+fn install_platform(
+    plan: &ApplyPlanV2,
+    artifact: &mut StagedApplyArtifact,
+) -> Result<(), PlatformInstallFailure> {
     #[cfg(target_os = "windows")]
     {
         windows::install(plan, artifact)
@@ -648,27 +642,9 @@ fn install_platform(plan: &ApplyPlanV2, artifact: &mut StagedApplyArtifact) -> R
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = (plan, artifact);
-        Err("unsupported update platform".to_owned())
-    }
-}
-
-fn rollback_platform(plan: &ApplyPlanV2) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        windows::rollback(plan)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos::rollback(plan)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        linux::rollback(plan)
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        let _ = plan;
-        Err("unsupported update platform".to_owned())
+        Err(PlatformInstallFailure::uncommitted(
+            "unsupported update platform",
+        ))
     }
 }
 

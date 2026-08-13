@@ -13,6 +13,12 @@ use crate::updater::{UpdateCoordinator, UpdateState};
 
 type UpdateClickHandler = fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UpdateAccessibilityAction {
+    pub(crate) id: &'static str,
+    pub(crate) label: String,
+}
+
 impl Editor {
     pub(crate) fn request_check_updates(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         UpdateCoordinator::check(CheckOrigin::Manual, cx);
@@ -42,6 +48,33 @@ impl Editor {
         UpdateCoordinator::dismiss(cx);
     }
 
+    /// 复制完整诊断后再关闭弹层，让用户能把长路径和 helper 错误交给支持人员而不依赖文本选择能力。
+    fn on_update_copy_and_dismiss(
+        &mut self,
+        _: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_update_failure_and_dismiss(cx);
+    }
+
+    /// 键盘与鼠标共用同一复制路径，避免两种入口对是否关闭弹层产生不同语义。
+    fn copy_update_failure_and_dismiss(&mut self, cx: &mut Context<Self>) {
+        if let UpdateState::Failed { message, .. } = UpdateCoordinator::state(cx) {
+            cx.write_to_clipboard(ClipboardItem::new_string(message));
+        }
+        UpdateCoordinator::dismiss(cx);
+    }
+
+    fn on_update_open_manual_download(
+        &mut self,
+        _: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.open_url(manual_update_url(&UpdateCoordinator::state(cx)));
+    }
+
     fn on_update_open_release(
         &mut self,
         _: &ClickEvent,
@@ -59,13 +92,38 @@ impl Editor {
             "retry-update" => UpdateCoordinator::retry(cx),
             "install-update" => UpdateCoordinator::install_and_restart(cx),
             "dismiss-update" | "later-update" => UpdateCoordinator::dismiss(cx),
+            "copy-update-error" => self.copy_update_failure_and_dismiss(cx),
             "open-update-release" => {
                 if let Some(release) = UpdateCoordinator::state(cx).release() {
                     cx.open_url(&release.release_url);
                 }
             }
+            "open-update-manual-download" => {
+                cx.open_url(manual_update_url(&UpdateCoordinator::state(cx)));
+            }
             _ => {}
         }
+    }
+
+    /// 从权威状态生成与可见按钮相同的可访问性动作，避免自动化和辅助技术点击隐藏的测试专用入口。
+    pub(crate) fn update_accessibility_actions(&self, cx: &App) -> Vec<UpdateAccessibilityAction> {
+        let Some(state) = UpdateCoordinator::try_state(cx).filter(UpdateState::is_visible) else {
+            return Vec::new();
+        };
+        update_action_descriptors(&state, &UpdateLabels::for_app(cx))
+    }
+
+    /// 可访问性树只分主次两个稳定槽位；动作执行仍复用正常 UI 命令而不复制 updater 状态转换。
+    pub(crate) fn activate_update_accessibility_action(
+        &mut self,
+        slot: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let actions = self.update_accessibility_actions(cx);
+        let Some(action) = actions.get(slot) else {
+            return;
+        };
+        self.activate_update_button(action.id, cx);
     }
 
     pub(crate) fn handle_update_panel_key(
@@ -246,16 +304,6 @@ impl Editor {
                     Self::on_update_dismiss,
                 ));
             }
-            UpdateState::AwaitingQuit { release, .. } => {
-                title = format!("{} v{}", labels.preparing_restart, release.version);
-                detail = labels.waiting_exit.to_owned();
-                progress = Some(1.0);
-            }
-            UpdateState::Installing { release } => {
-                title = format!("{} v{}", labels.installing, release.version);
-                detail = labels.installing_detail.to_owned();
-                progress = Some(1.0);
-            }
             UpdateState::Succeeded { version, message } => {
                 title = format!("{} v{}", labels.updated, version);
                 detail = message.clone();
@@ -267,7 +315,9 @@ impl Editor {
                 ));
             }
             UpdateState::Failed {
-                message, retryable, ..
+                message,
+                retryable,
+                release,
             } => {
                 title = labels.failed.to_owned();
                 detail = message.clone();
@@ -277,12 +327,29 @@ impl Editor {
                         labels.retry.to_owned(),
                         Self::on_update_retry,
                     ));
+                    secondary = Some((
+                        "copy-update-error",
+                        labels.copy_close.to_owned(),
+                        Self::on_update_copy_and_dismiss,
+                    ));
+                } else if release.is_some() || detail.contains("manual download:") {
+                    primary = Some((
+                        "open-update-manual-download",
+                        labels.open_release.to_owned(),
+                        Self::on_update_open_manual_download,
+                    ));
+                    secondary = Some((
+                        "copy-update-error",
+                        labels.copy_close.to_owned(),
+                        Self::on_update_copy_and_dismiss,
+                    ));
+                } else {
+                    secondary = Some((
+                        "copy-update-error",
+                        labels.copy_close.to_owned(),
+                        Self::on_update_copy_and_dismiss,
+                    ));
                 }
-                secondary = Some((
-                    "dismiss-update",
-                    labels.close.to_owned(),
-                    Self::on_update_dismiss,
-                ));
             }
             UpdateState::Idle => return None,
         }
@@ -371,6 +438,8 @@ impl Editor {
                     // 发布说明和系统信任提示都属于关键更新信息；长内容应可滚动，不能静默裁掉。
                     .max_h(px(220.0))
                     .overflow_y_scroll()
+                    // 错误文本含日志路径和手动入口，换行后才能在窄窗口完整复制阅读。
+                    .whitespace_normal()
                     .text_size(px(t.dialog_body_size))
                     .line_height(rems(t.text_line_height))
                     .text_color(c.workbench.text_secondary)
@@ -410,13 +479,110 @@ fn update_button_slots(state: &UpdateState) -> (bool, bool) {
             (true, true)
         }
         UpdateState::Downloading { .. } => (true, false),
-        UpdateState::Failed { retryable, .. } => (true, *retryable),
-        UpdateState::Idle
-        | UpdateState::Checking { .. }
-        | UpdateState::Verifying { .. }
-        | UpdateState::AwaitingQuit { .. }
-        | UpdateState::Installing { .. } => (false, false),
+        UpdateState::Failed {
+            message,
+            retryable,
+            release,
+        } => (
+            true,
+            *retryable || release.is_some() || message.contains("manual download:"),
+        ),
+        UpdateState::Idle | UpdateState::Checking { .. } | UpdateState::Verifying { .. } => {
+            (false, false)
+        }
     }
+}
+
+/// 统一主次动作及标签顺序，保证 UIA、键盘焦点槽和屏幕上的按钮不会随重构漂移。
+fn update_action_descriptors(
+    state: &UpdateState,
+    labels: &UpdateLabels,
+) -> Vec<UpdateAccessibilityAction> {
+    let mut actions = Vec::with_capacity(2);
+    match state {
+        UpdateState::UpToDate { .. } | UpdateState::Succeeded { .. } => {
+            actions.push(UpdateAccessibilityAction {
+                id: "dismiss-update",
+                label: labels.ok.to_owned(),
+            });
+        }
+        UpdateState::Available(_) => {
+            actions.push(UpdateAccessibilityAction {
+                id: "later-update",
+                label: labels.later.to_owned(),
+            });
+            let can_install = UpdateCoordinator::can_self_install();
+            actions.push(UpdateAccessibilityAction {
+                id: if can_install {
+                    "download-update"
+                } else {
+                    "open-update-release"
+                },
+                label: if can_install {
+                    labels.download.to_owned()
+                } else {
+                    labels.open_release.to_owned()
+                },
+            });
+        }
+        UpdateState::Downloading { .. } => actions.push(UpdateAccessibilityAction {
+            id: "pause-update",
+            label: labels.pause.to_owned(),
+        }),
+        UpdateState::Paused { .. } => {
+            actions.push(UpdateAccessibilityAction {
+                id: "later-update",
+                label: labels.later.to_owned(),
+            });
+            actions.push(UpdateAccessibilityAction {
+                id: "resume-update",
+                label: labels.resume.to_owned(),
+            });
+        }
+        UpdateState::Ready { .. } => {
+            actions.push(UpdateAccessibilityAction {
+                id: "later-update",
+                label: labels.later.to_owned(),
+            });
+            actions.push(UpdateAccessibilityAction {
+                id: "install-update",
+                label: labels.restart_install.to_owned(),
+            });
+        }
+        UpdateState::Failed {
+            message,
+            retryable,
+            release,
+        } => {
+            actions.push(UpdateAccessibilityAction {
+                id: "copy-update-error",
+                label: labels.copy_close.to_owned(),
+            });
+            if *retryable {
+                actions.push(UpdateAccessibilityAction {
+                    id: "retry-update",
+                    label: labels.retry.to_owned(),
+                });
+            } else if release.is_some() || message.contains("manual download:") {
+                actions.push(UpdateAccessibilityAction {
+                    id: "open-update-manual-download",
+                    label: labels.open_release.to_owned(),
+                });
+            }
+        }
+        UpdateState::Idle | UpdateState::Checking { .. } | UpdateState::Verifying { .. } => {}
+    }
+    actions
+}
+
+/// Prefers the signed release page when it is still attached to the failure;
+/// restored terminal results fall back to the stable repository downloads.
+fn manual_update_url(state: &UpdateState) -> &str {
+    state
+        .release()
+        .map(|release| release.release_url.as_str())
+        .filter(|url| !url.is_empty())
+        .unwrap_or("https://github.com/kongweiguang/gmark/releases")
 }
 
 struct UpdateLabels {
@@ -429,10 +595,6 @@ struct UpdateLabels {
     verifying_detail: &'static str,
     ready: &'static str,
     ready_detail: &'static str,
-    preparing_restart: &'static str,
-    installing: &'static str,
-    waiting_exit: &'static str,
-    installing_detail: &'static str,
     failed: &'static str,
     updated: &'static str,
     download: &'static str,
@@ -442,7 +604,7 @@ struct UpdateLabels {
     restart_install: &'static str,
     later: &'static str,
     ok: &'static str,
-    close: &'static str,
+    copy_close: &'static str,
     unsigned_warning: &'static str,
     package_manager_guidance: &'static str,
     open_release: &'static str,
@@ -465,10 +627,6 @@ impl UpdateLabels {
                 verifying_detail: "正在校验更新包完整性与签名…",
                 ready: "更新已准备好",
                 ready_detail: "保存工作后即可重启并完成安装。",
-                preparing_restart: "准备重启",
-                installing: "正在安装",
-                waiting_exit: "正在等待所有窗口安全退出…",
-                installing_detail: "安装事务已交给独立升级进程。",
                 failed: "更新失败",
                 updated: "更新完成",
                 download: "下载更新",
@@ -478,7 +636,7 @@ impl UpdateLabels {
                 restart_install: "重启并安装",
                 later: "稍后",
                 ok: "好",
-                close: "关闭",
+                copy_close: "复制并关闭",
                 unsigned_warning: "\n此版本暂未经过系统代码签名，Windows SmartScreen 或 macOS Gatekeeper 可能要求确认。",
                 package_manager_guidance: "\n当前安装不是可写 AppImage，请使用系统包管理器更新 DEB，或从发布页手动下载。",
                 open_release: "打开发布页",
@@ -494,10 +652,6 @@ impl UpdateLabels {
                 verifying_detail: "Checking update integrity and signature…",
                 ready: "Update ready",
                 ready_detail: "Save your work, then restart to finish installing.",
-                preparing_restart: "Preparing to restart",
-                installing: "Installing",
-                waiting_exit: "Waiting for all windows to close safely…",
-                installing_detail: "The update transaction has been handed to the update process.",
                 failed: "Update failed",
                 updated: "Update complete",
                 download: "Download Update",
@@ -507,7 +661,7 @@ impl UpdateLabels {
                 restart_install: "Restart and Install",
                 later: "Later",
                 ok: "OK",
-                close: "Close",
+                copy_close: "Copy & Close",
                 unsigned_warning: "\nThis release is not yet code-signed. Windows SmartScreen or macOS Gatekeeper may ask for confirmation.",
                 package_manager_guidance: "\nThis installation is not a writable AppImage. Update DEB with your package manager or download manually from the release page.",
                 open_release: "Open Release Page",

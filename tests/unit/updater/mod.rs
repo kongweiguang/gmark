@@ -123,109 +123,6 @@ fn busy_states_cannot_be_dismissed_or_restarted() {
         }
         .accepts(UpdateCommand::Dismiss)
     );
-    assert!(
-        !UpdateState::AwaitingQuit {
-            release: release.clone(),
-            artifact_path: PathBuf::from("artifact.ready"),
-        }
-        .accepts(UpdateCommand::Dismiss)
-    );
-    assert!(!UpdateState::Installing { release }.accepts(UpdateCommand::Dismiss));
-}
-
-#[test]
-fn pending_install_cancellation_restores_the_ready_payload() {
-    let root = tempfile::tempdir().unwrap();
-    let release = release_fixture();
-    let artifact_path = root.path().join("artifact.ready");
-    let cancellation_path = root.path().join("cancel-install");
-    let mut service = UpdateService::new(root.path().to_path_buf(), true);
-    service.pending_install = Some(PendingInstall {
-        release: release.clone(),
-        artifact_path: artifact_path.clone(),
-        plan: ApplyPlanV1 {
-            schema_version: ApplyPlanV1::SCHEMA_VERSION,
-            parent_pid: 0,
-            current_version: release.current_version.clone(),
-            target_version: release.version.clone(),
-            artifact_path: artifact_path.clone(),
-            artifact_url: release.artifact_url.clone(),
-            artifact_size: release.artifact_size,
-            artifact_sha256: release.artifact_sha256.clone(),
-            artifact_format: release.artifact_format.as_protocol_name().to_owned(),
-            signed_envelope_path: root.path().join("manifest.envelope.json"),
-            target_path: root.path().join("gmark.AppImage"),
-            backup_path: root.path().join("gmark.AppImage.gmark-update-backup"),
-            relaunch_path: root.path().join("gmark.AppImage"),
-            acknowledgement_path: root.path().join("startup-ack"),
-            cancellation_path: cancellation_path.clone(),
-            result_path: root.path().join("last-result.json"),
-            helper_log_path: root.path().join("last-helper.log"),
-        },
-    });
-    service.state = UpdateState::Installing {
-        release: release.clone(),
-    };
-
-    assert_eq!(service.restore_ready_after_cancel(), Ok(true));
-    assert_eq!(service.restore_ready_after_cancel(), Ok(false));
-
-    assert!(cancellation_path.is_file());
-    assert_eq!(std::fs::read(&cancellation_path).unwrap(), b"cancelled\n");
-    assert!(matches!(
-        service.state,
-        UpdateState::Ready {
-            artifact_path: ref path,
-            ..
-        } if path == &artifact_path
-    ));
-}
-
-#[test]
-fn failed_pending_install_cancellation_does_not_restore_ready() {
-    let root = tempfile::tempdir().unwrap();
-    let release = release_fixture();
-    let artifact_path = root.path().join("artifact.ready");
-    let blocked_parent = root.path().join("not-a-directory");
-    std::fs::write(&blocked_parent, b"not a directory").unwrap();
-    let mut service = UpdateService::new(root.path().to_path_buf(), true);
-    service.pending_install = Some(PendingInstall {
-        release: release.clone(),
-        artifact_path: artifact_path.clone(),
-        plan: ApplyPlanV1 {
-            schema_version: ApplyPlanV1::SCHEMA_VERSION,
-            parent_pid: 0,
-            current_version: release.current_version.clone(),
-            target_version: release.version.clone(),
-            artifact_path: artifact_path.clone(),
-            artifact_url: release.artifact_url.clone(),
-            artifact_size: release.artifact_size,
-            artifact_sha256: release.artifact_sha256.clone(),
-            artifact_format: release.artifact_format.as_protocol_name().to_owned(),
-            signed_envelope_path: root.path().join("manifest.envelope.json"),
-            target_path: root.path().join("gmark.AppImage"),
-            backup_path: root.path().join("gmark.AppImage.gmark-update-backup"),
-            relaunch_path: root.path().join("gmark.AppImage"),
-            acknowledgement_path: root.path().join("startup-ack"),
-            cancellation_path: blocked_parent.join("cancel-install"),
-            result_path: root.path().join("last-result.json"),
-            helper_log_path: root.path().join("last-helper.log"),
-        },
-    });
-    service.state = UpdateState::Installing {
-        release: release.clone(),
-    };
-
-    assert!(service.restore_ready_after_cancel().is_err());
-    assert!(matches!(
-        service.state,
-        UpdateState::Failed {
-            release: Some(_),
-            retryable: false,
-            ..
-        }
-    ));
-    assert!(service.pending_install.is_some());
 }
 
 #[test]
@@ -260,7 +157,7 @@ fn unknown_legacy_apply_result_status_is_presented_as_failed() {
             release: None,
             message,
             retryable: false,
-        }) if message == "legacy result"
+        }) if message.starts_with("legacy result; manual download:")
     ));
 }
 
@@ -391,6 +288,60 @@ fn v2_recovery_action_controls_retryability() {
 }
 
 #[test]
+fn v2_failure_keeps_copyable_detail_and_recovery_locations() {
+    let detail = "installer failure ".repeat(256);
+    let result = gmark_update_core::ApplyResultV2::failed(
+        uuid::Uuid::new_v4(),
+        "1.0.0",
+        "1.1.0",
+        gmark_update_core::ApplyFailureCode::InstallerFailed,
+        gmark_update_core::RecoveryAction::Manual,
+        detail.clone(),
+    );
+
+    let UpdateState::Failed { message, .. } = state_from_v2_result(&result) else {
+        panic!("expected a failed update state");
+    };
+    assert!(message.contains(&detail));
+    assert!(message.contains("manual download: https://github.com/kongweiguang/gmark/releases"));
+    assert!(message.contains("helper log:"));
+    assert!(message.contains("installer log:"));
+}
+
+/// Exercises the relaunched-process path directly because the helper writes
+/// its terminal result only after the new process has acknowledged startup.
+#[test]
+fn relaunched_transaction_restores_only_its_bound_terminal_result() {
+    let root = tempfile::tempdir().unwrap();
+    let transaction_id = uuid::Uuid::new_v4();
+    let transaction = root
+        .path()
+        .join(gmark_update_core::ApplyPlanV2::TRANSACTIONS_DIR_NAME)
+        .join(transaction_id.hyphenated().to_string());
+    std::fs::create_dir_all(&transaction).unwrap();
+    let result = gmark_update_core::ApplyResultV2::failed(
+        transaction_id,
+        "1.0.0",
+        "1.1.0",
+        gmark_update_core::ApplyFailureCode::RelaunchFailed,
+        gmark_update_core::RecoveryAction::Manual,
+        "new version was installed",
+    );
+    gmark_update_core::write_apply_result_v2(
+        transaction.join(gmark_update_core::ApplyPlanV2::RESULT_FILE_NAME),
+        &result,
+    )
+    .unwrap();
+
+    let UpdateState::Failed { message, .. } = restored_transaction_state(&transaction).unwrap()
+    else {
+        panic!("expected the bound transaction failure");
+    };
+    assert!(message.contains("new version was installed"));
+    assert!(message.contains(transaction.to_string_lossy().as_ref()));
+}
+
+#[test]
 fn transaction_directory_claim_is_create_new_and_releasable() {
     let root = tempfile::tempdir().unwrap();
     let version = root.path().join("v1.1.0");
@@ -479,43 +430,6 @@ fn redownload_discards_only_the_verified_source_payload() {
     assert!(!artifact.exists());
     assert!(!envelope.exists());
     assert!(attempt.is_dir());
-}
-
-#[test]
-fn v2_result_and_progress_reads_require_the_transaction_id() {
-    let root = tempfile::tempdir().unwrap();
-    let plan = gmark_update_core::ApplyPlanV2::from_v1(
-        &v1_plan_fixture(root.path()),
-        uuid::Uuid::new_v4(),
-    );
-    let transaction = plan.transaction_dir().unwrap();
-    std::fs::create_dir_all(transaction).unwrap();
-    let result = gmark_update_core::ApplyResultV2::failed(
-        plan.transaction_id,
-        plan.current_version.clone(),
-        plan.target_version.clone(),
-        gmark_update_core::ApplyFailureCode::InstallerFailed,
-        gmark_update_core::RecoveryAction::ReattemptInstall,
-        "failed",
-    );
-    gmark_update_core::write_apply_result_v2(&plan.result_path, &result).unwrap();
-    assert_eq!(read_v2_result(&plan), Some(result));
-    let mut wrong = gmark_update_core::ApplyPlanV2::from_v1(
-        &v1_plan_fixture(root.path()),
-        uuid::Uuid::new_v4(),
-    );
-    wrong.result_path = plan.result_path.clone();
-    assert!(read_v2_result(&wrong).is_none());
-}
-
-#[test]
-fn helper_timeout_is_exactly_the_waiting_lock_window() {
-    let started = Instant::now();
-    assert!(!helper_timeout_expired(
-        started,
-        started + HELPER_TIMEOUT - Duration::from_millis(1)
-    ));
-    assert!(helper_timeout_expired(started, started + HELPER_TIMEOUT));
 }
 
 #[test]

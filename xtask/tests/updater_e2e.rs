@@ -41,6 +41,7 @@ impl Drop for Fixture {
     }
 }
 
+/// Locks the parser contract to the paths needed for V2 handoff and diagnostics.
 #[test]
 fn parser_accepts_isolated_artifact_and_key_contract() {
     let arguments = [
@@ -68,6 +69,10 @@ fn parser_accepts_isolated_artifact_and_key_contract() {
         "http://127.0.0.1:48123/update-manifest-v2.json",
         "--driver",
         "driver.ps1",
+        "--lifetime-lock",
+        "updates/lifetime.lock",
+        "--helper-log",
+        "updates/helper.log",
         "--decision",
         "discard",
         "--timeout",
@@ -92,6 +97,14 @@ fn parser_accepts_isolated_artifact_and_key_contract() {
     assert_eq!(
         parsed.options.signing_private_key.as_deref(),
         Some(Path::new("keys/test.pem"))
+    );
+    assert_eq!(
+        parsed.options.lifetime_lock.as_deref(),
+        Some(Path::new("updates/lifetime.lock"))
+    );
+    assert_eq!(
+        parsed.options.helper_log.as_deref(),
+        Some(Path::new("updates/helper.log"))
     );
 }
 
@@ -141,6 +154,7 @@ fn unsaved_decisions_have_distinct_process_contracts() {
     }
 }
 
+/// Ensures all derived markers stay in the isolated update root that the driver receives.
 #[test]
 fn path_resolution_keeps_markers_inside_update_root() {
     let fixture = Fixture::new();
@@ -152,6 +166,8 @@ fn path_resolution_keeps_markers_inside_update_root() {
     };
     let paths = resolve_paths(&options, &fixture.root).expect("isolated paths");
     assert!(paths.acknowledgement.starts_with(&updates));
+    assert!(paths.lifetime_lock.starts_with(&updates));
+    assert!(paths.helper_log.starts_with(&updates));
     assert!(paths.helper_pid.starts_with(&updates));
     assert_eq!(paths.ui_check_root, ui_check);
     assert_ne!(paths.ui_check_root, paths.updates_root);
@@ -200,6 +216,7 @@ fn help_and_dry_run_are_explicit_non_mutating_modes() {
     assert!(updates.join(".gmark-updater-e2e/logs").is_dir());
 }
 
+/// Keeps fixture failures actionable by requiring result and log locations in the diagnostic.
 #[test]
 fn fixture_mode_never_reports_an_unexecuted_production_pass() {
     let fixture = Fixture::new();
@@ -211,4 +228,8 @@ fn fixture_mode_never_reports_an_unexecuted_production_pass() {
         .expect_err("fixture must not be reported as a production pass");
     assert!(error.contains("contract-only"));
     assert!(error.contains("logs="));
+    assert!(error.contains("result="));
+    assert!(error.contains("helper-log="));
+    assert!(error.contains("installer-log="));
+    assert!(error.contains("manual-download="));
 }

@@ -86,6 +86,21 @@ impl Editor {
                         document_host.update(cx, |view, cx| view.activate_accessibility_error(cx));
                     }
                 }
+                crate::accessibility::UPDATE_SECONDARY_ID => {
+                    self.activate_update_accessibility_action(0, cx)
+                }
+                crate::accessibility::UPDATE_PRIMARY_ID => {
+                    self.activate_update_accessibility_action(1, cx)
+                }
+                crate::accessibility::CLOSE_CANCEL_ID => {
+                    self.on_cancel_close_dialog(&ClickEvent::default(), window, cx)
+                }
+                crate::accessibility::CLOSE_DISCARD_ID => {
+                    self.on_discard_and_close(&ClickEvent::default(), window, cx)
+                }
+                crate::accessibility::CLOSE_SAVE_ID => {
+                    self.on_save_and_close(&ClickEvent::default(), window, cx)
+                }
                 target => {
                     if let Some(line) = crate::accessibility::source_line_for_fold_node(target) {
                         if let Some(document_host) = self.document_host.clone() {

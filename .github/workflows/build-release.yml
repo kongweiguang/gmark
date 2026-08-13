@@ -33,12 +33,7 @@ on:
         default: false
         type: boolean
       test_release:
-        description: "Publish or refresh this tag as a prerelease for updater validation"
-        required: true
-        default: false
-        type: boolean
-      rerun_failed_release:
-        description: "Explicitly rebuild and replace an existing same-version release after updater validation fails; skips repeated quality gates"
+        description: "Publish this new SemVer prerelease tag for updater validation"
         required: true
         default: false
         type: boolean
@@ -82,7 +77,7 @@ jobs:
   quality:
     name: Windows release quality gate
     needs: validate
-    if: ${{ !inputs.test_release && !inputs.rerun_failed_release }}
+    if: ${{ !inputs.test_release }}
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
@@ -108,7 +103,7 @@ jobs:
   updater-quality:
     name: Focused updater test-release gate
     needs: validate
-    if: ${{ inputs.test_release && !inputs.rerun_failed_release }}
+    if: ${{ inputs.test_release }}
     runs-on: windows-2025
     # A cold Windows runner spends about 45 minutes compiling and linking the
     # GPUI binaries before the focused tests finish. Keep enough budget for
@@ -326,55 +321,6 @@ jobs:
           )
           for file in "${expected[@]}"; do test -f "dist/$file"; done
           (cd dist && sha256sum "${expected[@]}" > checksums-gmark-installers.txt)
-      - name: Create release tag
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: ${{ inputs.release_title }}
-          RERUN_FAILED_RELEASE: ${{ inputs.rerun_failed_release }}
-        run: |
-          set -euo pipefail
-          git fetch --tags --force origin
-          current="$(git rev-parse HEAD)"
-          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-            tagged="$(git rev-list -n 1 "$RELEASE_TAG")"
-            if [[ "$tagged" != "$current" ]]; then
-              if [[ "$RERUN_FAILED_RELEASE" != true ]]; then
-                echo "tag $RELEASE_TAG already points to $tagged; explicit failed-release rerun is required"
-                exit 1
-              fi
-              release_kind="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq 'if .prerelease then "prerelease" else "stable" end' 2>/dev/null || echo missing)"
-              echo "explicit same-version rerun: moving $RELEASE_TAG from $tagged to $current (existing release: $release_kind)"
-              git config user.name github-actions[bot]
-              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-              git tag -f -a "$RELEASE_TAG" -m "${RELEASE_TITLE:-gmark $RELEASE_TAG}" "$current"
-              git push --force origin "refs/tags/$RELEASE_TAG"
-            fi
-          else
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git tag -a "$RELEASE_TAG" -m "${RELEASE_TITLE:-gmark $RELEASE_TAG}" "$current"
-            git push origin "$RELEASE_TAG"
-          fi
-      - name: Ensure test prerelease exists before mutable release steps
-        if: ${{ inputs.test_release }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_TITLE: ${{ inputs.release_title }}
-        run: |
-          set -euo pipefail
-          title="${RELEASE_TITLE:-gmark $RELEASE_TAG test release}"
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            prerelease="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .prerelease)"
-            test "$prerelease" = true
-            gh release edit "$RELEASE_TAG" --title "$title" --prerelease=true --latest=false
-          else
-            gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false \
-              --title "$title" --notes "Updater validation prerelease; assets are still being prepared."
-          fi
       - name: Create and verify signed manifests
         shell: bash
         env:
@@ -412,7 +358,26 @@ jobs:
           fi
           python scripts/release-artifact-manifest.py "${release[@]}"
           python scripts/release-artifact-manifest.py verify --manifest dist/release-artifacts.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --channel "$RELEASE_CHANNEL" --rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
-      - name: Publish or update GitHub Release
+      - name: Create release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+        run: |
+          set -euo pipefail
+          git fetch --tags origin
+          current="$(git rev-parse HEAD)"
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            tagged="$(git rev-list -n 1 "$RELEASE_TAG")"
+            echo "release tag $RELEASE_TAG already exists at $tagged; tags are immutable, use a new SemVer or RC tag"
+            exit 1
+          fi
+          # 只在所有本地产物与签名清单验证完成后创建不可变标签，降低失败时遗留空标签的概率。
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a "$RELEASE_TAG" -m "${RELEASE_TITLE:-gmark $RELEASE_TAG}" "$current"
+          git push origin "$RELEASE_TAG"
+      - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -443,13 +408,9 @@ jobs:
           prerelease=false
           if [[ "$TEST_RELEASE" == true || "$RELEASE_TAG" == *-* ]]; then prerelease=true; fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber
-            latest=true
-            if [[ "$prerelease" == true ]]; then latest=false; fi
-            gh release edit "$RELEASE_TAG" --title "$title" --notes-file "$notes" \
-              --prerelease="$prerelease" --latest="$latest"
-          else
-            args=("$RELEASE_TAG" dist/* --title "$title" --notes-file "$notes" --verify-tag)
-            if [[ "$prerelease" == true ]]; then args+=(--prerelease --latest=false); else args+=(--latest); fi
-            gh release create "${args[@]}"
+            echo "GitHub release $RELEASE_TAG already exists; published releases and assets are immutable, use a new SemVer or RC tag"
+            exit 1
           fi
+          args=("$RELEASE_TAG" dist/* --title "$title" --notes-file "$notes" --verify-tag)
+          if [[ "$prerelease" == true ]]; then args+=(--prerelease --latest=false); else args+=(--latest); fi
+          gh release create "${args[@]}"

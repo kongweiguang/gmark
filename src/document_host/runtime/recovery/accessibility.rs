@@ -104,6 +104,8 @@ impl DocumentHost {
                 .to_string(),
             error,
             busy: self.saving || self.reloading || self.index.is_none() || self.search_running,
+            update_actions: Vec::new(),
+            close_actions: Vec::new(),
             search_visible: self.search_visible,
             navigation_visible: self.navigation_visible,
             caret: Some(self.accessibility_caret(cx)),

@@ -11,7 +11,9 @@ pub(crate) struct UpdateCoordinator(Entity<UpdateService>);
 impl Global for UpdateCoordinator {}
 
 impl UpdateCoordinator {
-    pub(crate) fn init(auto_check: bool, cx: &mut App) {
+    /// Publishes the updater without monitoring installation in the old
+    /// process; a relaunched process may observe only its own terminal result.
+    pub(crate) fn init(auto_check: bool, relaunched_transaction: Option<PathBuf>, cx: &mut App) {
         let updates_root = match update_cache_root() {
             Ok(root) => root,
             Err(error) => {
@@ -25,26 +27,58 @@ impl UpdateCoordinator {
                 return;
             }
         };
-        let service = cx.new(|_| UpdateService::new(updates_root, auto_check));
+        #[cfg(feature = "updater-e2e")]
+        let e2e_failure = std::env::var_os("GMARK_UPDATER_E2E_FAILURE")
+            .and_then(|value| value.into_string().ok())
+            .filter(|value| !value.is_empty());
+        #[cfg(feature = "updater-e2e")]
+        let has_e2e_failure = e2e_failure.is_some();
+        let service = cx.new(move |_| {
+            let service = UpdateService::new(updates_root, auto_check);
+            #[cfg(feature = "updater-e2e")]
+            {
+                let mut service = service;
+                if let Some(message) = e2e_failure {
+                    // 首帧前写入确定性失败，避免视觉验收依赖一次额外输入或后台调度时序。
+                    service.state = UpdateState::Failed {
+                        release: None,
+                        message,
+                        retryable: false,
+                    };
+                }
+                service
+            }
+            #[cfg(not(feature = "updater-e2e"))]
+            service
+        });
         cx.set_global(Self(service.clone()));
 
-        let result_service = service.clone();
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            // 新进程会先写启动握手，helper 可能在安装器或回滚结束后才提交结果。
-            // 保持轻量监控直到观察到终态，避免耗时安装超过固定 15 秒后永久漏报。
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                let found = result_service
-                    .update(cx, |service, cx| service.refresh_apply_result(cx))
-                    .unwrap_or(false);
-                if found {
-                    break;
+        if let Some(transaction_dir) = relaunched_transaction {
+            let result_service = service.clone();
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(200))
+                        .await;
+                    let found = result_service
+                        .update(cx, |service, cx| {
+                            service.refresh_relaunched_transaction(&transaction_dir, cx)
+                        })
+                        .unwrap_or(false);
+                    if found {
+                        break;
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
 
-        if auto_check && service.read(cx).automatic_check_due() {
+        // 确定性失败场景必须保持到验收驱动完成操作；自动检查不能在十秒后把面板重置为 Idle。
+        #[cfg(feature = "updater-e2e")]
+        let automatic_check_allowed = !has_e2e_failure;
+        #[cfg(not(feature = "updater-e2e"))]
+        let automatic_check_allowed = true;
+        if auto_check && automatic_check_allowed && service.read(cx).automatic_check_due() {
             cx.spawn(async move |cx: &mut AsyncApp| {
                 cx.background_executor().timer(AUTO_CHECK_DELAY).await;
                 let _ = service.update(cx, |service, cx| {
@@ -81,10 +115,6 @@ impl UpdateCoordinator {
                 downloaded.saturating_mul(100) / total
             )),
             UpdateState::Verifying { .. } => Some("Verifying software update".to_owned()),
-            UpdateState::AwaitingQuit { .. } => {
-                Some("Waiting for all windows to close safely".to_owned())
-            }
-            UpdateState::Installing { .. } => Some("Installing software update".to_owned()),
             _ => None,
         }
     }
@@ -147,6 +177,8 @@ impl UpdateCoordinator {
         entity.update(cx, |service, _cx| service.auto_check_enabled = enabled);
     }
 
+    /// Delegates approval to the normal quit flow so dirty windows can veto
+    /// without creating a helper transaction or consuming the ready artifact.
     pub(crate) fn install_and_restart(cx: &mut App) {
         let Some(entity) = cx
             .try_global::<Self>()
@@ -154,19 +186,14 @@ impl UpdateCoordinator {
         else {
             return;
         };
-        if !entity.update(cx, |service, cx| service.begin_awaiting_quit(cx)) {
+        if !entity.update(cx, |service, _cx| {
+            service.state.accepts(UpdateCommand::InstallAndRestart)
+        }) {
             return;
         }
-
-        // Preparing the helper before the editor has approved exit leaves a
-        // live parent process in the plan when a dirty window vetoes quit.
-        // `request_update_quit_application` defers window traversal until the
-        // current editor callback has ended.
-        if crate::app_menu::request_update_quit_application(cx)
-            != crate::app_menu::QuitRequestOutcome::Scheduled
-        {
-            entity.update(cx, |service, cx| service.cancel_pending_install(cx));
-        }
+        // The quit coordinator performs the normal multi-window save/discard
+        // flow first; only its approved handoff callback may create a plan.
+        let _ = crate::app_menu::request_update_quit_application(cx);
     }
 
     /// Commits the V2 helper handoff after the quit coordinator has approved
@@ -183,25 +210,9 @@ impl UpdateCoordinator {
         entity.update(cx, |service, cx| service.prepare_install(cx))
     }
 
-    /// 未保存对话框取消退出时，必须先撤销尚未发生副作用的 helper 事务。
+    /// 保留旧编辑器回调的兼容入口；退出意图本身由 QuitCoordinator 撤销，
+    /// 因而这里不再维护或取消 updater 镜像事务。
     pub(crate) fn cancel_pending_install(cx: &mut App) {
-        let Some(entity) = cx
-            .try_global::<Self>()
-            .map(|coordinator| coordinator.0.clone())
-        else {
-            return;
-        };
-        entity.update(cx, |service, cx| service.cancel_pending_install(cx));
-    }
-
-    /// 未保存文档处理完并关闭一个窗口后，继续检查剩余窗口，最终退出主进程让 helper 接管。
-    // 原因：保存完成回调仍保留此兼容入口；当所有调用直接推进统一 QuitCoordinator 后移除。
-    #[allow(dead_code)]
-    pub(crate) fn continue_pending_install_quit(cx: &mut App) {
-        // Kept as a compatibility entry point for save completion callbacks;
-        // both normal quit and update restart now advance through one
-        // coordinator, and the helper is only handed off once all windows are
-        // approved.
-        crate::app_menu::continue_pending_quit(cx);
+        let _ = cx;
     }
 }

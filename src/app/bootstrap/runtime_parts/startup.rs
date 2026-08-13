@@ -4,9 +4,11 @@
 
 use super::*;
 
-/// 每个编辑器窗口监听自身外观；只有 system 模式会真正更新全局主题。
+/// 每个编辑器窗口监听全局更新状态和自身外观，避免后台进度变化停留在旧画面。
 fn install_system_theme_observer(cx: &mut App) {
     cx.observe_new::<editor::Editor>(|_, window, cx| {
+        let update_service = updater::UpdateCoordinator::entity(cx);
+        cx.observe(&update_service, |_, _, cx| cx.notify()).detach();
         let Some(window) = window else {
             return;
         };
@@ -99,6 +101,30 @@ fn open_startup_window(cx: &mut App, startup_open: config::StartupOpenPreference
     if let Err(error) = open_editor_window(cx, String::new(), None) {
         eprintln!("failed to open editor window: {error}");
     }
+}
+
+/// 只有启动确认已经安全落盘后才绑定终态监听，避免无效 capability 让新进程永久轮询不存在的事务结果。
+fn acknowledge_relaunched_update(
+    acknowledgement: &Path,
+    capability: Option<&str>,
+) -> Option<PathBuf> {
+    let updates_root = match crate::updater::update_cache_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("failed to resolve update cache root for startup acknowledgement: {error:#}");
+            return None;
+        }
+    };
+    if let Err(error) = write_update_acknowledgement(
+        acknowledgement,
+        &updates_root,
+        capability,
+        env!("CARGO_PKG_VERSION"),
+    ) {
+        eprintln!("failed to acknowledge applied update: {error}");
+        return None;
+    }
+    acknowledgement.parent().map(Path::to_path_buf)
 }
 
 // 原因：集中保留平台生命周期编排，拆分模块只改变代码归属而不改变初始化顺序。
@@ -224,27 +250,17 @@ pub(crate) fn run_app() {
         );
         DocumentService::init(cx);
         net::install_http_client(cx);
-        updater::UpdateCoordinator::init(preferences.auto_check_updates, cx);
+        let relaunched_update_transaction = update_acknowledgement.as_deref().and_then(|path| {
+            acknowledge_relaunched_update(path, update_acknowledgement_capability.as_deref())
+        });
+        updater::UpdateCoordinator::init(
+            preferences.auto_check_updates,
+            relaunched_update_transaction,
+            cx,
+        );
         init_editor(cx, &preferences.keybindings);
         init_app_menu(cx);
         install_system_theme_observer(cx);
-        if let Some(path) = update_acknowledgement.as_ref() {
-            match crate::updater::update_cache_root() {
-                Ok(updates_root) => {
-                    if let Err(error) = write_update_acknowledgement(
-                        path,
-                        &updates_root,
-                        update_acknowledgement_capability.as_deref(),
-                        env!("CARGO_PKG_VERSION"),
-                    ) {
-                        eprintln!("failed to acknowledge applied update: {error}");
-                    }
-                }
-                Err(error) => eprintln!(
-                    "failed to resolve update cache root for startup acknowledgement: {error:#}"
-                ),
-            }
-        }
 
         #[cfg(target_os = "windows")]
         cx.spawn(async move |cx| {
@@ -359,8 +375,14 @@ pub(crate) fn run_app() {
             }
 
             #[cfg(not(target_os = "macos"))]
-            if !opened_recovery {
-                open_startup_window(cx, preferences.startup_open);
+            {
+                #[cfg(feature = "updater-e2e")]
+                let e2e_failure_visible = std::env::var_os("GMARK_UPDATER_E2E_FAILURE").is_some();
+                #[cfg(not(feature = "updater-e2e"))]
+                let e2e_failure_visible = false;
+                if !opened_recovery || e2e_failure_visible {
+                    open_startup_window(cx, preferences.startup_open);
+                }
             }
 
             return;

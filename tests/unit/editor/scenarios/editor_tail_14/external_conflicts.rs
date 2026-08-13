@@ -33,7 +33,7 @@ async fn external_conflict_reload_replaces_local_document_with_disk_version(
 #[gpui::test]
 async fn plain_text_keeps_all_status_modes_visible_and_opens_in_source(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
-    cx.update(|cx| crate::updater::UpdateCoordinator::init(false, cx));
+    cx.update(|cx| crate::updater::UpdateCoordinator::init(false, None, cx));
     let temp = tempfile::tempdir().expect("plain-text mode switch tempdir");
     let path = temp.path().join("sample.txt");
     fs::write(&path, "alpha\nbeta\n").expect("plain-text fixture");
