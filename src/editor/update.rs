@@ -9,9 +9,15 @@ use super::Editor;
 use crate::i18n::I18nManager;
 use crate::net::update_v2::CheckOrigin;
 use crate::theme::Theme;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 use crate::updater::{UpdateCoordinator, UpdateState};
 
 type UpdateClickHandler = fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>);
+
+// Keep the transient updater easy to hit without letting it grow into a modal-sized control.
+const UPDATE_PANEL_BUTTON_HEIGHT: f32 = 32.0;
+const UPDATE_PANEL_BUTTON_RADIUS: f32 = 8.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UpdateAccessibilityAction {
@@ -171,6 +177,8 @@ impl Editor {
         true
     }
 
+    /// Renders the updater as a compact, non-blocking surface so status remains visible while
+    /// the editor keeps its normal interaction model and the theme can supply solid fallbacks.
     pub(super) fn render_update_panel(
         &self,
         theme: &Theme,
@@ -185,6 +193,13 @@ impl Editor {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let material = c
+            .workbench
+            .material(SurfaceKind::GlassStrong, visual_preferences);
 
         let mut title = labels.title.to_owned();
         let mut detail: String;
@@ -193,6 +208,7 @@ impl Editor {
         let mut secondary: Option<(&'static str, String, UpdateClickHandler)> = None;
 
         match &state {
+            UpdateState::Restoring => detail = labels.restoring.to_owned(),
             UpdateState::Checking { .. } => detail = labels.checking.to_owned(),
             UpdateState::UpToDate {
                 current_version,
@@ -286,7 +302,7 @@ impl Editor {
                 detail = labels.verifying_detail.to_owned();
                 progress = Some(1.0);
             }
-            UpdateState::Ready { release, .. } => {
+            UpdateState::Ready { release, .. } | UpdateState::Staged { release, .. } => {
                 title = format!("{} v{}", labels.ready, release.version);
                 detail = labels.ready_detail.to_owned();
                 if release.system_trust == SystemTrust::Unsigned {
@@ -303,6 +319,11 @@ impl Editor {
                     labels.later.to_owned(),
                     Self::on_update_dismiss,
                 ));
+            }
+            UpdateState::StagingInstall { release, .. } => {
+                title = format!("{} v{}", labels.staging_install, release.version);
+                detail = labels.staging_install_detail.to_owned();
+                progress = Some(1.0);
             }
             UpdateState::Succeeded { version, message } => {
                 title = format!("{} v{}", labels.updated, version);
@@ -368,14 +389,14 @@ impl Editor {
             div()
                 .id(id)
                 .debug_selector(move || id.to_owned())
-                .h(px(28.0))
+                .h(px(UPDATE_PANEL_BUTTON_HEIGHT))
                 .px(px(10.0))
                 .tab_index(0)
                 .track_focus(focus_handle)
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(7.0))
+                .rounded(px(UPDATE_PANEL_BUTTON_RADIUS))
                 .border(px(d.dialog_border_width))
                 .border_color(background)
                 .bg(background)
@@ -419,10 +440,10 @@ impl Editor {
             .flex()
             .flex_col()
             .gap(px(10.0))
-            .rounded(px(12.0))
+            .rounded(px(d.dialog_radius.clamp(14.0, 18.0)))
             .border(px(d.dialog_border_width))
-            .border_color(c.workbench.border_subtle)
-            .bg(c.workbench.glass_strong_surface)
+            .border_color(material.border)
+            .bg(material.background)
             .shadow_lg()
             .child(
                 div()
@@ -472,12 +493,14 @@ impl Editor {
     }
 }
 
+/// 交互槽位必须跟状态机的准入策略同步，避免键盘焦点落到安装准备期间不可执行的动作。
 fn update_button_slots(state: &UpdateState) -> (bool, bool) {
     match state {
         UpdateState::UpToDate { .. } | UpdateState::Succeeded { .. } => (false, true),
-        UpdateState::Available(_) | UpdateState::Paused { .. } | UpdateState::Ready { .. } => {
-            (true, true)
-        }
+        UpdateState::Available(_)
+        | UpdateState::Paused { .. }
+        | UpdateState::Ready { .. }
+        | UpdateState::Staged { .. } => (true, true),
         UpdateState::Downloading { .. } => (true, false),
         UpdateState::Failed {
             message,
@@ -487,9 +510,11 @@ fn update_button_slots(state: &UpdateState) -> (bool, bool) {
             true,
             *retryable || release.is_some() || message.contains("manual download:"),
         ),
-        UpdateState::Idle | UpdateState::Checking { .. } | UpdateState::Verifying { .. } => {
-            (false, false)
-        }
+        UpdateState::Idle
+        | UpdateState::Restoring
+        | UpdateState::Checking { .. }
+        | UpdateState::Verifying { .. }
+        | UpdateState::StagingInstall { .. } => (false, false),
     }
 }
 
@@ -539,7 +564,7 @@ fn update_action_descriptors(
                 label: labels.resume.to_owned(),
             });
         }
-        UpdateState::Ready { .. } => {
+        UpdateState::Ready { .. } | UpdateState::Staged { .. } => {
             actions.push(UpdateAccessibilityAction {
                 id: "later-update",
                 label: labels.later.to_owned(),
@@ -570,7 +595,11 @@ fn update_action_descriptors(
                 });
             }
         }
-        UpdateState::Idle | UpdateState::Checking { .. } | UpdateState::Verifying { .. } => {}
+        UpdateState::Idle
+        | UpdateState::Restoring
+        | UpdateState::Checking { .. }
+        | UpdateState::Verifying { .. }
+        | UpdateState::StagingInstall { .. } => {}
     }
     actions
 }
@@ -587,6 +616,7 @@ fn manual_update_url(state: &UpdateState) -> &str {
 
 struct UpdateLabels {
     title: &'static str,
+    restoring: &'static str,
     checking: &'static str,
     up_to_date: &'static str,
     downloading: &'static str,
@@ -595,6 +625,8 @@ struct UpdateLabels {
     verifying_detail: &'static str,
     ready: &'static str,
     ready_detail: &'static str,
+    staging_install: &'static str,
+    staging_install_detail: &'static str,
     failed: &'static str,
     updated: &'static str,
     download: &'static str,
@@ -619,6 +651,7 @@ impl UpdateLabels {
         {
             Self {
                 title: "软件更新",
+                restoring: "正在恢复本地更新状态…",
                 checking: "正在检查更新…",
                 up_to_date: "已经是最新版本",
                 downloading: "正在下载",
@@ -627,6 +660,8 @@ impl UpdateLabels {
                 verifying_detail: "正在校验更新包完整性与签名…",
                 ready: "更新已准备好",
                 ready_detail: "保存工作后即可重启并完成安装。",
+                staging_install: "正在准备安装",
+                staging_install_detail: "正在后台准备已验证的更新包，编辑器仍可继续使用。",
                 failed: "更新失败",
                 updated: "更新完成",
                 download: "下载更新",
@@ -644,6 +679,7 @@ impl UpdateLabels {
         } else {
             Self {
                 title: "Software Update",
+                restoring: "Restoring local update state…",
                 checking: "Checking for updates…",
                 up_to_date: "You're up to date",
                 downloading: "Downloading",
@@ -652,6 +688,8 @@ impl UpdateLabels {
                 verifying_detail: "Checking update integrity and signature…",
                 ready: "Update ready",
                 ready_detail: "Save your work, then restart to finish installing.",
+                staging_install: "Preparing installation",
+                staging_install_detail: "Preparing the verified update in the background. You can keep editing.",
                 failed: "Update failed",
                 updated: "Update complete",
                 download: "Download Update",

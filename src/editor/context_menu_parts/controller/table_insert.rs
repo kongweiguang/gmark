@@ -2,7 +2,35 @@
 
 use super::*;
 
+const MAX_TABLE_CELLS: usize = 10_000;
+
+/// 用 checked 行列乘加计算表头和正文的总单元格，确保确认前不会发生大分配。
+fn checked_table_cell_count(body_rows: usize, columns: usize) -> Option<usize> {
+    body_rows
+        .max(1)
+        .checked_add(1)
+        .and_then(|rows| rows.checked_mul(columns.max(1)))
+}
+
 impl Editor {
+    /// 表格尺寸错误放在底部状态提示中，保留对话框和用户已填参数，避免超限点击
+    /// 产生半张表或把大规模分配放到 GPUI 主线程。
+    pub(in crate::editor) fn show_table_limit_notice(&mut self, cx: &mut Context<Self>) {
+        self.pane_notice = Some("表格总单元格数不能超过 10,000".into());
+        let weak = cx.entity().downgrade();
+        self.pane_notice_task = Some(cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(3))
+                .await;
+            let _ = weak.update(cx, |editor, cx| {
+                editor.pane_notice = None;
+                editor.pane_notice_task = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
     pub(in crate::editor) fn open_table_insert_dialog_for_target(
         &mut self,
         target: TableInsertTarget,
@@ -150,14 +178,28 @@ impl Editor {
         }
     }
 
+    /// 增加行前先做 checked 单元格预算，超限时保留对话框而不启动任何表格分配。
     pub(in crate::editor) fn on_table_rows_increment(
         &mut self,
         _event: &ClickEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(dialog) = self.table_insert_dialog.as_mut() {
-            dialog.body_rows += 1;
+        let exceeded = self.table_insert_dialog.as_mut().is_some_and(|dialog| {
+            match dialog.body_rows.checked_add(1) {
+                Some(next_rows)
+                    if checked_table_cell_count(next_rows, dialog.columns)
+                        .is_some_and(|cells| cells <= MAX_TABLE_CELLS) =>
+                {
+                    dialog.body_rows = next_rows;
+                    false
+                }
+                _ => true,
+            }
+        });
+        if exceeded {
+            self.show_table_limit_notice(cx);
+        } else if self.table_insert_dialog.is_some() {
             cx.notify();
         }
     }
@@ -174,14 +216,28 @@ impl Editor {
         }
     }
 
+    /// 增加列前先做 checked 单元格预算，确保边界错误只显示提示而不改变尺寸。
     pub(in crate::editor) fn on_table_columns_increment(
         &mut self,
         _event: &ClickEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(dialog) = self.table_insert_dialog.as_mut() {
-            dialog.columns += 1;
+        let exceeded = self.table_insert_dialog.as_mut().is_some_and(|dialog| {
+            match dialog.columns.checked_add(1) {
+                Some(next_columns)
+                    if checked_table_cell_count(dialog.body_rows, next_columns)
+                        .is_some_and(|cells| cells <= MAX_TABLE_CELLS) =>
+                {
+                    dialog.columns = next_columns;
+                    false
+                }
+                _ => true,
+            }
+        });
+        if exceeded {
+            self.show_table_limit_notice(cx);
+        } else if self.table_insert_dialog.is_some() {
             cx.notify();
         }
     }
@@ -195,12 +251,22 @@ impl Editor {
         self.close_table_insert_dialog(cx);
     }
 
+    /// 确认时再次校验总单元格数，防止状态被外部修改后产生半张超限表格。
     pub(in crate::editor) fn on_confirm_table_insert_dialog(
         &mut self,
         _event: &ClickEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(dialog_state) = self.table_insert_dialog.as_ref() else {
+            return;
+        };
+        if checked_table_cell_count(dialog_state.body_rows, dialog_state.columns)
+            .is_none_or(|cells| cells > MAX_TABLE_CELLS)
+        {
+            self.show_table_limit_notice(cx);
+            return;
+        }
         let Some(dialog) = self.table_insert_dialog.take() else {
             return;
         };
@@ -264,3 +330,7 @@ impl Editor {
         cx.notify();
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/editor/table_insert_limits.rs"]
+mod tests;

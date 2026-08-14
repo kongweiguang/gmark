@@ -4,6 +4,13 @@
 
 use super::*;
 
+use std::time::Duration;
+
+use futures::future::{Either, select};
+use gpui::{AppContext as _, WindowHandle};
+
+const STARTUP_RESTORE_DEADLINE: Duration = Duration::from_secs(30);
+
 /// 每个编辑器窗口监听全局更新状态和自身外观，避免后台进度变化停留在旧画面。
 fn install_system_theme_observer(cx: &mut App) {
     cx.observe_new::<editor::Editor>(|_, window, cx| {
@@ -69,38 +76,256 @@ fn handle_instance_message(cx: &mut App, message: single_instance::InstanceMessa
     }
 }
 
-// 原因：启动恢复需要沿用会话、最近文件和空编辑器的既有优先级，保证无输入时始终有可用窗口。
-fn open_startup_window(cx: &mut App, startup_open: config::StartupOpenPreference) {
-    if startup_open == config::StartupOpenPreference::LastOpenedFile {
-        match config::workspace_session::read_workspace_sessions() {
-            Ok(sessions) => {
-                let mut opened = false;
-                for session in sessions {
-                    opened |= open_workspace_session_window(cx, session);
-                }
-                if opened {
-                    return;
-                }
-            }
-            Err(error) => eprintln!("failed to restore workspace session: {error}"),
+struct PreparedStartupState {
+    recovered: Vec<app_menu::PreparedRecoveredDocument>,
+    paged_recovery: Vec<app_menu::PreparedPagedRecovery>,
+    sessions: Vec<config::workspace_session::WorkspaceSession>,
+    recent_file: Option<PathBuf>,
+}
+
+/// 读取启动所需的历史路径时复用配置层的固定上限，避免损坏的历史文件把恢复
+/// worker 变成无界内存读取；历史文件本身仍由普通文件打开任务负责真正的 probe/read。
+// 原因：启动状态属于低信任持久化输入，大小边界必须由唯一的历史适配器统一执行。
+fn first_existing_recent_markdown_file_bounded() -> Option<PathBuf> {
+    config::read_recent_files()
+        .ok()?
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+/// 在 GPUI 建立前读取并归一化偏好，保持首个 UI 回调只做内存初始化和窗口工作。
+// 原因：偏好加载包含同步读写和兼容迁移，不能让配置盘延迟占用 GPUI 主线程。
+fn load_preferences_before_gpui() -> crate::preferences::AppPreferences {
+    match std::thread::spawn(config::load_or_create_app_preferences).join() {
+        Ok(Ok(preferences)) => preferences,
+        Ok(Err(error)) => {
+            eprintln!("failed to initialize local preferences: {error}");
+            Default::default()
+        }
+        Err(_) => {
+            eprintln!("preference loader thread terminated unexpectedly");
+            Default::default()
         }
     }
-    if startup_open == config::StartupOpenPreference::LastOpenedFile
-        && let Some(path) = config::first_existing_recent_markdown_file()
-    {
-        if let Err(err) = app_menu::open_file_in_new_window(cx, &path) {
-            eprintln!(
-                "failed to read last opened file '{}': {err}",
-                path.display()
-            );
-        } else {
-            return;
+}
+
+/// 在后台完成 recovery journal、恢复文本、工作区会话和最近文件的读取，
+/// 让 GPUI 线程只接收已经准备好的 lease；失败分支保留可继续操作的空窗口。
+// 原因：这些输入可能位于 UNC 或慢盘，任何一个同步读取都不应阻塞应用首帧。
+fn prepare_startup_state(
+    service: DocumentService,
+    startup_open: config::StartupOpenPreference,
+    restore_sessions: bool,
+) -> PreparedStartupState {
+    let recovery_dir = config::AppDirs::from_system()
+        .and_then(|dirs| {
+            dirs.validate_state_root()?;
+            Ok(dirs.recovery_dir())
+        })
+        .map_err(|error| eprintln!("recovery state unavailable: {error:#}"))
+        .ok();
+
+    let recovered_documents = recovery_dir
+        .as_deref()
+        .map(recovery::load_recovery_documents)
+        .transpose()
+        .unwrap_or_else(|error| {
+            eprintln!("failed to scan recovery sessions: {error}");
+            Some(Vec::new())
+        })
+        .unwrap_or_default();
+    let recovered_paths = recovered_documents
+        .iter()
+        .filter_map(|document| document.file_path.clone())
+        .collect::<Vec<_>>();
+    let mut recovered = Vec::new();
+    for document in recovered_documents {
+        match prepare_recovered_document(service.clone(), document) {
+            Ok(document) => recovered.push(document),
+            Err(error) => eprintln!("failed to prepare recovery document: {error:#}"),
         }
     }
 
-    if let Err(error) = open_editor_window(cx, String::new(), None) {
-        eprintln!("failed to open editor window: {error}");
+    let mut paged_recovery = Vec::new();
+    let mut recovered_paths = recovered_paths;
+    if let Some(recovery_dir) = &recovery_dir {
+        match gmark_paged_document::list_paged_recovery_journals(recovery_dir) {
+            Ok(journals) => {
+                for journal in journals {
+                    match gmark_paged_document::paged_recovery_has_edits(&journal) {
+                        Ok(false) => {
+                            if let Err(error) = fs::remove_file(&journal) {
+                                eprintln!(
+                                    "failed to remove empty large recovery '{}': {error}",
+                                    journal.display()
+                                );
+                            }
+                        }
+                        Ok(true) => match prepare_paged_recovery(journal.clone()) {
+                            Ok(prepared) => {
+                                recovered_paths.push(prepared.path.clone());
+                                paged_recovery.push(prepared);
+                            }
+                            Err(error) => eprintln!(
+                                "failed to prepare large recovery '{}': {error}",
+                                journal.display()
+                            ),
+                        },
+                        Err(error) => eprintln!(
+                            "failed to inspect large recovery '{}': {error}",
+                            journal.display()
+                        ),
+                    }
+                }
+            }
+            Err(error) => eprintln!("failed to scan large recovery sessions: {error}"),
+        }
     }
+
+    if let Err(error) =
+        config::workspace_session::remove_paths_from_workspace_sessions(&recovered_paths)
+    {
+        eprintln!("failed to detach recovery paths from workspace sessions: {error}");
+    }
+    let sessions =
+        if restore_sessions && startup_open == config::StartupOpenPreference::LastOpenedFile {
+            match config::workspace_session::read_workspace_sessions() {
+                Ok(sessions) => sessions
+                    .into_iter()
+                    .filter_map(|session| session.without_paths(&recovered_paths))
+                    .collect(),
+                Err(error) => {
+                    eprintln!("failed to restore clean workspace sessions: {error}");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+    let recent_file = if restore_sessions
+        && startup_open == config::StartupOpenPreference::LastOpenedFile
+        && recovered.is_empty()
+        && paged_recovery.is_empty()
+        && sessions.is_empty()
+    {
+        first_existing_recent_markdown_file_bounded()
+    } else {
+        None
+    };
+    PreparedStartupState {
+        recovered,
+        paged_recovery,
+        sessions,
+        recent_file,
+    }
+}
+
+/// 只在 GPUI 线程安装后台准备结果，并先安排 session/recent 的增量窗口。
+// 原因：恢复过程可迟到或超时，安装阶段必须是代次任务的唯一回写点，不能等待 worker。
+fn install_prepared_startup_state(
+    cx: &mut App,
+    prepared: PreparedStartupState,
+    startup_open: config::StartupOpenPreference,
+    restore_sessions: bool,
+    first_frame: Option<WindowHandle<editor::Editor>>,
+) {
+    let mut first_frame = first_frame;
+    let mut opened_recovery = false;
+    for recovery in prepared.paged_recovery {
+        match open_prepared_paged_recovery_window(cx, recovery) {
+            Ok((_window, _path)) => opened_recovery = true,
+            Err(error) => eprintln!("failed to install large recovery window: {error:#}"),
+        }
+    }
+    if app_menu::open_prepared_recovered_editor_tabs_window(cx, prepared.recovered).is_some() {
+        opened_recovery = true;
+    }
+
+    if opened_recovery {
+        remove_startup_first_frame(cx, first_frame.take());
+        return;
+    }
+    if !restore_sessions || startup_open != config::StartupOpenPreference::LastOpenedFile {
+        return;
+    }
+    let mut opened_session = false;
+    for session in prepared.sessions {
+        opened_session |= open_workspace_session_window(cx, session);
+    }
+    if opened_session {
+        remove_startup_first_frame(cx, first_frame.take());
+        return;
+    }
+    if let Some(path) = prepared.recent_file {
+        if let Err(error) = app_menu::open_file_in_new_window(cx, &path) {
+            eprintln!("failed to open recent file '{}': {error}", path.display());
+        } else {
+            remove_startup_first_frame(cx, first_frame.take());
+        }
+    }
+}
+
+/// 恢复已经创建了替代窗口后才移除占位首帧，失败或超时仍保留可交互窗口。
+// 原因：先关首帧再开替代窗口会在慢盘恢复期间造成零窗口或焦点丢失。
+fn remove_startup_first_frame(cx: &mut App, first_frame: Option<WindowHandle<editor::Editor>>) {
+    if let Some(first_frame) = first_frame {
+        let _ = first_frame.update(cx, |_editor, window, _cx| window.remove_window());
+    }
+}
+
+/// 立即创建首帧，再以后台任务恢复文件、journal 和 workspace session；超过
+/// deadline 的代次只留下首帧，不再把迟到 lease 安装到窗口树。
+// 原因：用户可先看到可交互窗口，慢盘恢复不会阻塞 GPUI，也不会无限等待 Condvar。
+fn schedule_startup_restore(
+    cx: &mut App,
+    startup_open: config::StartupOpenPreference,
+    restore_sessions: bool,
+) {
+    let first_frame = if restore_sessions {
+        match open_editor_window(cx, String::new(), None) {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                eprintln!("failed to open startup first frame: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let service = cx
+        .try_global::<DocumentService>()
+        .cloned()
+        .unwrap_or_else(|| {
+            let service = DocumentService::new();
+            cx.set_global(service.clone());
+            service
+        });
+    cx.spawn(async move |cx| {
+        let prepared = match select(
+            cx.background_spawn(async move {
+                prepare_startup_state(service, startup_open, restore_sessions)
+            }),
+            cx.background_executor().timer(STARTUP_RESTORE_DEADLINE),
+        )
+        .await
+        {
+            Either::Left((prepared, _timer)) => prepared,
+            Either::Right((_elapsed, _preparation)) => {
+                eprintln!("timed out preparing startup recovery; keeping first frame");
+                return;
+            }
+        };
+        let _ = cx.update(move |cx| {
+            install_prepared_startup_state(
+                cx,
+                prepared,
+                startup_open,
+                restore_sessions,
+                first_frame,
+            );
+        });
+    })
+    .detach();
 }
 
 /// 只有启动确认已经安全落盘后才绑定终态监听，避免无效 capability 让新进程永久轮询不存在的事务结果。
@@ -197,20 +422,17 @@ pub(crate) fn run_app() {
 
     #[cfg(target_os = "macos")]
     let (open_file_tx, mut open_file_rx) = mpsc::unbounded::<PathBuf>();
-    #[cfg(target_os = "macos")]
-    let open_file_requested = Arc::new(AtomicBool::new(false));
 
+    let preferences = load_preferences_before_gpui();
     let app = Application::new().with_assets(GmarkAssets);
 
     #[cfg(target_os = "macos")]
     {
-        let open_file_requested_for_callback = open_file_requested.clone();
         app.on_open_urls(move |urls| {
             for url in urls {
                 let Some(path) = parse_file_url(&url) else {
                     continue;
                 };
-                open_file_requested_for_callback.store(true, Ordering::SeqCst);
                 let _ = open_file_tx.unbounded_send(path);
             }
         });
@@ -220,10 +442,6 @@ pub(crate) fn run_app() {
         #[cfg(target_os = "windows")]
         cx.set_global(SingleInstanceState {
             _guard: single_instance_guard,
-        });
-        let preferences = config::load_or_create_app_preferences().unwrap_or_else(|err| {
-            eprintln!("failed to initialize app preferences: {err}");
-            Default::default()
         });
         I18nManager::init_with_language_id(cx, &preferences.default_language_id);
         ThemeManager::init_with_preference(
@@ -264,87 +482,17 @@ pub(crate) fn run_app() {
 
         #[cfg(target_os = "windows")]
         cx.spawn(async move |cx| {
-            while let Some(message) = single_instance_rx.next().await {
-                let _ = cx.update(move |cx| handle_instance_message(cx, message));
+            while let Some(request) = single_instance_rx.next().await {
+                let message = request.message.clone();
+                let accepted = cx
+                    .update(move |cx| handle_instance_message(cx, message))
+                    .is_ok();
+                request.respond(accepted);
             }
         })
         .detach();
 
-        let recovery_dir = config::AppDirs::from_system()
-            .and_then(|dirs| {
-                dirs.validate_state_root()?;
-                Ok(dirs.recovery_dir())
-            })
-            .map_err(|error| eprintln!("recovery state unavailable: {error:#}"))
-            .ok();
-        let recovered_documents = recovery_dir
-            .as_deref()
-            .map(recovery::load_recovery_documents)
-            .transpose()
-            .unwrap_or_else(|error| {
-                eprintln!("failed to scan recovery sessions: {error}");
-                Some(Vec::new())
-            })
-            .unwrap_or_default();
-        let mut opened_recovery = !recovered_documents.is_empty();
-        let mut recovered_paths = recovered_documents
-            .iter()
-            .filter_map(|document| document.file_path.clone())
-            .collect::<Vec<_>>();
-        if let Some(recovery_dir) = &recovery_dir {
-            match gmark_paged_document::list_paged_recovery_journals(recovery_dir) {
-                Ok(journals) => {
-                    for journal in journals {
-                        match gmark_paged_document::paged_recovery_has_edits(&journal) {
-                            Ok(false) => {
-                                if let Err(error) = std::fs::remove_file(&journal) {
-                                    eprintln!(
-                                        "failed to remove empty large recovery '{}': {error}",
-                                        journal.display()
-                                    );
-                                }
-                            }
-                            Ok(true) => match open_paged_recovery_window(cx, journal.clone()) {
-                                Ok((_window, path)) => {
-                                    opened_recovery = true;
-                                    recovered_paths.push(path);
-                                }
-                                Err(error) => eprintln!(
-                                    "failed to open large recovery '{}': {error}",
-                                    journal.display()
-                                ),
-                            },
-                            Err(error) => eprintln!(
-                                "failed to inspect large recovery '{}': {error}",
-                                journal.display()
-                            ),
-                        }
-                    }
-                }
-                Err(error) => eprintln!("failed to scan large recovery sessions: {error}"),
-            }
-        }
-        if let Err(error) =
-            config::workspace_session::remove_paths_from_workspace_sessions(&recovered_paths)
-        {
-            eprintln!("failed to detach recovery paths from workspace sessions: {error}");
-        }
-        open_recovered_editor_tabs_window(cx, recovered_documents);
-        if opened_recovery
-            && input_paths.is_empty()
-            && preferences.startup_open == config::StartupOpenPreference::LastOpenedFile
-        {
-            match config::workspace_session::read_workspace_sessions() {
-                Ok(sessions) => {
-                    for session in sessions {
-                        if let Some(session) = session.without_paths(&recovered_paths) {
-                            open_workspace_session_window(cx, session);
-                        }
-                    }
-                }
-                Err(error) => eprintln!("failed to restore clean workspace sessions: {error}"),
-            }
-        }
+        schedule_startup_restore(cx, preferences.startup_open, input_paths.is_empty());
 
         #[cfg(target_os = "macos")]
         cx.spawn(async move |cx| {
@@ -359,32 +507,6 @@ pub(crate) fn run_app() {
         .detach();
 
         if input_paths.is_empty() {
-            #[cfg(target_os = "macos")]
-            {
-                let startup_open = preferences.startup_open;
-                let open_file_requested = open_file_requested.clone();
-                cx.spawn(async move |cx| {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(150))
-                        .await;
-                    if !opened_recovery && !open_file_requested.load(Ordering::SeqCst) {
-                        let _ = cx.update(move |cx| open_startup_window(cx, startup_open));
-                    }
-                })
-                .detach();
-            }
-
-            #[cfg(not(target_os = "macos"))]
-            {
-                #[cfg(feature = "updater-e2e")]
-                let e2e_failure_visible = std::env::var_os("GMARK_UPDATER_E2E_FAILURE").is_some();
-                #[cfg(not(feature = "updater-e2e"))]
-                let e2e_failure_visible = false;
-                if !opened_recovery || e2e_failure_visible {
-                    open_startup_window(cx, preferences.startup_open);
-                }
-            }
-
             return;
         }
 
@@ -398,7 +520,7 @@ pub(crate) fn run_app() {
                 ),
             }
         }
-        if !opened_input && !opened_recovery {
+        if !opened_input {
             if let Err(error) = open_editor_window(cx, String::new(), None) {
                 eprintln!("failed to open editor window: {error}");
             }

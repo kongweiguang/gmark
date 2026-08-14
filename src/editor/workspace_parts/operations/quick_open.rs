@@ -5,6 +5,9 @@ use crate::theme::workbench::SurfaceKind;
 use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
+    /// Keep Quick Open's dense search layout while matching the large floating
+    /// modal shell, so switching between search surfaces does not change the
+    /// scrim, border, shadow, or panel corner treatment.
     pub(in crate::editor) fn render_quick_open_overlay(
         &self,
         theme: &Theme,
@@ -72,7 +75,7 @@ impl Editor {
                         .bg(overlay.background)
                         .border(px(d.dialog_border_width))
                         .border_color(overlay.border)
-                        .rounded(px(d.dialog_radius.min(8.0)))
+                        .rounded(px(d.dialog_radius.clamp(22.0, 28.0)))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                             cx.stop_propagation();

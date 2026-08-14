@@ -181,14 +181,26 @@ def validate_release_contract(
         )
 
     release_artifacts = release_scripts
-    required_update_assets = (
+    # Keep the static gate aligned with the signed manifest inventory so a workflow cannot
+    # publish a compatibility archive without requiring it in the final release set.
+    required_release_assets = (
+        "windows-x86_64-setup.exe",
+        "macos-x86_64.dmg",
+        "macos-aarch64.dmg",
+        "macos-x86_64.app.tar.gz",
+        "macos-aarch64.app.tar.gz",
+        "linux-x86_64.AppImage",
+        "linux-x86_64.deb",
         "windows-x86_64-full.nupkg",
         "macos-x86_64-full.nupkg",
         "macos-aarch64-full.nupkg",
         "linux-x86_64-full.nupkg",
     )
-    if any(asset not in release_artifacts for asset in required_update_assets):
-        fail(path, "release verification must require every platform Velopack update package")
+    if any(asset not in release_artifacts for asset in required_release_assets):
+        fail(
+            path,
+            "release verification must require every installer, compatibility archive, and Velopack update package",
+        )
 
     for platform in ("windows", "linux", "macos"):
         job = jobs.get(platform)

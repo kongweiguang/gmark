@@ -10,6 +10,7 @@ mod transform;
 
 pub use model::{
     DelimitedEdit, DelimitedFilterOptions, DelimitedIndex, DelimitedIndexOptions, DelimitedRecord,
+    MAX_DELIMITED_RECORD_BYTES,
 };
 pub use transform::{apply_delimited_column_edit, serialize_delimited_record};
 

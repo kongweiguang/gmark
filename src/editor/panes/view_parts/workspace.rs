@@ -24,6 +24,7 @@ pub(super) struct RatioDrag {
     pub(super) start_pointer: f32,
     pub(super) start_ratio: f32,
     pub(super) span: f32,
+    pub(super) changed: bool,
 }
 
 /// Recursive pane workspace entity.
@@ -193,11 +194,14 @@ impl PaneWorkspaceView {
             start_pointer,
             start_ratio: divider.ratio(),
             span: divider.span().max(1.0),
+            changed: false,
         });
         cx.notify();
         cx.stop_propagation();
     }
 
+    /// Commits a live divider ratio without saving every pointer sample; the
+    /// completed drag emits one persistence notification from `end_ratio_drag`.
     pub(super) fn update_ratio_drag(
         &mut self,
         event: &MouseMoveEvent,
@@ -221,17 +225,29 @@ impl PaneWorkspaceView {
             .set_split_ratio_at_path(&drag.path, next)
             .is_ok()
         {
+            if let Some(active_drag) = self.drag.as_mut() {
+                active_drag.changed = true;
+            }
             cx.notify();
         }
         cx.stop_propagation();
     }
 
+    /// Ends a divider drag and schedules one snapshot only when its ratio moved,
+    /// avoiding a disk task for a click that did not change layout.
     pub(super) fn end_ratio_drag(&mut self, cx: &mut Context<Self>) {
-        if self.drag.take().is_some() {
+        let drag = self.drag.take();
+        let changed = drag.as_ref().is_some_and(|drag| drag.changed);
+        if changed {
+            self.controller.notify_workspace_changed(cx);
+            cx.notify();
+        } else if drag.is_some() {
             cx.notify();
         }
     }
 
+    /// Persists keyboard ratio changes immediately because each key event is a
+    /// complete user operation rather than a stream of drag samples.
     pub(super) fn adjust_ratio_from_key(
         &mut self,
         path: &[bool],
@@ -250,6 +266,7 @@ impl PaneWorkspaceView {
             .adjust_split_ratio_at_path(path, increase, shift)
             .is_ok()
         {
+            self.controller.notify_workspace_changed(cx);
             cx.notify();
         }
         true

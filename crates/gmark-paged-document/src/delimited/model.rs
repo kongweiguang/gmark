@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use super::source::DelimitedSource;
 
-pub(super) const DELIMITED_SIDECAR_VERSION: u32 = 2;
+// 解析器必须拒绝异常大的物理记录，避免带引号换行的 CSV/TSV 把视口或变换任务变成
+// 无界的单条分配；16 MiB 足够覆盖正常表格单元，同时让调用方得到可恢复的格式错误。
+pub const MAX_DELIMITED_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+pub(super) const DELIMITED_SIDECAR_VERSION: u32 = 3;
 pub(super) const DELIMITED_SIDECAR_SAMPLE_BYTES: u64 = 64 * 1024;
 pub(super) const MAX_DELIMITED_SIDECAR_BYTES: u64 = 64 * 1024 * 1024;
 pub(super) const DELIMITED_CACHE_BUDGET_BYTES: u64 = 256 * 1024 * 1024;

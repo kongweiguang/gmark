@@ -170,5 +170,6 @@ pub(crate) fn init(cx: &mut App) {
     });
 
     install_menus(cx);
+    load_recent_files_in_background(cx);
     cx.activate(true);
 }

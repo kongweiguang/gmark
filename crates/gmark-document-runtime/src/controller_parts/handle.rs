@@ -48,11 +48,51 @@ impl DocumentHandle {
             last_lease_callback: Mutex::new(None),
             save_state_callbacks: Mutex::new(BTreeMap::new()),
             next_save_callback_id: AtomicUsize::new(1),
+            shared_extensions: Mutex::new(HashMap::new()),
         }))
     }
 
     pub fn downgrade(&self) -> WeakDocumentHandle {
         WeakDocumentHandle(Arc::downgrade(&self.0))
+    }
+
+    /// Read a type-erased adapter extension without copying the Controller or
+    /// allowing a transient view to become its lifetime owner.
+    pub fn shared_extension<T>(&self) -> Result<Option<Arc<T>>, ControllerError>
+    where
+        T: Any + Send + Sync + 'static,
+    {
+        let extensions = self
+            .0
+            .shared_extensions
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?;
+        let Some(extension) = extensions.get(&TypeId::of::<T>()).cloned() else {
+            return Ok(None);
+        };
+        extension.downcast::<T>().map(Some).map_err(|_| {
+            ControllerError::Mutation("shared document extension type mismatch".into())
+        })
+    }
+
+    /// Install one adapter extension atomically; concurrent views receive the
+    /// already-installed value and therefore cannot create duplicate workers.
+    pub fn install_shared_extension<T>(&self, extension: Arc<T>) -> Result<Arc<T>, ControllerError>
+    where
+        T: Any + Send + Sync + 'static,
+    {
+        let mut extensions = self
+            .0
+            .shared_extensions
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?;
+        if let Some(existing) = extensions.get(&TypeId::of::<T>()).cloned() {
+            return existing.downcast::<T>().map_err(|_| {
+                ControllerError::Mutation("shared document extension type mismatch".into())
+            });
+        }
+        extensions.insert(TypeId::of::<T>(), extension.clone());
+        Ok(extension)
     }
 
     pub fn lock(&self) -> Result<MutexGuard<'_, DocumentController>, ControllerError> {
@@ -68,10 +108,24 @@ impl DocumentHandle {
 
     /// 新建租约必须和最后租约判定共享同一 gate，避免 discard 与打开窗口交错。
     pub fn lease(&self) -> DocumentLease {
-        let _gate = match self.0.lease_gate.lock() {
+        let _gate = self.lock_lease_gate();
+        self.lease_locked()
+    }
+
+    /// Lock the lifecycle gate before inspecting or changing the global lease count.
+    /// Registry publication and last-lease removal use the same order so a new
+    /// view cannot be admitted between the zero-count check and slot removal.
+    pub(super) fn lock_lease_gate(&self) -> std::sync::MutexGuard<'_, ()> {
+        match self.0.lease_gate.lock() {
             Ok(gate) => gate,
             Err(poisoned) => poisoned.into_inner(),
-        };
+        }
+    }
+
+    /// Increment a lease count while the caller already owns `lease_gate`.
+    /// Keeping this helper separate prevents registry lookup from re-locking the
+    /// non-reentrant gate while it atomically validates and acquires a lease.
+    pub(super) fn lease_locked(&self) -> DocumentLease {
         self.0.leases.fetch_add(1, Ordering::AcqRel);
         DocumentLease {
             handle: self.clone(),
@@ -294,20 +348,28 @@ impl DocumentLease {
         if self.released.swap(true, Ordering::AcqRel) {
             return;
         }
+        // The gate must cover decrement, registry validation, and removal.  A
+        // matching open therefore either acquires its lease first or observes
+        // the slot gone and creates a new owner; it can never become active on
+        // a handle that the registry has already removed.
+        let gate = self.handle.lock_lease_gate();
         let previous = self.handle.0.leases.fetch_sub(1, Ordering::AcqRel);
         if previous == 0 {
             self.handle.0.leases.store(0, Ordering::Release);
+            drop(gate);
             return;
         }
         if previous != 1 {
+            drop(gate);
             return;
         }
         let binding = self.handle.registry_binding().ok().flatten();
         if let Some((registry, key)) = binding
             && let Some(registry) = registry.upgrade()
         {
-            let _ = registry.remove_if_unleased(&key, &self.handle);
+            let _ = registry.remove_if_unleased_locked(&key, &self.handle);
         }
+        drop(gate);
         self.handle.invoke_last_lease_callback();
     }
 }

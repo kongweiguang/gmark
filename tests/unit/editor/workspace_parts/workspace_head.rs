@@ -4,17 +4,19 @@
         DOCUMENT_SIDEBAR_COMPACT_OVERLAY_WIDTH, DOCUMENT_SIDEBAR_PANEL_MAX_WIDTH,
         DOCUMENT_SIDEBAR_PANEL_AUTO_MIN_WIDTH, DOCUMENT_SIDEBAR_PANEL_MIN_WIDTH,
         WORKSPACE_COMPACT_OVERLAY_WIDTH, WORKSPACE_PANEL_AUTO_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH,
-        WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_RESIZE_HIT_WIDTH,
+        WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_RESIZE_HIT_WIDTH, WORKSPACE_SCAN_MAX_ENTRIES,
         WorkspaceKeyboardZone, WorkspaceSearchMatch,
         WorkspaceSearchOptions, WorkspaceSelection, WorkspaceState, WorkspaceTab,
-        WorkspaceTreeKind, build_outline_tree, insert_workspace_directory, prune_outline_state,
-        rank_quick_open_paths, scan_workspace_dir, search_workspace,
+        WorkspaceScanState, WorkspaceTreeKind, build_outline_tree, insert_workspace_directory,
+        prune_outline_state, rank_quick_open_paths, scan_workspace, scan_workspace_dir,
+        search_workspace,
         document_sidebar_panel_width_for_viewport, workspace_panel_width_for_viewport,
         workspace_uses_overlay,
     };
     use gpui::{AppContext as _, KeyDownEvent, Keystroke, Modifiers, MouseButton, point, px, size};
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
 
     fn init_workspace_test_app(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
@@ -80,6 +82,171 @@
             tree.children[1].kind,
             WorkspaceTreeKind::File(_)
         ));
+        let canonical_root = dunce::canonicalize(&root).expect("canonical root");
+        let workspace = WorkspaceState {
+            root: Some(canonical_root.clone()),
+            file_tree: Some(tree.clone()),
+            ..WorkspaceState::default()
+        };
+        assert!(workspace.snapshot_path_is_file(&canonical_root.join("a.txt")));
+        assert_eq!(
+            workspace.snapshot_path_is_directory(&canonical_root.join("nested")),
+            Some(true)
+        );
+        assert_eq!(
+            workspace.snapshot_path_is_directory(&canonical_root.join("missing")),
+            None
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 锁定后台扫描同时产出平面索引并响应取消的边界，避免 Quick Open 回退到树递归。
+    #[test]
+    fn workspace_scan_builds_a_flat_quick_open_index_and_honors_cancellation() {
+        let root =
+            std::env::temp_dir().join(format!("gmark-workspace-scan-index-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("nested")).expect("create dirs");
+        fs::write(root.join("note.md"), "note").expect("write markdown");
+        fs::write(root.join("nested").join("deep.md"), "deep").expect("write nested markdown");
+        fs::write(root.join("nested").join("data.txt"), "text").expect("write text");
+
+        let cancelled = AtomicBool::new(false);
+        let result = scan_workspace(&root, &[], &cancelled).expect("scan workspace");
+        assert_eq!(
+            result.quick_open_paths,
+            vec![root.join("nested").join("deep.md"), root.join("note.md")]
+        );
+
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        assert!(scan_workspace(&root, &[], &cancelled).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 锁定恢复的 pinned 路径也受 20,000 次规范化上限约束，避免旧会话拖垮后台扫描。
+    #[test]
+    fn workspace_scan_bounds_pinned_canonicalize_work() {
+        let root =
+            std::env::temp_dir().join(format!("gmark-workspace-pinned-limit-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create root");
+        let pinned = vec![root.clone(); WORKSPACE_SCAN_MAX_ENTRIES + 1];
+        let cancelled = AtomicBool::new(false);
+
+        let error = match scan_workspace(&root, &pinned, &cancelled) {
+            Ok(_) => panic!("pinned limit should reject excess work"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("pinned paths"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 锁定渲染仅观察状态，避免首帧因隐式同步扫描而吞掉目录选择后的刷新。
+    #[gpui::test]
+    async fn rendering_an_open_workspace_does_not_start_a_scan(cx: &mut gpui::TestAppContext) {
+        init_workspace_test_app(cx);
+        let root =
+            std::env::temp_dir().join(format!("gmark-workspace-render-scan-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create root");
+        let (editor, visual) = cx.add_window_view(|_window, cx| {
+            super::Editor::from_markdown(cx, "document".to_owned(), None)
+        });
+        editor.update(visual, |editor, cx| {
+            editor.workspace.is_open = true;
+            editor.workspace.explicit_root = Some(root.clone());
+            cx.notify();
+        });
+        visual.update(|window, cx| window.draw(cx).clear());
+        editor.update(visual, |editor, _cx| {
+            assert!(editor.workspace.file_scan_task.is_none());
+            assert_eq!(editor.workspace.file_scan_state, WorkspaceScanState::Idle);
+        });
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 锁定无效目录也能由后台任务直接进入 Failed，而不依赖额外输入触发重绘。
+    #[gpui::test]
+    async fn explicit_workspace_scan_reaches_failed_without_a_follow_up_input(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_workspace_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "gmark-workspace-missing-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let (editor, visual) = cx.add_window_view(|_window, cx| {
+            super::Editor::from_markdown(cx, "document".to_owned(), None)
+        });
+        editor.update(visual, |editor, cx| {
+            editor.set_explicit_workspace_root(root.clone(), cx);
+            assert!(editor.workspace.file_scan_task.is_some());
+        });
+        visual.update(|window, cx| window.draw(cx).clear());
+        visual.run_until_parked();
+        visual.update(|window, cx| window.draw(cx).clear());
+        assert!(visual.debug_bounds("workspace-files-error").is_some());
+        editor.update(visual, |editor, _cx| {
+            assert!(matches!(
+                editor.workspace.file_scan_state,
+                WorkspaceScanState::Failed { .. }
+            ));
+            assert!(editor.workspace.file_error.is_some());
+        });
+    }
+
+    /// 锁定失败目录可通过同一路径重新提交，避免一次瞬态文件系统错误永久卡在 Failed。
+    #[gpui::test]
+    async fn failed_workspace_scan_can_retry_same_root_after_it_is_fixed(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_workspace_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "gmark-workspace-retry-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let (editor, visual) = cx.add_window_view(|_window, cx| {
+            super::Editor::from_markdown(cx, "document".to_owned(), None)
+        });
+
+        editor.update(visual, |editor, cx| {
+            editor.set_explicit_workspace_root(root.clone(), cx);
+            assert!(matches!(
+                editor.workspace.file_scan_state,
+                WorkspaceScanState::Scanning { .. }
+            ));
+        });
+        visual.update(|window, cx| window.draw(cx).clear());
+        visual.run_until_parked();
+        let failed_generation = editor.update(visual, |editor, _cx| {
+            match &editor.workspace.file_scan_state {
+                WorkspaceScanState::Failed { generation, .. } => *generation,
+                state => panic!("expected Failed after missing root, got {state:?}"),
+            }
+        });
+
+        fs::create_dir_all(&root).expect("create recovered root");
+        let recovered = root.join("recovered.md");
+        fs::write(&recovered, "recovered").expect("write recovered file");
+        editor.update(visual, |editor, cx| {
+            editor.set_explicit_workspace_root(root.clone(), cx);
+            match &editor.workspace.file_scan_state {
+                WorkspaceScanState::Scanning { generation } => {
+                    assert!(*generation > failed_generation);
+                    assert!(editor.workspace.file_scan_task.is_some());
+                }
+                state => panic!("expected retry to start Scanning, got {state:?}"),
+            }
+        });
+        visual.update(|window, cx| window.draw(cx).clear());
+        visual.run_until_parked();
+        editor.update(visual, |editor, _cx| {
+            assert!(matches!(
+                editor.workspace.file_scan_state,
+                WorkspaceScanState::Ready { .. }
+            ));
+            assert!(editor.workspace.file_scan_task.is_none());
+            assert!(editor.workspace.file_tree.is_some());
+            assert_eq!(editor.workspace.quick_open_paths, vec![recovered.clone()]);
+        });
 
         let _ = fs::remove_dir_all(root);
     }
@@ -96,6 +263,7 @@
         let mut workspace = WorkspaceState {
             root: Some(root.clone()),
             file_tree: Some(scan_workspace_dir(&root).unwrap()),
+            quick_open_paths: vec![existing.clone()],
             file_scan_generation: 17,
             ..WorkspaceState::default()
         };
@@ -108,6 +276,7 @@
             crate::editor::workspace_file_ops::WorkspaceCreateKind::File,
         ));
         assert_eq!(workspace.file_scan_generation, 17);
+        assert_eq!(workspace.quick_open_paths, vec![existing.clone(), created.clone()]);
         let labels = workspace
             .file_tree
             .as_ref()
@@ -120,6 +289,7 @@
 
         assert!(workspace.remove_path(&created));
         assert_eq!(workspace.file_scan_generation, 17);
+        assert_eq!(workspace.quick_open_paths, vec![existing.clone()]);
         let labels = workspace
             .file_tree
             .as_ref()

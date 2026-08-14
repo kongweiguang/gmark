@@ -1,6 +1,19 @@
 // @author kongweiguang
 
 use super::*;
+use std::time::Duration as StdDuration;
+
+enum PreparedClosedTab {
+    Snapshot(Box<DocumentTabSnapshot>),
+    Host(Box<PreparedClosedHost>),
+}
+
+struct PreparedClosedHost {
+    closed: ClosedTabSnapshot,
+    open: crate::app::document_service::SharedDocumentHostOpen,
+    dirty: bool,
+    saved_file_fingerprint: Option<crate::recovery::FileFingerprint>,
+}
 
 impl Editor {
     pub(in crate::editor) fn tab_strip_height(&self) -> f32 {
@@ -41,16 +54,24 @@ impl Editor {
         );
     }
 
-    fn reopen_closed_tab_snapshot(
-        &mut self,
+    /// Prepares every filesystem-backed part of a closed tab outside GPUI.
+    ///
+    /// The result deliberately contains only immutable metadata, leases, and
+    /// resident sessions.  Host entities are created later on the UI thread,
+    /// because GPUI entities must never cross the background executor boundary.
+    // 原因：关闭标签重开可能触发探测、正文读取或恢复日志扫描；把这些操作集中到后台才能让重开按钮和当前文档继续响应。
+    fn prepare_reopen_closed_tab(
+        service: crate::app::document_service::DocumentService,
         closed: ClosedTabSnapshot,
-        cx: &mut Context<Self>,
-    ) -> Result<DocumentTabSnapshot, String> {
+    ) -> Result<PreparedClosedTab, String> {
+        #[cfg(test)]
+        {
+            let delay_ms = super::REOPEN_TEST_DELAY_MS.load(std::sync::atomic::Ordering::Acquire);
+            if delay_ms > 0 {
+                std::thread::sleep(StdDuration::from_millis(delay_ms));
+            }
+        }
         let loading = gmark_document_core::LoadingPolicy::default();
-        let service = cx
-            .try_global::<crate::app::document_service::DocumentService>()
-            .cloned()
-            .ok_or_else(|| "document service is not initialized".to_owned())?;
         match closed.source.clone() {
             ClosedDocumentSource::File { path, .. } => {
                 let probe = service
@@ -79,7 +100,7 @@ impl Editor {
                         .map_err(|error| error.to_string())?;
                     let dirty = session.try_is_dirty().unwrap_or(true);
                     let mut snapshot = closed.into_document_with_source(session, None);
-                    snapshot.file_path = Some(path);
+                    snapshot.file_path = Some(path.clone());
                     snapshot.source_encoding = encoding;
                     snapshot.shared_document = true;
                     snapshot.document_dirty = dirty;
@@ -87,9 +108,9 @@ impl Editor {
                         .file_path
                         .as_deref()
                         .and_then(|path| crate::recovery::fingerprint_file(path).ok());
-                    Ok(snapshot)
+                    Ok(PreparedClosedTab::Snapshot(Box::new(snapshot)))
                 } else {
-                    let shared = service
+                    let open = service
                         .open_document_host(
                             &path,
                             probe.clone(),
@@ -112,48 +133,23 @@ impl Editor {
                             },
                         )
                         .map_err(|error| error.to_string())?;
-                    let dirty = shared
+                    let dirty = open
                         .lease
                         .handle()
                         .lock()
                         .map(|controller| controller.session().dirty)
                         .unwrap_or(true);
-                    let view_id = gmark_document_core::DocumentViewInstanceId::new();
-                    let crate::app::document_service::SharedDocumentHostOpen {
-                        lease,
-                        probe,
-                        file_path,
-                        encoding,
-                        ..
-                    } = shared;
-                    let handle = lease.handle();
-                    let host_path = file_path.clone();
-                    let host = cx.new(move |cx| {
-                        crate::document_host::DocumentHost::from_shared_with_view_id_or_error(
-                            host_path,
-                            probe,
-                            handle,
-                            lease,
-                            view_id,
-                            crate::document_host::DocumentHostViewPresentation::default(),
-                            cx,
-                        )
-                    });
-                    let mut snapshot = closed
-                        .into_document_with_source(EditorDocumentSession::shell(), Some(host));
-                    snapshot.file_path = Some(path);
-                    snapshot.source_encoding = encoding;
-                    snapshot.shared_document = true;
-                    snapshot.document_dirty = dirty;
-                    snapshot.saved_file_fingerprint = snapshot
-                        .file_path
-                        .as_deref()
-                        .and_then(|path| crate::recovery::fingerprint_file(path).ok());
-                    Ok(snapshot)
+                    let saved_file_fingerprint = crate::recovery::fingerprint_file(&path).ok();
+                    Ok(PreparedClosedTab::Host(Box::new(PreparedClosedHost {
+                        closed,
+                        open,
+                        dirty,
+                        saved_file_fingerprint,
+                    })))
                 }
             }
             ClosedDocumentSource::Host { path, probe, .. } => {
-                let shared = service
+                let open = service
                     .open_document_host(&path, probe, loading, |normalized, probe, _| {
                         let source = gmark_paged_document::FileSource::open(normalized).map_err(
                             |error| {
@@ -167,40 +163,19 @@ impl Editor {
                             .map_err(|error| anyhow::anyhow!("failed to prepare source: {error}"))
                     })
                     .map_err(|error| error.to_string())?;
-                let dirty = shared
+                let dirty = open
                     .lease
                     .handle()
                     .lock()
                     .map(|controller| controller.session().dirty)
                     .unwrap_or(true);
-                let view_id = gmark_document_core::DocumentViewInstanceId::new();
-                let crate::app::document_service::SharedDocumentHostOpen {
-                    lease,
-                    probe,
-                    file_path,
-                    encoding,
-                    ..
-                } = shared;
-                let handle = lease.handle();
-                let host_path = file_path.clone();
-                let host = cx.new(move |cx| {
-                    crate::document_host::DocumentHost::from_shared_with_view_id_or_error(
-                        host_path,
-                        probe,
-                        handle,
-                        lease,
-                        view_id,
-                        crate::document_host::DocumentHostViewPresentation::default(),
-                        cx,
-                    )
-                });
-                let mut snapshot =
-                    closed.into_document_with_source(EditorDocumentSession::shell(), Some(host));
-                snapshot.file_path = Some(path);
-                snapshot.source_encoding = encoding;
-                snapshot.shared_document = true;
-                snapshot.document_dirty = dirty;
-                Ok(snapshot)
+                let saved_file_fingerprint = crate::recovery::fingerprint_file(&path).ok();
+                Ok(PreparedClosedTab::Host(Box::new(PreparedClosedHost {
+                    closed,
+                    open,
+                    dirty,
+                    saved_file_fingerprint,
+                })))
             }
             ClosedDocumentSource::Recovery {
                 document_id,
@@ -255,19 +230,79 @@ impl Editor {
                 snapshot.recovery_journal = Some(Arc::new(Mutex::new(
                     crate::recovery::RecoveryJournal::resume(&recovered),
                 )));
-                Ok(snapshot)
+                Ok(PreparedClosedTab::Snapshot(Box::new(snapshot)))
             }
-            ClosedDocumentSource::Image { path } => {
-                let mut snapshot = Self::snapshot_for_image_preview(path);
-                snapshot.shared_document = false;
-                Ok(snapshot)
-            }
-            ClosedDocumentSource::Error { path, reason } => {
-                let mut snapshot = Self::snapshot_for_file_open_failure(path, reason);
-                snapshot.shared_document = false;
+            ClosedDocumentSource::Image { path } => Ok(PreparedClosedTab::Snapshot(Box::new(
+                Self::snapshot_for_image_preview(path),
+            ))),
+            ClosedDocumentSource::Error { path, reason } => Ok(PreparedClosedTab::Snapshot(
+                Box::new(Self::snapshot_for_file_open_failure(path, reason)),
+            )),
+        }
+    }
+
+    /// Materializes a host entity only after background preparation succeeds.
+    ///
+    /// Keeping this small UI-side step separate prevents a late or failed
+    /// worker from touching the current editor state before its identity gate.
+    // 原因：GPUI Entity 只能在 Context 中创建，但创建必须晚于所有文件/恢复 I/O，避免重开按钮同步卡住。
+    fn snapshot_from_prepared_reopen(
+        prepared: PreparedClosedTab,
+        cx: &mut Context<Self>,
+    ) -> Result<DocumentTabSnapshot, String> {
+        match prepared {
+            PreparedClosedTab::Snapshot(snapshot) => Ok(*snapshot),
+            PreparedClosedTab::Host(prepared) => {
+                let PreparedClosedHost {
+                    closed,
+                    open,
+                    dirty,
+                    saved_file_fingerprint,
+                } = *prepared;
+                let view_id = gmark_document_core::DocumentViewInstanceId::new();
+                let crate::app::document_service::SharedDocumentHostOpen {
+                    lease,
+                    probe,
+                    file_path,
+                    encoding,
+                    ..
+                } = open;
+                let handle = lease.handle();
+                let host_path = file_path.clone();
+                let host = cx.new(move |cx| {
+                    crate::document_host::DocumentHost::from_shared_with_view_id_or_error(
+                        host_path,
+                        probe,
+                        handle,
+                        lease,
+                        view_id,
+                        crate::document_host::DocumentHostViewPresentation::default(),
+                        cx,
+                    )
+                });
+                let mut snapshot =
+                    closed.into_document_with_source(EditorDocumentSession::shell(), Some(host));
+                snapshot.file_path = Some(file_path);
+                snapshot.source_encoding = encoding;
+                snapshot.shared_document = true;
+                snapshot.document_dirty = dirty;
+                snapshot.saved_file_fingerprint = saved_file_fingerprint;
                 Ok(snapshot)
             }
         }
+    }
+
+    /// Restores a pending closed-tab entry at its original history position.
+    ///
+    /// Reopen preparation is allowed to outlive other close actions; inserting
+    /// at the captured position keeps newer closed tabs ahead of a failed retry.
+    // 原因：失败、取消和身份失配都必须保留用户的最近关闭历史，不能因后台结果迟到而吞掉条目。
+    fn restore_pending_reopen(&mut self) {
+        let Some((index, closed)) = self.tabs.reopen_pending.take() else {
+            return;
+        };
+        let insert_at = index.min(self.tabs.closed.len());
+        self.tabs.closed.insert(insert_at, closed);
     }
 
     pub(in crate::editor) fn request_close_tab_index(
@@ -401,38 +436,90 @@ impl Editor {
         self.new_untitled_tab(cx);
     }
 
+    /// Schedules a closed-tab restore without giving a late worker ownership
+    /// of the active tab's current state.
+    // 原因：重开结果必须先通过 tab/document 身份门禁，再捕获当前快照并安装新标签。
     pub(crate) fn on_reopen_closed_tab_action(
         &mut self,
         _: &crate::components::ReopenClosedTab,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.tabs.reopen_task.is_some() {
+            return;
+        }
+        let Some(service) = cx
+            .try_global::<crate::app::document_service::DocumentService>()
+            .cloned()
+        else {
+            eprintln!("closed-tab restore failed: document service is not initialized");
+            return;
+        };
         let Some(closed) = self.tabs.closed.pop() else {
             return;
         };
-        let snapshot = match self.reopen_closed_tab_snapshot(closed, cx) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                eprintln!("closed-tab restore failed: {error}");
-                return;
-            }
-        };
-        if !self.can_switch_tabs() {
-            if let Ok(closed) = ClosedTabSnapshot::from_document(snapshot) {
-                self.tabs.closed.push(closed);
-            }
-            return;
-        }
-        let current = self.capture_active_tab(cx);
-        self.tabs.records[self.tabs.active].snapshot = Some(current);
-        self.tabs.records.push(TabRecord {
-            id: uuid::Uuid::new_v4(),
-            pinned: false,
-            snapshot: None,
-        });
-        self.tabs.active = self.tabs.records.len() - 1;
-        self.install_tab_snapshot(snapshot, cx);
-        self.schedule_workspace_session_save(cx);
+        // 原因：磁盘文件可能只是短暂不可用，失败后应允许用户重试；没有日志的恢复项已经永久失去正文，继续塞回历史只会让重开命令反复失败。
+        let restore_after_prepare_failure = matches!(
+            &closed.source,
+            ClosedDocumentSource::File { .. } | ClosedDocumentSource::Host { .. }
+        );
+        let pending_index = self.tabs.closed.len();
+        self.tabs.reopen_pending = Some((pending_index, closed.clone()));
+        self.tabs.reopen_generation = self.tabs.reopen_generation.wrapping_add(1);
+        let generation = self.tabs.reopen_generation;
+        let expected_tab_id = self.tabs.active_id();
+        let expected_document_epoch = self.document_epoch;
+        self.tabs.reopen_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let prepared = cx
+                .background_spawn(async move { Self::prepare_reopen_closed_tab(service, closed) })
+                .await;
+            let _ = this.update(cx, |editor, cx| {
+                if editor.tabs.reopen_generation != generation {
+                    return;
+                }
+                editor.tabs.reopen_task = None;
+                let target_is_current = editor.tabs.active_id() == expected_tab_id
+                    && editor.document_epoch == expected_document_epoch;
+                if !target_is_current || !editor.can_switch_tabs() {
+                    editor.restore_pending_reopen();
+                    cx.notify();
+                    return;
+                }
+                let prepared = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        if restore_after_prepare_failure {
+                            editor.restore_pending_reopen();
+                        } else {
+                            let _ = editor.tabs.reopen_pending.take();
+                        }
+                        eprintln!("closed-tab restore failed: {error}");
+                        cx.notify();
+                        return;
+                    }
+                };
+                let snapshot = match Self::snapshot_from_prepared_reopen(prepared, cx) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        editor.restore_pending_reopen();
+                        eprintln!("closed-tab host restore failed: {error}");
+                        cx.notify();
+                        return;
+                    }
+                };
+                let _ = editor.tabs.reopen_pending.take();
+                let current = editor.capture_active_tab(cx);
+                editor.tabs.records[editor.tabs.active].snapshot = Some(current);
+                editor.tabs.records.push(TabRecord {
+                    id: uuid::Uuid::new_v4(),
+                    pinned: false,
+                    snapshot: None,
+                });
+                editor.tabs.active = editor.tabs.records.len() - 1;
+                editor.install_tab_snapshot(snapshot, cx);
+                editor.schedule_workspace_session_save(cx);
+            });
+        }));
     }
 
     pub(crate) fn on_previous_tab_action(
@@ -467,6 +554,8 @@ impl Editor {
         self.switch_to_tab_index(target, cx);
     }
 
+    /// Cancels the visible close decision and invalidates its async save task
+    /// before any late completion can mutate pane state.
     pub(in crate::editor) fn on_cancel_tab_close(
         &mut self,
         _: &ClickEvent,
@@ -476,12 +565,14 @@ impl Editor {
         self.tabs.show_close_dialog = false;
         self.tabs.close_after_save = false;
         self.tabs.close_others_keep = None;
+        self.invalidate_pane_close_save(cx);
         self.pane_close_target = None;
-        self.pane_close_save_signal = None;
         cx.stop_propagation();
         cx.notify();
     }
 
+    /// Discards only the requested pane lease, cancelling any save observer so
+    /// an earlier Save action cannot close the discarded replacement tab.
     pub(in crate::editor) fn on_discard_tab_close(
         &mut self,
         _: &ClickEvent,
@@ -490,6 +581,7 @@ impl Editor {
     ) {
         self.tabs.show_close_dialog = false;
         self.tabs.close_after_save = false;
+        self.invalidate_pane_close_save(cx);
         if let Some((pane, tab)) = self.pane_close_target.take() {
             let Some(workspace) = self.pane_workspace.clone() else {
                 self.pane_close_target = Some((pane, tab));
@@ -608,14 +700,14 @@ impl Editor {
         cx.stop_propagation();
     }
 
+    /// Reports the Markdown child's terminal save result through the parent
+    /// one-shot instead of requiring a timer to inspect mutable state.
     pub(in crate::editor) fn finish_pending_tab_close_after_save(
         &mut self,
         cx: &mut Context<Self>,
     ) {
-        if self.pane_close_save_signal.is_some() && !self.is_document_dirty() {
-            if let Some(signal) = self.pane_close_save_signal.as_ref() {
-                signal.store(1, std::sync::atomic::Ordering::Release);
-            }
+        if self.pane_close_save_signal.is_some() {
+            self.signal_pane_close_save(u8::from(!self.is_document_dirty()));
             return;
         }
         if self.tabs.close_after_save && !self.is_document_dirty() {
@@ -626,9 +718,11 @@ impl Editor {
         }
     }
 
+    /// Reports save failure/cancellation once while retaining the pane tab and
+    /// its existing error surface for the user to inspect or retry.
     pub(in crate::editor) fn abort_pending_tab_close_after_save(&mut self, cx: &mut Context<Self>) {
-        if let Some(signal) = self.pane_close_save_signal.as_ref() {
-            signal.store(2, std::sync::atomic::Ordering::Release);
+        if self.pane_close_save_signal.is_some() {
+            self.signal_pane_close_save(2);
         }
         if self.tabs.close_after_save {
             self.tabs.close_after_save = false;

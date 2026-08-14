@@ -22,6 +22,8 @@ SUFFIXES = (
     "windows-x86_64-setup.exe",
     "macos-x86_64.dmg",
     "macos-aarch64.dmg",
+    "macos-x86_64.app.tar.gz",
+    "macos-aarch64.app.tar.gz",
     "linux-x86_64.AppImage",
     "linux-x86_64.deb",
     "windows-x86_64-full.nupkg",
@@ -69,6 +71,8 @@ def write_resigned_manifest(path: Path, payload: dict[str, object], private_key:
 
 
 def main() -> None:
+    """Prove complete create/verify behavior so missing published compatibility assets fail closed."""
+
     with tempfile.TemporaryDirectory(prefix="gmark-release-manifest-test-") as temporary:
         root = Path(temporary)
         dist = root / "dist"
@@ -117,6 +121,8 @@ def main() -> None:
             "windows-x86_64",
             "macos-x86_64",
             "macos-aarch64",
+            "macos-x86_64-compat",
+            "macos-aarch64-compat",
             "linux-x86_64",
             "linux-x86_64-deb",
             "windows-x86_64-update",
@@ -128,6 +134,8 @@ def main() -> None:
             "inno-setup-exe",
             "unsigned-dmg",
             "unsigned-dmg",
+            "macos-app-tar-gz",
+            "macos-app-tar-gz",
             "appimage",
             "deb",
             "velopack-nupkg",
@@ -136,6 +144,21 @@ def main() -> None:
             "velopack-nupkg",
         ]
         assert all(entry["size"] > 0 and len(entry["sha256"]) == 64 for entry in payload["artifacts"])
+
+        compatibility_archive = dist / "gmark-v0.1.0-macos-x86_64.app.tar.gz"
+        compatibility_bytes = compatibility_archive.read_bytes()
+        compatibility_archive.unlink()
+        run(
+            "create", *common, "--private-key", str(private_key),
+            "--public-key-base64", public_key, "--output", str(root / "missing-create.json"),
+            succeeds=False,
+        )
+        run(
+            "verify", *common, "--manifest", str(signed),
+            "--public-key-base64", public_key, "--expect-paused", "false",
+            succeeds=False,
+        )
+        compatibility_archive.write_bytes(compatibility_bytes)
 
         identity_only = (
             "--version", "0.1.0", "--release-tag", "v0.1.0", "--channel", "stable",
@@ -156,6 +179,9 @@ def main() -> None:
         malformed_payloads.append(malformed)
         malformed = copy.deepcopy(payload)
         malformed["artifacts"] = {"not": "a list"}
+        malformed_payloads.append(malformed)
+        malformed = copy.deepcopy(payload)
+        malformed["artifacts"] = malformed["artifacts"][:-1]
         malformed_payloads.append(malformed)
         for index, malformed in enumerate(malformed_payloads):
             malformed_path = root / f"malformed-{index}.json"

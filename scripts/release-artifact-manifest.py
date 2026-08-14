@@ -27,6 +27,18 @@ ARTIFACT_SUFFIXES = {
     ),
     "macos-x86_64": ("macos", "x86_64", "unsigned-dmg", "macos-x86_64.dmg"),
     "macos-aarch64": ("macos", "aarch64", "unsigned-dmg", "macos-aarch64.dmg"),
+    "macos-x86_64-compat": (
+        "macos",
+        "x86_64",
+        "macos-app-tar-gz",
+        "macos-x86_64.app.tar.gz",
+    ),
+    "macos-aarch64-compat": (
+        "macos",
+        "aarch64",
+        "macos-app-tar-gz",
+        "macos-aarch64.app.tar.gz",
+    ),
     "linux-x86_64": ("linux", "x86_64", "appimage", "linux-x86_64.AppImage"),
     "linux-x86_64-deb": ("linux", "x86_64", "deb", "linux-x86_64.deb"),
     "windows-x86_64-update": (
@@ -124,6 +136,8 @@ def validate_identity(version: str, release_tag: str, channel: str, rollout: int
 
 
 def artifact_entries(dist: Path, release_tag: str) -> list[dict[str, object]]:
+    """Enumerate every published asset so signed provenance cannot silently omit compatibility archives."""
+
     entries = []
     for artifact_id, (platform, arch, package_format, suffix) in ARTIFACT_SUFFIXES.items():
         filename = f"gmark-{release_tag}-{suffix}"
@@ -252,6 +266,8 @@ def require_keys(value: object, expected: set[str], label: str) -> dict[str, obj
 
 
 def validate_signed_payload_types(payload: dict[str, object]) -> None:
+    """Reject partial artifact lists before a valid signature can bless an incomplete release."""
+
     if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
         fail("payload schema_version must be integer 1")
     for field in ("version", "release_tag", "channel", "published_at"):

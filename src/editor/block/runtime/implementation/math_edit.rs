@@ -472,7 +472,18 @@ impl Block {
         false
     }
 
+    /// Clears the transient math-edit surface only when it is actually active, because
+    /// render-driven focus synchronization must not invalidate an already static block.
     pub(crate) fn finish_math_edit(&mut self, cx: &mut Context<Self>) {
+        let had_edit_state = self.math_edit_session.is_some()
+            || self.math_edit_inline_range.is_some()
+            || self.math_marked_range.is_some()
+            || self.math_source_marked_range.is_some()
+            || self.math_source_selected_range != (0..0)
+            || self.math_source_selection_reversed
+            || self.math_source_is_selecting
+            || self.math_palette_anchor_y.is_some();
+
         self.math_edit_session = None;
         self.math_edit_inline_range = None;
         self.math_marked_range = None;
@@ -481,7 +492,9 @@ impl Block {
         self.math_source_selection_reversed = false;
         self.math_source_is_selecting = false;
         self.math_palette_anchor_y = None;
-        cx.notify();
+        if had_edit_state {
+            cx.notify();
+        }
     }
 
     fn current_math_raw(&self) -> String {

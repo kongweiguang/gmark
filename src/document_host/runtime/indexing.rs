@@ -5,6 +5,111 @@
 use super::*;
 
 impl DocumentHost {
+    /// 空文件的正文和行索引都可以在固定成本内完成；先安装这一份权威 session，
+    /// 让首帧 Source 行直接拥有可提交的 transaction，而不是把用户首字符送进
+    /// 尚未安装 backend 的 provisional Block。任何身份或解码失败都留在调用方显示，
+    /// 不会为了这条快路径把大文件扫描搬回 UI 线程。
+    fn install_empty_file_session(
+        &mut self,
+        source: &FileSource,
+        _cx: &mut Context<Self>,
+    ) -> Result<(), gmark_paged_document::PagedDocumentError> {
+        // Probe 与 session 安装之间若文件已经增长，必须回到后台重探测路径；否则
+        // 不能把一个实际的大文件误当成空文件并在 UI 线程扫描它的行索引。
+        if source.identity()? != self.probe.identity {
+            return Err(PagedDocumentError::SourceChanged);
+        }
+        let prepared = prepare_utf8_source(source.clone(), self.probe.encoding.clone())?;
+        if prepared.source().identity()?.len != 0 {
+            return Err(PagedDocumentError::SourceChanged);
+        }
+        let index = LineIndex::build(prepared.source())?;
+        let document = build_document_session_from_prepared(
+            &self.probe,
+            source,
+            prepared,
+            index.clone(),
+            false,
+        )?;
+        #[cfg(not(test))]
+        let recovery_document = document.clone();
+        self.index = Some(index);
+        self.install_document_session(document);
+        if self.document.is_none() {
+            return Err(PagedDocumentError::InvalidTransaction(
+                "empty file document controller initialization failed".into(),
+            ));
+        }
+        self.provisional_source = None;
+        self.provisional_anchor = None;
+        self.invalidate_source_rows();
+        self.install_empty_source_row();
+        #[cfg(not(test))]
+        self.start_empty_recovery_journal(source.clone(), recovery_document, _cx);
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    /// Resolve the recovery path without touching disk on the UI thread, then
+    /// create the empty-file journal in the background.  Empty documents still
+    /// become editable immediately; a failed journal setup only degrades
+    /// recovery and never blocks Controller/session installation.
+    fn start_empty_recovery_journal(
+        &mut self,
+        source: FileSource,
+        document: DocumentSession,
+        cx: &mut Context<Self>,
+    ) {
+        let recovery_already_started = self.coordinator.recovery_journal.is_some()
+            || self.coordinator.recovery_worker.is_some();
+        if recovery_already_started {
+            return;
+        }
+        // Mark recovery as enabled before resolving directories so an AppDirs
+        // failure still keeps the first Resident edit in the bounded in-memory
+        // handoff instead of silently dropping it with recovery disabled.
+        self.coordinator.recovery_enabled = true;
+        let recovery_dirs = match gmark_config::AppDirs::from_system() {
+            Ok(dirs) => dirs,
+            Err(error) => {
+                self.coordinator.recovery_error = Some(error.to_string().into());
+                return;
+            }
+        };
+        let recovery_dir = recovery_dirs.recovery_dir();
+        let encoding = self.probe.encoding.clone();
+        let document_epoch = self.document_epoch;
+        let recovery_generation = self.coordinator.recovery_generation;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    recovery_dirs
+                        .ensure_state_parent(&recovery_dir.join(".gmark-recovery-root"))
+                        .map_err(|error| PagedDocumentError::Recovery(error.to_string()))?;
+                    DocumentRecoveryJournal::create(&recovery_dir, &source, encoding, &document)
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.document_epoch != document_epoch
+                    || view.coordinator.recovery_generation != recovery_generation
+                    || view.document.is_none()
+                    || view.coordinator.recovery_journal.is_some()
+                    || view.coordinator.recovery_worker.is_some()
+                {
+                    return;
+                }
+                match result {
+                    Ok(journal) => view.install_recovery_journal(journal, cx),
+                    Err(error) => {
+                        view.coordinator.recovery_error = Some(error.to_string().into());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// 初次打开和关闭标签后的恢复共用同一条索引管线。任务结果由 document epoch、
     /// revision 与 generation 三重门禁，关闭期间取消的旧 worker 永远不能重新安装。
     pub(super) fn start_initial_index(&mut self, cx: &mut Context<Self>) {
@@ -20,26 +125,29 @@ impl DocumentHost {
             );
             return;
         };
-        let probe = self.probe.clone();
-        #[cfg(not(test))]
-        let recovery_dir = match gmark_config::AppDirs::from_system() {
-            Ok(dirs) => {
-                let recovery_dir = dirs.recovery_dir();
-                match dirs.ensure_state_parent(&recovery_dir.join(".gmark-recovery-root")) {
-                    Ok(()) => Some(recovery_dir),
-                    Err(error) => {
-                        eprintln!("recovery persistence disabled: {error:#}");
-                        None
-                    }
+        if self.probe.len == 0 {
+            match self.install_empty_file_session(&worker_source, cx) {
+                Ok(()) => return,
+                // Probe 与打开句柄之间的增长/替换属于现有后台重探测契约；不能把
+                // 这个可恢复竞态误报成 UI 线程失败页。
+                Err(PagedDocumentError::SourceChanged) => {}
+                Err(error) => {
+                    self.error = Some(localized_document_error(&error, cx));
+                    return;
                 }
             }
+        }
+        let probe = self.probe.clone();
+        let recovery_dirs = match gmark_config::AppDirs::from_system() {
+            Ok(dirs) => Some(dirs),
             Err(error) => {
                 eprintln!("recovery persistence disabled: {error:#}");
                 None
             }
         };
-        #[cfg(test)]
-        let recovery_dir: Option<PathBuf> = None;
+        if recovery_dirs.is_some() {
+            self.coordinator.recovery_enabled = true;
+        }
         let index_cache_dir = match gmark_config::AppDirs::from_system() {
             Ok(dirs) => {
                 let cache_dir = dirs.large_document_indexes_dir();
@@ -132,13 +240,22 @@ impl DocumentHost {
                                     &index,
                                     &index_worker_cancellation,
                                 )?;
-                            let recovery = recovery_dir.as_ref().map(|dir| {
-                                DocumentRecoveryJournal::create(
-                                    dir,
-                                    &recovery_source,
-                                    encoding.clone(),
-                                    &document,
+                            let recovery = recovery_dirs.as_ref().map(|dirs| {
+                                let recovery_dir = dirs.recovery_dir();
+                                dirs.ensure_state_parent(
+                                    &recovery_dir.join(".gmark-recovery-root"),
                                 )
+                                .map_err(|error| {
+                                    PagedDocumentError::Recovery(error.to_string())
+                                })
+                                .and_then(|()| {
+                                    DocumentRecoveryJournal::create(
+                                        &recovery_dir,
+                                        &recovery_source,
+                                        encoding.clone(),
+                                        &document,
+                                    )
+                                })
                             });
                             Ok::<_, PagedDocumentError>((
                                 probe,
@@ -197,7 +314,7 @@ impl DocumentHost {
                         }
                         if let Some(recovery) = recovery {
                             match recovery {
-                                Ok(journal) => view.coordinator.recovery_journal = Some(journal),
+                                Ok(journal) => view.install_recovery_journal(journal, cx),
                                 Err(error) => {
                                     view.coordinator.recovery_error = Some(
                                         cx.global::<I18nManager>()

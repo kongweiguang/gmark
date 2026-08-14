@@ -559,19 +559,22 @@ fn next_accessibility_fold_line(
 fn update_accessibility_revision(cx: &App) -> u64 {
     match crate::updater::UpdateCoordinator::try_state(cx) {
         None | Some(crate::updater::UpdateState::Idle) => 0,
-        Some(crate::updater::UpdateState::Checking { .. }) => 1,
-        Some(crate::updater::UpdateState::UpToDate { .. }) => 2,
-        Some(crate::updater::UpdateState::Available(_)) => 3,
+        Some(crate::updater::UpdateState::Restoring) => 1,
+        Some(crate::updater::UpdateState::Checking { .. }) => 2,
+        Some(crate::updater::UpdateState::UpToDate { .. }) => 3,
+        Some(crate::updater::UpdateState::Available(_)) => 4,
         Some(crate::updater::UpdateState::Downloading {
             downloaded, total, ..
-        }) if total > 0 => downloaded.saturating_mul(100) / total + 10,
-        Some(crate::updater::UpdateState::Downloading { .. }) => 10,
-        Some(crate::updater::UpdateState::Paused { .. }) => 111,
-        Some(crate::updater::UpdateState::Verifying { .. }) => 112,
-        Some(crate::updater::UpdateState::Ready { .. }) => 113,
-        Some(crate::updater::UpdateState::Succeeded { .. }) => 114,
+        }) if total > 0 => downloaded.saturating_mul(100) / total + 20,
+        Some(crate::updater::UpdateState::Downloading { .. }) => 20,
+        Some(crate::updater::UpdateState::Paused { .. }) => 121,
+        Some(crate::updater::UpdateState::Verifying { .. }) => 122,
+        Some(crate::updater::UpdateState::Ready { .. }) => 123,
+        Some(crate::updater::UpdateState::StagingInstall { .. }) => 124,
+        Some(crate::updater::UpdateState::Staged { .. }) => 125,
+        Some(crate::updater::UpdateState::Succeeded { .. }) => 126,
         Some(crate::updater::UpdateState::Failed {
             release, retryable, ..
-        }) => 115 + u64::from(retryable) + (u64::from(release.is_some()) << 1),
+        }) => 127 + u64::from(retryable) + (u64::from(release.is_some()) << 1),
     }
 }

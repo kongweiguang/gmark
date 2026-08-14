@@ -4,7 +4,50 @@
 
 use super::*;
 
+#[path = "pane_lifecycle/close.rs"]
+mod close;
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/editor/pane_lifecycle_private.rs"]
+mod tests;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaneCanvasKind {
+    Markdown,
+    DocumentHost,
+    ReadOnly,
+}
+
+/// Limits structural host detachment to the canvas whose live lease must move
+/// back into the pane model; Markdown and read-only entities keep their view
+/// state and focus surface mounted across tree rebuilds.
+fn pane_canvas_kind_requires_detach(kind: PaneCanvasKind) -> bool {
+    matches!(kind, PaneCanvasKind::DocumentHost)
+}
+
+/// Identifies pane-tree mutations that must survive a crash through a session
+/// snapshot; close-tab has a separate dirty/lease lifecycle and schedules on
+/// its accepted close path instead.
+fn pane_event_persists_workspace(event: &crate::editor::panes::PaneEvent) -> bool {
+    matches!(
+        event,
+        crate::editor::panes::PaneEvent::Split { .. }
+            | crate::editor::panes::PaneEvent::CopyTab { .. }
+            | crate::editor::panes::PaneEvent::Close { .. }
+            | crate::editor::panes::PaneEvent::MoveTab { .. }
+            | crate::editor::panes::PaneEvent::Balance
+    )
+}
+
+/// Requires both a structural event and a successful model mutation so an
+/// invalid close/move cannot create a needless session generation or snapshot.
+fn should_persist_pane_event(event: &crate::editor::panes::PaneEvent, succeeded: bool) -> bool {
+    succeeded && pane_event_persists_workspace(event)
+}
+
 impl Editor {
+    /// Moves only an active host lease back to its pane model while preserving
+    /// the view snapshot needed to recreate the host after a tree mutation.
     pub(in crate::editor) fn detach_pane_canvas(
         &mut self,
         pane: crate::editor::panes::PaneId,
@@ -55,12 +98,24 @@ impl Editor {
         }
     }
 
+    /// Detaches host canvases before structural tree rewrites because their
+    /// linear runtime token cannot be cloned while Markdown/read-only entities
+    /// must remain mounted to preserve focus and presentation state.
     pub(super) fn detach_all_pane_host_canvases(&mut self, cx: &mut Context<Self>) {
         let panes = self
             .pane_canvas_entities
             .borrow()
-            .keys()
-            .copied()
+            .iter()
+            .filter_map(|(pane, (_, _, canvas))| {
+                let kind = match canvas {
+                    crate::editor::panes::PaneCanvasEntity::Markdown(_) => PaneCanvasKind::Markdown,
+                    crate::editor::panes::PaneCanvasEntity::DocumentHost(_) => {
+                        PaneCanvasKind::DocumentHost
+                    }
+                    crate::editor::panes::PaneCanvasEntity::ReadOnly(_) => PaneCanvasKind::ReadOnly,
+                };
+                pane_canvas_kind_requires_detach(kind).then_some(*pane)
+            })
             .collect::<Vec<_>>();
         for pane in panes {
             self.detach_pane_canvas(pane, cx);
@@ -301,6 +356,8 @@ impl Editor {
         states.into_values().collect()
     }
 
+    /// Applies one pane command, then persists only successful structural
+    /// mutations so rejected operations cannot alter session generations.
     pub(in crate::editor) fn handle_pane_event(
         &mut self,
         event: crate::editor::panes::PaneEvent,
@@ -325,6 +382,7 @@ impl Editor {
             self.request_close_pane_tab(&workspace_entity, pane, tab, window, cx);
             return;
         }
+        self.invalidate_pane_close_for_event(&event, cx);
         // A host canvas owns the only live lease. Move it only for structural
         // tree operations; focus and divider updates must not tear down a
         // live input surface and cause a visible focus flash.
@@ -396,6 +454,7 @@ impl Editor {
                 })
             }
         };
+        let succeeded = result.is_ok();
         if let Err(error) = result {
             // The model intentionally leaves all state untouched on illegal
             // transfers (duplicate identity, last-pane close, etc.). Keep the
@@ -417,6 +476,9 @@ impl Editor {
             self.show_pane_notice(message, cx);
         }
         self.sync_pane_canvas_entities(cx);
+        if should_persist_pane_event(&event, succeeded) {
+            self.schedule_workspace_session_save(cx);
+        }
         cx.notify();
     }
 
@@ -476,6 +538,8 @@ impl Editor {
         Some((dirty, leases))
     }
 
+    /// Defers a dirty tab close until its own document save reports a terminal
+    /// result, keeping the mounted canvas stable while the prompt is visible.
     pub(super) fn request_close_pane_tab(
         &mut self,
         workspace: &Entity<crate::editor::panes::PaneWorkspaceView>,
@@ -488,14 +552,19 @@ impl Editor {
             return;
         };
         if dirty && leases <= 1 {
-            self.pane_close_target = Some((pane, tab));
+            self.begin_pane_close_request(pane, tab, cx);
             self.show_pane_tab_close_prompt(cx);
             return;
         }
+        // A direct close supersedes any older save request for another tab;
+        // drop that task before mutating the pane model synchronously.
+        self.invalidate_pane_close_save(cx);
         self.close_pane_tab_now(workspace, pane, tab, cx);
         let _ = window;
     }
 
+    /// Applies a validated pane-model close and retires its request identity so
+    /// late callbacks cannot target a replacement tab.
     pub(in crate::editor) fn close_pane_tab_now(
         &mut self,
         workspace: &Entity<crate::editor::panes::PaneWorkspaceView>,
@@ -537,143 +606,10 @@ impl Editor {
             let _ = self.new_document_tab_in_pane(target, DocumentKind::Markdown, cx);
         }
         drop(closed);
-        self.pane_close_target = None;
+        self.finish_pane_close_request(cx);
         self.sync_pane_canvas_entities(cx);
         self.schedule_workspace_session_save(cx);
         cx.notify();
         true
-    }
-
-    pub(in crate::editor) fn start_pane_tab_save(
-        &mut self,
-        pane: crate::editor::panes::PaneId,
-        tab: crate::editor::panes::TabId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(workspace) = self.pane_workspace.clone() else {
-            return;
-        };
-        let active = workspace
-            .read(cx)
-            .workspace()
-            .pane(pane)
-            .and_then(|state| state.active_tab_id());
-        if active != Some(tab) {
-            if workspace
-                .update(cx, |workspace, _cx| {
-                    workspace.workspace_mut().focus(pane)?;
-                    workspace.workspace_mut().set_active_tab(pane, tab)
-                })
-                .is_err()
-            {
-                self.pane_close_target = None;
-                return;
-            }
-            self.detach_all_pane_host_canvases(cx);
-            self.sync_pane_canvas_entities(cx);
-        }
-        let markdown_canvas =
-            self.pane_canvas_entities
-                .borrow()
-                .get(&pane)
-                .and_then(|(_, _, canvas)| match canvas {
-                    crate::editor::panes::PaneCanvasEntity::Markdown(entity) => {
-                        Some(entity.clone())
-                    }
-                    crate::editor::panes::PaneCanvasEntity::DocumentHost(_)
-                    | crate::editor::panes::PaneCanvasEntity::ReadOnly(_) => None,
-                });
-        let host_canvas =
-            self.pane_canvas_entities
-                .borrow()
-                .get(&pane)
-                .and_then(|(_, _, canvas)| match canvas {
-                    crate::editor::panes::PaneCanvasEntity::DocumentHost(entity) => {
-                        Some(entity.clone())
-                    }
-                    crate::editor::panes::PaneCanvasEntity::Markdown(_)
-                    | crate::editor::panes::PaneCanvasEntity::ReadOnly(_) => None,
-                });
-        if markdown_canvas.is_none() && host_canvas.is_none() {
-            self.pane_close_target = None;
-            return;
-        }
-        if let Some(entity) = markdown_canvas {
-            let editor = entity.read(cx).editor();
-            let signal = Arc::new(std::sync::atomic::AtomicU8::new(0));
-            self.pane_close_save_signal = Some(signal.clone());
-            editor.update(cx, |editor, cx| {
-                editor.pane_close_save_signal = Some(signal);
-                editor.save_document(window, cx);
-            });
-            self.poll_pane_tab_save(pane, tab, None, cx);
-        } else if let Some(entity) = host_canvas {
-            let host = entity.read(cx).host();
-            host.update(cx, |host, cx| {
-                host.on_save_document(&crate::components::SaveDocument, window, cx);
-            });
-            self.poll_pane_tab_save(pane, tab, Some(host), cx);
-        } else {
-            self.pane_close_target = None;
-        }
-    }
-
-    pub(super) fn poll_pane_tab_save(
-        &mut self,
-        pane: crate::editor::panes::PaneId,
-        tab: crate::editor::panes::TabId,
-        host: Option<Entity<crate::document_host::DocumentHost>>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(workspace) = self.pane_workspace.clone() else {
-            self.pane_close_target = None;
-            return;
-        };
-        let signal = self.pane_close_save_signal.clone();
-        let weak = cx.entity().downgrade();
-        self.pane_close_save_task = Some(cx.spawn(async move |_, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-                let done = weak
-                    .update(cx, |editor, cx| {
-                        if let Some(signal) = signal.as_ref() {
-                            match signal.load(std::sync::atomic::Ordering::Acquire) {
-                                1 => {
-                                    editor.pane_close_save_signal = None;
-                                    editor.close_pane_tab_now(&workspace, pane, tab, cx);
-                                    return true;
-                                }
-                                2 => {
-                                    editor.pane_close_target = None;
-                                    editor.pane_close_save_signal = None;
-                                    cx.notify();
-                                    return true;
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(host) = host.as_ref() {
-                            let snapshot = host.read(cx).accessibility_snapshot(cx);
-                            if !snapshot.busy {
-                                if !snapshot.dirty {
-                                    editor.close_pane_tab_now(&workspace, pane, tab, cx);
-                                } else {
-                                    editor.pane_close_target = None;
-                                    cx.notify();
-                                }
-                                return true;
-                            }
-                        }
-                        false
-                    })
-                    .unwrap_or(true);
-                if done {
-                    break;
-                }
-            }
-        }));
     }
 }

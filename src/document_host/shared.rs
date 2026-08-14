@@ -25,6 +25,8 @@ use gmark_paged_document::{
     SearchOptions, ViewportRequest, ViewportSnapshot,
 };
 
+use super::recovery_worker::SharedRecoveryState;
+
 /// Shared body plus one explicit view lifetime token.
 pub(crate) struct SharedDocument {
     handle: DocumentHandle,
@@ -34,6 +36,9 @@ pub(crate) struct SharedDocument {
     /// Keeping it shared prevents a stale worker clone from recreating a
     /// closed controller view after suspension.
     registered: Arc<AtomicBool>,
+    /// Recovery is anchored to the shared Controller handle so detached panes
+    /// reuse one mailbox instead of starting view-local journal writers.
+    recovery: Arc<SharedRecoveryState>,
 }
 
 impl Clone for SharedDocument {
@@ -45,6 +50,7 @@ impl Clone for SharedDocument {
             lease: None,
             view_id: self.view_id,
             registered: Arc::clone(&self.registered),
+            recovery: Arc::clone(&self.recovery),
         }
     }
 }
@@ -59,11 +65,13 @@ impl SharedDocument {
             let mut controller = handle.lock()?;
             controller.register_view(view_id);
         }
+        let recovery = shared_recovery_state(&handle)?;
         Ok(Self {
             handle,
             lease: Some(lease),
             view_id,
             registered: Arc::new(AtomicBool::new(true)),
+            recovery,
         })
     }
 
@@ -90,11 +98,13 @@ impl SharedDocument {
             }
             controller.register_view(view_id);
         }
+        let recovery = shared_recovery_state(&handle)?;
         Ok(Self {
             handle,
             lease: Some(lease),
             view_id,
             registered: Arc::new(AtomicBool::new(true)),
+            recovery,
         })
     }
 
@@ -108,6 +118,12 @@ impl SharedDocument {
 
     pub(crate) fn handle(&self) -> DocumentHandle {
         self.handle.clone()
+    }
+
+    /// Return the Controller-lifetime recovery state used by every active and
+    /// detached view; the caller only receives an Arc and never owns journal IO.
+    pub(crate) fn recovery_state(&self) -> Arc<SharedRecoveryState> {
+        Arc::clone(&self.recovery)
     }
 
     pub(crate) fn view_id(&self) -> DocumentViewInstanceId {
@@ -490,6 +506,25 @@ impl SharedDocument {
     pub(crate) fn snapshot(&self) -> Result<std::sync::Arc<dyn DocumentSnapshot>, ControllerError> {
         Ok(self.lock()?.session().snapshot())
     }
+
+    /// Capture the immutable post-command input used by background recovery.
+    /// The lock is held only while cloning in-memory runtime state; journal
+    /// serialization and filesystem writes happen after this method returns.
+    pub(crate) fn save_snapshot(&self) -> Result<DocumentSaveSnapshot, ControllerError> {
+        Ok(self.lock()?.save_snapshot())
+    }
+}
+
+fn shared_recovery_state(
+    handle: &DocumentHandle,
+) -> Result<Arc<SharedRecoveryState>, ControllerError> {
+    if let Some(recovery) = handle.shared_extension::<SharedRecoveryState>()? {
+        return Ok(recovery);
+    }
+    // The typed extension is installed under DocumentHandle's own mutex, so
+    // concurrent pane construction receives the same state and cannot create
+    // duplicate workers for one Controller.
+    handle.install_shared_extension(Arc::new(SharedRecoveryState::new()))
 }
 
 impl Drop for SharedDocument {

@@ -5,6 +5,8 @@
 use super::*;
 
 impl DocumentHost {
+    /// Publish undo as an ordered recovery command after the Controller change,
+    /// preserving replay semantics without borrowing the live journal.
     pub(crate) fn on_undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving || self.reloading {
             return;
@@ -15,27 +17,14 @@ impl DocumentHost {
             .is_some_and(|document| document.undo_changed().unwrap_or(false));
         if changed {
             let restored_selection = self.document.as_ref().map(SharedDocument::source_selection);
-            if let (Some(journal), Some(document)) = (
-                self.coordinator.recovery_journal.as_mut(),
-                self.document.as_ref(),
-            ) {
-                let result = document.with_session(|session| {
-                    journal.record_after_change(
-                        session,
-                        &RecoveryRecord {
-                            action: RecoveryAction::Undo,
-                            selection: restored_selection,
-                            view_id: DocumentViewId::source(),
-                        },
-                    )
-                });
-                match result {
-                    Ok(Err(error)) => {
-                        self.coordinator.recovery_error = Some(error.to_string().into())
-                    }
-                    Err(error) => self.coordinator.recovery_error = Some(error.to_string().into()),
-                    Ok(Ok(())) => {}
-                }
+            if let Some(document) = self.document.clone() {
+                self.enqueue_recovery_action(
+                    &document,
+                    RecoveryAction::Undo,
+                    restored_selection,
+                    DocumentViewId::source(),
+                    cx,
+                );
             }
             self.active_edit = None;
             if let Some(selection) = restored_selection {
@@ -75,6 +64,8 @@ impl DocumentHost {
         }
     }
 
+    /// Publish redo through the same worker so Paged journals cannot lose a
+    /// command when save/reload work is concurrent with history navigation.
     pub(crate) fn on_redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving || self.reloading {
             return;
@@ -85,27 +76,14 @@ impl DocumentHost {
             .is_some_and(|document| document.redo_changed().unwrap_or(false));
         if changed {
             let restored_selection = self.document.as_ref().map(SharedDocument::source_selection);
-            if let (Some(journal), Some(document)) = (
-                self.coordinator.recovery_journal.as_mut(),
-                self.document.as_ref(),
-            ) {
-                let result = document.with_session(|session| {
-                    journal.record_after_change(
-                        session,
-                        &RecoveryRecord {
-                            action: RecoveryAction::Redo,
-                            selection: restored_selection,
-                            view_id: DocumentViewId::source(),
-                        },
-                    )
-                });
-                match result {
-                    Ok(Err(error)) => {
-                        self.coordinator.recovery_error = Some(error.to_string().into())
-                    }
-                    Err(error) => self.coordinator.recovery_error = Some(error.to_string().into()),
-                    Ok(Ok(())) => {}
-                }
+            if let Some(document) = self.document.clone() {
+                self.enqueue_recovery_action(
+                    &document,
+                    RecoveryAction::Redo,
+                    restored_selection,
+                    DocumentViewId::source(),
+                    cx,
+                );
             }
             self.active_edit = None;
             if let Some(selection) = restored_selection {

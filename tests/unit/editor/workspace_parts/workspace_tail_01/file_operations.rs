@@ -33,8 +33,19 @@
                 .workspace
                 .operation_dialog
                 .as_ref()
-                .expect("delete confirmation");
+                .expect("delete confirmation while planning");
             assert_eq!(dialog.kind, super::WorkspaceOperationKind::Delete);
+            assert!(dialog.plan.is_none());
+            assert!(dialog.running);
+        });
+        visual.run_until_parked();
+        editor.update(visual, |editor, cx| {
+            let dialog = editor
+                .workspace
+                .operation_dialog
+                .as_ref()
+                .expect("delete confirmation after planning");
+            assert!(!dialog.running);
             assert!(dialog.plan.is_none());
             assert_eq!(
                 dialog.error.as_deref(),
@@ -45,6 +56,7 @@
                         .as_str()
                 )
             );
+            assert!(editor.workspace.file_operation_task.is_none());
         });
 
         assert!(path.exists());
@@ -111,10 +123,13 @@
         editor.update(visual, |editor, cx| {
             editor.set_document_dirty_for_test(true);
             editor.execute_workspace_move_plan(plan.clone(), false, cx);
+            assert!(editor.workspace.file_operation_task.is_some());
+        });
+        visual.run_until_parked();
+        editor.update(visual, |editor, _cx| {
             assert!(editor.workspace.file_operation_task.is_none());
             assert!(editor.workspace.operation_error.is_some());
         });
-        visual.run_until_parked();
         assert!(source.exists());
         assert!(!destination.exists());
 
@@ -167,6 +182,68 @@
         });
         assert!(!created.exists());
         assert!(existing.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[gpui::test]
+    async fn newly_created_empty_text_file_accepts_the_first_edit_without_external_conflict(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_workspace_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "gmark-create-empty-edit-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let existing = root.join("existing.md");
+        fs::write(&existing, "# existing\n").unwrap();
+        let plan = crate::editor::workspace_file_ops::plan_workspace_create(
+            &root,
+            &root,
+            "empty.txt",
+            crate::editor::workspace_file_ops::WorkspaceCreateKind::File,
+        )
+        .unwrap();
+        let created = plan.path.clone();
+        let editor_path = existing.clone();
+        let (editor, visual) = cx.add_window_view(move |_window, cx| {
+            super::Editor::from_markdown(cx, "# existing\n".to_owned(), Some(editor_path))
+        });
+
+        editor.update(visual, |editor, cx| {
+            editor.execute_workspace_create_plan(plan, false, cx);
+        });
+        visual.run_until_parked();
+        let source_host = editor
+            .read_with(visual, |editor, _cx| editor.document_host.clone())
+            .expect("new text file source host");
+        // 等待首轮外部变更检查完成再输入，覆盖真实用户在新建弹框结束后才开始编辑的时序。
+        visual
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(1_100));
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            source_host.update(cx, |host, cx| host.begin_line_edit_for_test(0, window, cx));
+        });
+        let (_, row) = source_host
+            .read_with(visual, |host, _cx| host.active_edit_for_test())
+            .expect("empty file first source row");
+        row.update(visual, |block, cx| {
+            block.replace_text_in_visible_range(0..0, "hello", None, false, cx);
+        });
+        visual.run_until_parked();
+
+        assert_eq!(
+            source_host.read_with(visual, |host, _cx| host.source_text_for_test()),
+            "hello"
+        );
+        assert!(editor.read_with(visual, |editor, _cx| editor.is_document_dirty()));
+        assert_eq!(
+            source_host.read_with(visual, |host, _cx| host.pending_external_change_for_test()),
+            None
+        );
+        assert_eq!(fs::read(&created).unwrap(), Vec::<u8>::new());
 
         let _ = fs::remove_dir_all(root);
     }

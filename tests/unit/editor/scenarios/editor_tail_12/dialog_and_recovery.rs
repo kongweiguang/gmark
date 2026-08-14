@@ -1,5 +1,37 @@
 // @author kongweiguang
 
+/// 校验共享操作区只保留一次顶部留白，并确保按钮没有越过面板边界。
+fn assert_standard_dialog_actions(
+    visual: &mut VisualTestContext,
+    panel_selector: &'static str,
+    actions_selector: &'static str,
+    button_selectors: &[&'static str],
+) {
+    let panel = visual.debug_bounds(panel_selector).unwrap();
+    let actions = visual.debug_bounds(actions_selector).unwrap();
+    assert!(actions.left() >= panel.left(), "{actions_selector} escaped left");
+    assert!(actions.right() <= panel.right(), "{actions_selector} escaped right");
+    assert!(actions.bottom() <= panel.bottom(), "{actions_selector} escaped bottom");
+
+    let first = visual.debug_bounds(button_selectors[0]).unwrap();
+    let top_gap = f32::from(first.top()) - f32::from(actions.top());
+    let bottom_gap = f32::from(panel.bottom()) - f32::from(first.bottom());
+    assert!(
+        (top_gap - bottom_gap).abs() <= 2.0,
+        "{panel_selector} action padding should be symmetric: top={top_gap}, bottom={bottom_gap}"
+    );
+
+    for selector in button_selectors {
+        let button = visual.debug_bounds(selector).unwrap();
+        assert_eq!(f32::from(button.size.height), 36.0, "{selector} height");
+        assert!(button.left() >= panel.left(), "{selector} escaped left");
+        assert!(button.right() <= panel.right(), "{selector} escaped right");
+        assert!(button.top() >= actions.top(), "{selector} escaped action top");
+        assert!(button.bottom() <= panel.bottom(), "{selector} escaped bottom");
+        assert_eq!(button.size.height, first.size.height, "{selector} height mismatch");
+    }
+}
+
 #[gpui::test]
 async fn status_bar_file_state_uses_semantic_icons_and_conflict_opens_comparison(
     cx: &mut TestAppContext,
@@ -134,6 +166,16 @@ async fn close_and_encoding_dialog_actions_stay_visible_at_two_x_scale(cx: &mut 
             "{selector} escaped bottom: action={action:?}, dialog={dialog:?}"
         );
     }
+    assert_standard_dialog_actions(
+        visual_cx,
+        "unsaved-changes-dialog",
+        "unsaved-changes-actions",
+        &[
+            "cancel-close-dialog",
+            "discard-and-close-dialog",
+            "save-and-close-dialog",
+        ],
+    );
 
     editor.update(visual_cx, |editor, cx| {
         editor.show_unsaved_changes_dialog = false;
@@ -255,6 +297,12 @@ async fn table_and_drop_dialogs_use_standard_compact_layout(cx: &mut TestAppCont
             "{selector} escaped bottom: action={action:?}, dialog={dialog:?}"
         );
     }
+    assert_standard_dialog_actions(
+        visual_cx,
+        "table-insert-dialog",
+        "table-insert-dialog-actions",
+        &["cancel-table-insert-dialog", "confirm-table-insert-dialog"],
+    );
 
     editor.update(visual_cx, |editor, cx| {
         editor.table_insert_dialog = None;

@@ -278,7 +278,16 @@ pub(crate) fn install_menus(cx: &mut App) {
     if cx.try_global::<AppMenuState>().is_none() {
         cx.set_global(AppMenuState::default());
     }
-    let recent_files = recent_files_for_menu();
+    let recent_files = cx.global::<AppMenuState>().recent_files.clone();
+    install_menus_with_recent_files(cx, recent_files);
+}
+
+/// 用后台读取完成的历史快照重建菜单，避免菜单动作再次同步访问配置目录。
+pub(crate) fn install_menus_with_recent_files(cx: &mut App, recent_files: Vec<PathBuf>) {
+    if cx.try_global::<AppMenuState>().is_none() {
+        cx.set_global(AppMenuState::default());
+    }
+    cx.global_mut::<AppMenuState>().recent_files = recent_files.clone();
     #[cfg(target_os = "macos")]
     let active_document_menu = cx.active_window().and_then(|window| {
         let editor = window.downcast::<Editor>()?;

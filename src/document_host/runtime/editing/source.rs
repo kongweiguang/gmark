@@ -5,6 +5,14 @@
 use super::*;
 
 impl DocumentHost {
+    /// Reject oversized UTF-8 paste payloads before reading selection state or issuing a
+    /// Controller transaction, so a clipboard allocation cannot partially mutate a large source.
+    pub(crate) fn source_paste_exceeds_limit(text: &str) -> bool {
+        u64::try_from(text.len()).map_or(true, |bytes| {
+            bytes > gmark_paged_document::MAX_SYSTEM_CLIPBOARD_BYTES
+        })
+    }
+
     pub(super) fn selected_source_byte_range(&self) -> Option<Range<u64>> {
         if let Some(document) = self.document.as_ref() {
             let range = document.source_selection().range();
@@ -348,6 +356,8 @@ impl DocumentHost {
         true
     }
 
+    /// Finish a committed source edit and enqueue its resulting recovery
+    /// transaction after all Controller reads have left the edit callback.
     pub(super) fn install_source_replacement(
         &mut self,
         range: Range<u64>,
@@ -375,26 +385,20 @@ impl DocumentHost {
         }
         let caret = range.start.saturating_add(replacement.len() as u64);
         let selection = Some(SourceSelection::collapsed(caret, SourceAffinity::After));
-        if let (Some(journal), Some(document)) = (
-            self.coordinator.recovery_journal.as_mut(),
-            self.document.as_ref(),
-        ) {
-            let result = document.with_session(|session| {
-                record_recovery_transaction(
-                    journal,
-                    session,
-                    document.revision().saturating_sub(1),
-                    range.clone(),
-                    replacement,
-                    selection,
-                    recovery_view_id(self.view_mode),
-                )
-            });
-            match result {
-                Ok(Err(error)) => self.coordinator.recovery_error = Some(error.to_string().into()),
-                Err(error) => self.coordinator.recovery_error = Some(error.to_string().into()),
-                Ok(Ok(())) => {}
-            }
+        if let Some(document) = self.document.clone() {
+            // Read the base revision before entering the recovery queue.  The
+            // queue owns all journal I/O, so a recovery failure cannot re-lock
+            // the Controller while this UI transaction is still unwinding.
+            let base_revision = document.revision().saturating_sub(1);
+            self.enqueue_recovery_transaction(
+                &document,
+                base_revision,
+                range.clone(),
+                replacement,
+                selection,
+                recovery_view_id(self.view_mode),
+                cx,
+            );
         }
         let Some(document) = self.document.as_ref() else {
             return;
@@ -441,6 +445,16 @@ impl DocumentHost {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
+        if Self::source_paste_exceeds_limit(&text) {
+            self.error = Some(
+                cx.global::<I18nManager>()
+                    .strings()
+                    .large_document_text("clipboard_limit")
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
         let Some(range) = self
             .document
             .as_ref()

@@ -250,6 +250,7 @@ impl Editor {
         }
     }
 
+    /// 文档路径变化只重置依赖模型；目录扫描由显式代次任务继续负责，避免同步 IO。
     pub(in crate::editor) fn sync_workspace_after_document_path_change(
         &mut self,
         cx: &mut Context<Self>,
@@ -260,7 +261,9 @@ impl Editor {
         self.workspace.search_results.clear();
         self.workspace.search_error = None;
         let next_root = self.workspace_root_for_current_file();
-        if self.workspace.root != next_root {
+        let scan_request_matches =
+            self.workspace.file_scan_requested_root.as_ref() == next_root.as_ref();
+        if self.workspace.root != next_root && !scan_request_matches {
             self.invalidate_workspace_file_tree();
         }
         self.workspace.outline_source = None;
@@ -288,13 +291,20 @@ impl Editor {
         self.workspace.explicit_root.clone()
     }
 
+    /// 取消并隔离旧扫描结果，使后续目录请求不会被过期任务覆盖。
     pub(super) fn invalidate_workspace_file_tree(&mut self) {
+        if let Some(cancelled) = self.workspace.file_scan_cancel.take() {
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
+        }
         self.workspace.file_scan_generation = self.workspace.file_scan_generation.wrapping_add(1);
         self.workspace.file_scan_task = None;
         self.workspace.file_scanning = false;
+        self.workspace.file_scan_state = WorkspaceScanState::Idle;
+        self.workspace.file_scan_requested_root = None;
         self.workspace.root = None;
         self.workspace.file_tree = None;
         self.workspace.file_error = None;
+        self.workspace.quick_open_paths.clear();
     }
 
     pub(in crate::editor) fn explicit_workspace_root(&self) -> Option<PathBuf> {
@@ -336,9 +346,24 @@ impl Editor {
             }
             Ok(Err(error)) => {
                 let _ = this.update(cx, |editor, cx| {
-                    editor.workspace.file_error = Some(error.to_string());
+                    let error = error.to_string();
+                    // The native picker may fail while an older scan is still running. Advance
+                    // its generation so that late completion cannot erase this visible failure.
+                    if let Some(cancelled) = editor.workspace.file_scan_cancel.take() {
+                        cancelled.store(true, std::sync::atomic::Ordering::Release);
+                    }
+                    editor.workspace.file_scan_generation =
+                        editor.workspace.file_scan_generation.wrapping_add(1);
+                    let generation = editor.workspace.file_scan_generation;
+                    editor.workspace.file_scan_task = None;
+                    editor.workspace.file_scan_requested_root = None;
+                    editor.workspace.file_error = Some(error.clone());
+                    editor.workspace.file_scan_state =
+                        WorkspaceScanState::Failed { generation, error };
+                    editor.workspace.file_scanning = false;
                     editor.workspace.is_open = true;
                     cx.notify();
+                    cx.refresh_windows();
                 });
             }
             Ok(Ok(None)) | Err(_) => {}
@@ -346,108 +371,138 @@ impl Editor {
         .detach();
     }
 
+    /// 只提交用户选择的目录请求，让后台任务完成规范化并驱动首帧 Ready/Failed。
     pub(super) fn set_explicit_workspace_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        match dunce::canonicalize(&root) {
-            Ok(root) if root.is_dir() => {
-                self.workspace.explicit_root = Some(root);
-                self.workspace.is_open = true;
-                self.sync_workspace_after_document_path_change(cx);
-                self.schedule_workspace_session_save(cx);
-            }
-            Ok(_) => {
-                self.workspace.file_error = Some(format!(
-                    "workspace root is not a directory: '{}'",
-                    root.display()
-                ));
-                self.workspace.is_open = true;
-            }
-            Err(error) => {
-                self.workspace.file_error = Some(error.to_string());
-                self.workspace.is_open = true;
-            }
-        }
+        // 目录选择回调必须只提交请求；canonicalize 和所有磁盘遍历都放入后台，
+        // 否则 Windows 原生选择器返回后会在 UI 线程同步卡住且无法及时重绘。
+        self.workspace.explicit_root = Some(root);
+        self.workspace.is_open = true;
+        self.workspace
+            .focus_handle
+            .get_or_insert_with(|| cx.focus_handle());
+        self.workspace
+            .resize_focus_handle
+            .get_or_insert_with(|| cx.focus_handle());
+        self.sync_workspace_after_document_path_change(cx);
         cx.notify();
+        cx.refresh_windows();
     }
 
+    /// 为当前显式目录启动唯一代次的可取消后台扫描，防止渲染重复启动或卡住窗口。
     pub(super) fn sync_workspace_file_tree(&mut self, cx: &mut Context<Self>) {
         let next_root = self.workspace_root_for_current_file();
         if self.workspace.root == next_root
-            && (self.workspace.file_tree.is_some()
-                || self.workspace.file_scan_task.is_some()
-                || self.workspace.file_error.is_some())
+            && self.workspace.file_tree.is_some()
+            && self.workspace.file_scan_requested_root.is_none()
+            && self.workspace.file_scan_task.is_none()
         {
-            // 模型版本未变化时，选择权属于用户；每帧回写当前文档会破坏键盘和目录选择。
+            // 测试/恢复路径可能已经安装快照；模型版本未变化时不能重复扫描。
+            self.workspace.file_scan_requested_root = next_root.clone();
+            self.workspace.file_scan_state = WorkspaceScanState::Ready {
+                generation: self.workspace.file_scan_generation,
+            };
+            return;
+        }
+        if self.workspace.file_scan_requested_root.as_ref() == next_root.as_ref()
+            && (matches!(
+                self.workspace.file_scan_state,
+                WorkspaceScanState::Scanning { .. }
+            ) || (matches!(
+                self.workspace.file_scan_state,
+                WorkspaceScanState::Ready { .. }
+            ) && self.workspace.file_tree.is_some()))
+        {
+            // 只有仍在运行或拥有完整树快照的请求才复用；Failed 必须允许用户对同一路径显式重试。
             return;
         }
 
         self.workspace.root = next_root.clone();
         self.workspace.file_tree = None;
         self.workspace.file_error = None;
+        self.workspace.quick_open_paths.clear();
+        if let Some(cancelled) = self.workspace.file_scan_cancel.take() {
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
+        }
         self.workspace.file_scan_task = None;
         self.workspace.file_scan_generation = self.workspace.file_scan_generation.wrapping_add(1);
-        self.workspace.file_scanning = false;
+        let generation = self.workspace.file_scan_generation;
 
         let Some(root) = next_root else {
             self.workspace.selected = None;
+            self.workspace.file_scanning = false;
+            self.workspace.file_scan_requested_root = None;
+            self.workspace.file_scan_state = WorkspaceScanState::Idle;
             return;
         };
 
-        // Validate the root path
-        if root.as_os_str().is_empty() {
-            self.workspace.file_error = Some(
-                cx.global::<I18nManager>()
-                    .strings()
-                    .workspace_invalid_path_error
-                    .clone(),
-            );
-            self.workspace.selected = None;
-            return;
-        }
-
+        let pinned_empty_directories = self
+            .workspace
+            .pinned_empty_directories
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.workspace.file_scan_requested_root = Some(root.clone());
+        self.workspace.file_scan_cancel = Some(cancelled.clone());
+        self.workspace.file_scan_state = WorkspaceScanState::Scanning { generation };
         self.workspace.file_scanning = true;
-        let generation = self.workspace.file_scan_generation;
         self.workspace.file_scan_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
             let scan_root = root.clone();
+            let worker_cancelled = cancelled.clone();
             let result = cx
-                .background_spawn(async move { scan_workspace_dir(&scan_root) })
+                .background_spawn(async move {
+                    scan_workspace(&scan_root, &pinned_empty_directories, &worker_cancelled)
+                })
                 .await;
             let _ = this.update(cx, |editor, cx| {
                 if editor.workspace.file_scan_generation != generation
-                    || editor.workspace.root.as_ref() != Some(&root)
+                    || editor.workspace.file_scan_requested_root.as_ref() != Some(&root)
                 {
                     return;
                 }
                 editor.workspace.file_scan_task = None;
+                editor.workspace.file_scan_cancel = None;
                 editor.workspace.file_scanning = false;
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    editor.workspace.file_scan_state = WorkspaceScanState::Idle;
+                    // 取消也是终态，必须主动唤醒窗口，否则原生模态边界可能吞掉这次状态变化。
+                    cx.notify();
+                    cx.refresh_windows();
+                    return;
+                }
                 match result {
-                    Ok(mut tree) => {
-                        editor
-                            .workspace
-                            .pinned_empty_directories
-                            .retain(|path| path.is_dir() && path.starts_with(&root));
-                        for directory in &editor.workspace.pinned_empty_directories {
-                            insert_workspace_directory(&mut tree, &root, directory);
-                        }
-                        sort_workspace_tree(&mut tree);
-                        editor.workspace.expanded.insert(tree.id.clone());
-                        editor.workspace.file_tree = Some(tree);
+                    Ok(scan) => {
+                        editor.workspace.explicit_root = Some(scan.root.clone());
+                        editor.workspace.root = Some(scan.root.clone());
+                        editor.workspace.file_scan_requested_root = Some(scan.root.clone());
+                        editor.workspace.expanded.insert(scan.tree.id.clone());
+                        editor.workspace.file_tree = Some(scan.tree);
+                        editor.workspace.quick_open_paths = scan.quick_open_paths;
                         editor.workspace.file_error = None;
+                        editor.workspace.file_scan_state = WorkspaceScanState::Ready { generation };
+                        editor.schedule_workspace_session_save(cx);
                         editor.workspace.selected = editor
                             .file_path
                             .as_ref()
                             .map(|path| WorkspaceSelection::File(path.clone()));
-                        if editor.workspace.quick_open.is_some() {
-                            editor.schedule_quick_open(cx);
-                        }
                     }
                     Err(error) => {
                         editor.workspace.file_tree = None;
-                        editor.workspace.file_error = Some(error.to_string());
+                        let error = error.to_string();
+                        editor.workspace.file_error = Some(error.clone());
+                        editor.workspace.file_scan_state =
+                            WorkspaceScanState::Failed { generation, error };
                     }
                 }
+                if editor.workspace.quick_open.is_some() {
+                    editor.schedule_quick_open(cx);
+                }
                 cx.notify();
+                cx.refresh_windows();
             });
         }));
+        cx.notify();
+        cx.refresh_windows();
     }
 
     pub(in crate::editor) fn sync_workspace_outline(&mut self, cx: &mut Context<Self>) {
@@ -490,6 +545,7 @@ impl Editor {
                 editor.workspace.outline_source = Some(source);
                 editor.workspace.outline_revision = Some(revision);
                 cx.notify();
+                cx.refresh_windows();
             });
         }));
     }
@@ -606,6 +662,7 @@ impl Editor {
                     }
                 }
                 cx.notify();
+                cx.refresh_windows();
             });
         }));
         cx.notify();

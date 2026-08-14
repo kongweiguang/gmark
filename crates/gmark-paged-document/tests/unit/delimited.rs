@@ -2,7 +2,7 @@
 
 use super::sidecar::cleanup_delimited_sidecars;
 use super::*;
-use crate::SearchCancellation;
+use crate::{PagedDocumentError, SearchCancellation};
 use std::sync::Arc;
 
 #[test]
@@ -54,4 +54,22 @@ fn resident_snapshot_index_reads_ranges_and_filters_without_a_file() {
             .unwrap(),
         [1]
     );
+}
+
+/// Lock the 16 MiB physical-record boundary before large CSV/TSV data reaches view materialization.
+#[test]
+fn physical_record_limit_rejects_records_over_sixteen_mib() {
+    let mut bytes = vec![b'x'; (MAX_DELIMITED_RECORD_BYTES as usize) + 1];
+    bytes.push(b'\n');
+    let result = DelimitedIndex::build_snapshot_cancellable(
+        Arc::from(bytes),
+        DelimitedIndexOptions::default(),
+        &SearchCancellation::default(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(PagedDocumentError::InvalidDelimited { message, .. })
+            if message.contains("physical delimited record exceeds 16 MiB")
+    ));
 }

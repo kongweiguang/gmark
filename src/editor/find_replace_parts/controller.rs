@@ -1,13 +1,17 @@
 // @author kongweiguang
 
 use super::*;
-use crate::theme::workbench::SurfaceKind;
-use crate::ui::visual_preferences::VisualPreferencesManager;
+
+#[path = "view.rs"]
+mod view;
 
 impl Editor {
+    /// 将过期的查询和替换任务一并视为 stale，防止文档变更期间用旧结果提交事务。
     pub(in crate::editor) fn refresh_find_if_stale(&mut self, cx: &mut Context<Self>) {
         let stale = self.find_panel.as_ref().is_some_and(|state| {
-            state.revision != self.source_document.revision() && state.task.is_none()
+            state.revision != self.source_document.revision()
+                && state.task.is_none()
+                && state.replace_task.is_none()
         });
         if stale {
             self.schedule_find(cx);
@@ -299,6 +303,8 @@ impl Editor {
         self.schedule_find(cx);
     }
 
+    /// 在后台从不可变快照规划当前替换，避免单次大正文规划阻塞 GPUI；提交仍由
+    /// revision/generation gate 保护，并复用完整事务规划器保持原匹配语义。
     pub(in crate::editor) fn replace_current_find_match(
         &mut self,
         window: &mut Window,
@@ -307,47 +313,116 @@ impl Editor {
         if self.view_mode == super::ViewMode::Preview || !self.source_encoding.is_utf8() {
             return;
         }
-        let Some(state) = self.find_panel.as_ref() else {
-            return;
-        };
-        let Some(range) = state.matches.get(state.selected).cloned() else {
-            return;
-        };
-        let replaceable = state
-            .match_metadata
-            .get(state.selected)
-            .is_some_and(|metadata| {
-                metadata.replaceability == gmark_markdown::Replaceability::Direct
-            });
-        if !replaceable {
+        if self
+            .find_panel
+            .as_ref()
+            .is_some_and(|state| state.replace_task.is_some())
+        {
             return;
         }
-        if state.revision != self.source_document.revision() {
-            self.schedule_find(cx);
-            return;
-        }
-        let query = state.query.read(cx).display_text().to_owned();
-        let replacement = state.replacement.read(cx).display_text().to_owned();
-        let options = state.options;
-        let source = self.source_document.text();
-        let Ok(regex) = compile_find_regex(&query, options) else {
-            return;
-        };
-        let Some(replacement) =
-            replacement_for_range(&regex, &source, range.clone(), &replacement, options.regex)
+        let Some((range, metadata, query, replacement_template, options, revision, generation)) =
+            self.find_panel.as_ref().and_then(|state| {
+                let range = state.matches.get(state.selected).cloned()?;
+                let metadata = state.match_metadata.get(state.selected).cloned()?;
+                Some((
+                    range,
+                    metadata,
+                    state.query.read(cx).shared_display_text(),
+                    state.replacement.read(cx).shared_display_text(),
+                    state.options,
+                    state.revision,
+                    state.generation,
+                ))
+            })
         else {
-            self.schedule_find(cx);
             return;
         };
-        let selected = range.start..range.start + replacement.len();
-        if self.apply_find_edits(vec![TextEdit::new(range, replacement)], selected, cx) {
-            self.schedule_find(cx);
-            if let Some(state) = self.find_panel.as_ref() {
-                state.query.read(cx).focus_handle.focus(window);
-            }
+        if metadata.replaceability != gmark_markdown::Replaceability::Direct {
+            return;
         }
+        if revision != self.source_document.revision() {
+            self.schedule_find(cx);
+            return;
+        }
+        if query.len() > MAX_FIND_QUERY_BYTES {
+            if let Some(state) = self.find_panel.as_mut() {
+                state.error = Some(format!(
+                    "查找内容超过 {} KiB 安全限制",
+                    MAX_FIND_QUERY_BYTES / 1024
+                ));
+            }
+            cx.notify();
+            return;
+        }
+        if replacement_template.len() > MAX_REPLACE_OUTPUT_BYTES {
+            if let Some(state) = self.find_panel.as_mut() {
+                state.error = Some("替换结果超过 64 MiB 安全限制".to_owned());
+            }
+            cx.notify();
+            return;
+        }
+
+        let snapshot = self.source_document.snapshot();
+        let matches = vec![range];
+        let metadata = vec![metadata];
+        let query_for_task = query.clone();
+        let replacement_for_task = replacement_template.clone();
+        if let Some(state) = self.find_panel.as_mut() {
+            // 只把不可变快照交给后台；UI 线程不读取完整 source，也不构造替换正文。
+            state.replace_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+                let result = cx
+                    .background_spawn(async move {
+                        let source = snapshot.text();
+                        build_replace_all_plan(
+                            &source,
+                            query_for_task.as_ref(),
+                            replacement_for_task.as_ref(),
+                            options,
+                            &matches,
+                            &metadata,
+                        )
+                    })
+                    .await;
+                let _ = this.update(cx, |editor, cx| {
+                    let current_revision = editor.source_document.revision();
+                    let Some(state) = editor.find_panel.as_mut() else {
+                        return;
+                    };
+                    state.replace_task = None;
+                    if !find_replace_result_is_current(
+                        revision,
+                        generation,
+                        current_revision,
+                        state.generation,
+                    ) {
+                        if state.generation == generation && current_revision != revision {
+                            state.error = Some("文档已发生变化，请重新搜索".to_owned());
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    let plan = match result {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            state.error = Some(error);
+                            cx.notify();
+                            return;
+                        }
+                    };
+                    if editor.apply_find_edits(plan.edits, plan.selection, cx) {
+                        editor.schedule_find(cx);
+                    }
+                });
+            }));
+        }
+        // 后台规划期间保留查询框焦点，完成后 selection gate 决定是否提交。
+        if let Some(state) = self.find_panel.as_ref() {
+            state.query.read(cx).focus_handle.focus(window);
+        }
+        cx.notify();
     }
 
+    /// 在后台从不可变快照构造完整替换计划，主线程只在 revision/generation 仍匹配时一次提交。
     pub(in crate::editor) fn replace_all_find_matches(
         &mut self,
         window: &mut Window,
@@ -359,387 +434,92 @@ impl Editor {
         let Some(state) = self.find_panel.as_ref() else {
             return;
         };
-        if state.matches.is_empty() || state.revision != self.source_document.revision() {
+        if state.matches.is_empty()
+            || state.revision != self.source_document.revision()
+            || state.replace_task.is_some()
+        {
             return;
         }
-        let query = state.query.read(cx).display_text().to_owned();
-        let replacement_template = state.replacement.read(cx).display_text().to_owned();
+        let generation = state.generation;
+        let revision = state.revision;
+        let query = state.query.read(cx).shared_display_text();
+        let replacement_template = state.replacement.read(cx).shared_display_text();
         let options = state.options;
-        let source = self.source_document.text();
-        let Ok(regex) = compile_find_regex(&query, options) else {
+        let matches = state.matches.clone();
+        let metadata = state.match_metadata.clone();
+        if query.len() > MAX_FIND_QUERY_BYTES {
+            if let Some(state) = self.find_panel.as_mut() {
+                state.error = Some(format!(
+                    "查找内容超过 {} KiB 安全限制",
+                    MAX_FIND_QUERY_BYTES / 1024
+                ));
+            }
+            cx.notify();
             return;
-        };
-        let mut edits = Vec::with_capacity(state.matches.len());
-        let mut first_selection = None;
-        for (index, range) in state.matches.iter().enumerate() {
-            if !state.match_metadata.get(index).is_some_and(|metadata| {
-                metadata.replaceability == gmark_markdown::Replaceability::Direct
-            }) {
-                continue;
-            }
-            let Some(replacement) = replacement_for_range(
-                &regex,
-                &source,
-                range.clone(),
-                &replacement_template,
-                options.regex,
-            ) else {
-                continue;
-            };
-            if first_selection.is_none() {
-                first_selection = Some(range.start..range.start + replacement.len());
-            }
-            edits.push(TextEdit::new(range.clone(), replacement));
         }
-        let selection = first_selection.unwrap_or(0..0);
-        if self.apply_find_edits(edits, selection, cx) {
-            self.schedule_find(cx);
-            if let Some(state) = self.find_panel.as_ref() {
-                state.query.read(cx).focus_handle.focus(window);
+        if replacement_template.len() > MAX_REPLACE_OUTPUT_BYTES {
+            if let Some(state) = self.find_panel.as_mut() {
+                state.error = Some("替换结果超过 64 MiB 安全限制".to_owned());
             }
+            cx.notify();
+            return;
         }
-    }
-
-    pub(in crate::editor) fn render_find_panel(
-        &self,
-        theme: &Theme,
-        strings: &I18nStrings,
-        top: f32,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let state = self.find_panel.as_ref()?;
-        let c = &theme.colors;
-        let visual_preferences = cx
-            .try_global::<VisualPreferencesManager>()
-            .map(VisualPreferencesManager::current)
-            .unwrap_or_default();
-        let palette = &c.workbench;
-        let material = palette.material(SurfaceKind::Glass, visual_preferences);
-        let solid_material = palette.material(SurfaceKind::Solid, visual_preferences);
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        let count = if let Some(error) = state.error.as_ref() {
-            error.clone()
-        } else if state.matches.is_empty() {
-            strings.find_no_results.clone()
-        } else {
-            let total = if state.truncated {
-                format!("{}+", state.matches.len())
-            } else {
-                state.matches.len().to_string()
-            };
-            strings
-                .find_match_count_template
-                .replace("{current}", &(state.selected + 1).to_string())
-                .replace("{total}", &total)
-        };
-        let editor = cx.entity().downgrade();
-        let option_button =
-            |id: &'static str,
-             label: String,
-             icon: &'static str,
-             target: FindKeyboardTarget,
-             active: bool,
-             option: fn(&mut FindOptions) -> &mut bool| {
-                let click_editor = editor.clone();
-                let hover_editor = editor.clone();
-                div()
-                    .id(id)
-                    .debug_selector(move || id.to_owned())
-                    .relative()
-                    .h(px(26.0))
-                    .min_w(px(26.0))
-                    .px(px(5.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .border(px(1.0))
-                    .border_color(if state.keyboard_target == target {
-                        palette.focus_ring
-                    } else {
-                        hsla(0.0, 0.0, 0.0, 0.0)
-                    })
-                    .bg(if active {
-                        palette.control_hover
-                    } else {
-                        palette.control_surface
-                    })
-                    .hover(|this| this.bg(palette.control_hover))
-                    .cursor_pointer()
-                    .text_color(palette.text_primary)
-                    .child(
-                        svg()
-                            .path(icon)
-                            .size(px(15.0))
-                            .text_color(if active {
-                                palette.accent
-                            } else {
-                                palette.text_primary
-                            })
-                            .debug_selector(move || format!("{id}-icon")),
-                    )
-                    .children(
-                        (state.tooltip_visible == Some(id))
-                            .then(|| render_find_tooltip(label, theme, visual_preferences)),
-                    )
-                    .on_hover(move |hovered, _window, cx| {
-                        let _ = hover_editor.update(cx, |editor, cx| {
-                            editor.set_find_tooltip_hover(id, *hovered, cx);
-                        });
-                    })
-                    .on_click(move |_event, window, cx| {
-                        let _ = click_editor.update(cx, |editor, cx| {
-                            editor.focus_find_keyboard_target(target, window, cx);
-                            editor.toggle_find_option(option, cx);
-                        });
-                    })
-                    .into_any_element()
-            };
-        let compact_button =
-            |id: &'static str,
-             label: String,
-             handler: fn(&mut Editor, &mut Window, &mut Context<Editor>)| {
-                div()
-                    .id(id)
-                    .h(px(26.0))
-                    .px(px(8.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .bg(palette.control_surface)
-                    .hover(|this| this.bg(palette.control_hover))
-                    .cursor_pointer()
-                    .text_size(px(t.dialog_button_size))
-                    .text_color(palette.text_primary)
-                    .on_click(cx.listener(move |editor, _event, window, cx| {
-                        handler(editor, window, cx);
-                    }))
-                    .child(label)
-                    .into_any_element()
-            };
-        let find_row = div()
-            .h(px(34.0))
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .id("document-find-input")
-                    .debug_selector(|| "document-find-input".to_owned())
-                    .w(px(210.0))
-                    .h(px(30.0))
-                    .px(px(7.0))
-                    .flex()
-                    .items_center()
-                    .overflow_hidden()
-                    .rounded(px(5.0))
-                    .border(px(d.dialog_border_width))
-                    .border_color(if state.keyboard_target == FindKeyboardTarget::Query {
-                        palette.focus_ring
-                    } else {
-                        material.border
-                    })
-                    .bg(solid_material.background)
-                    .child(state.query.clone()),
-            )
-            .child(
-                div()
-                    .id("document-find-count")
-                    .debug_selector(|| "document-find-count".to_owned())
-                    .w(px(74.0))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .text_size(px(12.0))
-                    .text_color(if state.error.is_some() {
-                        palette.danger
-                    } else {
-                        palette.text_secondary
-                    })
-                    .child(count),
-            )
-            .child(option_button(
-                "document-find-case",
-                strings.find_case_sensitive.clone(),
-                FIND_CASE_ICON,
-                FindKeyboardTarget::CaseSensitive,
-                state.options.case_sensitive,
-                |options| &mut options.case_sensitive,
-            ))
-            .child(option_button(
-                "document-find-word",
-                strings.find_whole_word.clone(),
-                FIND_WORD_ICON,
-                FindKeyboardTarget::WholeWord,
-                state.options.whole_word,
-                |options| &mut options.whole_word,
-            ))
-            .child(option_button(
-                "document-find-regex",
-                strings.find_regex.clone(),
-                FIND_REGEX_ICON,
-                FindKeyboardTarget::Regex,
-                state.options.regex,
-                |options| &mut options.regex,
-            ))
-            .child(
-                div()
-                    .id("document-find-previous")
-                    .size(px(26.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .bg(palette.control_surface)
-                    .text_color(palette.text_primary)
-                    .border(px(1.0))
-                    .border_color(if state.keyboard_target == FindKeyboardTarget::Previous {
-                        palette.focus_ring
-                    } else {
-                        hsla(0.0, 0.0, 0.0, 0.0)
-                    })
-                    .hover(|this| this.bg(palette.control_hover))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|editor, _event, window, cx| {
-                        editor.navigate_find_match(-1, window, cx);
-                        editor.focus_find_keyboard_target(FindKeyboardTarget::Previous, window, cx);
-                    }))
-                    .child(
-                        svg()
-                            .path(CHEVRON_UP_ICON)
-                            .size(px(15.0))
-                            .text_color(palette.text_primary)
-                            .debug_selector(|| "document-find-previous-icon".to_owned()),
-                    ),
-            )
-            .child(
-                div()
-                    .id("document-find-next")
-                    .size(px(26.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .bg(palette.control_surface)
-                    .text_color(palette.text_primary)
-                    .border(px(1.0))
-                    .border_color(if state.keyboard_target == FindKeyboardTarget::Next {
-                        palette.focus_ring
-                    } else {
-                        hsla(0.0, 0.0, 0.0, 0.0)
-                    })
-                    .hover(|this| this.bg(palette.control_hover))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|editor, _event, window, cx| {
-                        editor.navigate_find_match(1, window, cx);
-                        editor.focus_find_keyboard_target(FindKeyboardTarget::Next, window, cx);
-                    }))
-                    .child(
-                        svg()
-                            .path(CHEVRON_DOWN_ICON)
-                            .size(px(15.0))
-                            .text_color(palette.text_primary)
-                            .debug_selector(|| "document-find-next-icon".to_owned()),
-                    ),
-            )
-            .child(
-                div()
-                    .id("document-find-close")
-                    .size(px(26.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .bg(palette.control_surface)
-                    .text_color(palette.text_primary)
-                    .border(px(1.0))
-                    .border_color(if state.keyboard_target == FindKeyboardTarget::Close {
-                        palette.focus_ring
-                    } else {
-                        hsla(0.0, 0.0, 0.0, 0.0)
-                    })
-                    .hover(|this| this.bg(palette.control_hover))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|editor, _event, window, cx| {
-                        editor.focus_find_keyboard_target(FindKeyboardTarget::Close, window, cx);
-                        editor.close_find_panel(window, cx);
-                    }))
-                    .child(
-                        svg()
-                            .path(CLOSE_ICON)
-                            .size(px(15.0))
-                            .text_color(palette.text_primary)
-                            .debug_selector(|| "document-find-close-icon".to_owned()),
-                    ),
-            )
-            .into_any_element();
-        let replace_row = state.show_replace.then(|| {
-            div()
-                .h(px(34.0))
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .child(
-                    div()
-                        .id("document-replace-input")
-                        .debug_selector(|| "document-replace-input".to_owned())
-                        .w(px(288.0))
-                        .h(px(30.0))
-                        .px(px(7.0))
-                        .flex()
-                        .items_center()
-                        .overflow_hidden()
-                        .rounded(px(5.0))
-                        .border(px(d.dialog_border_width))
-                        .border_color(
-                            if state.keyboard_target == FindKeyboardTarget::Replacement {
-                                palette.focus_ring
-                            } else {
-                                material.border
-                            },
+        let snapshot = self.source_document.snapshot();
+        let query_for_task = query.clone();
+        let replacement_for_task = replacement_template.clone();
+        if let Some(state) = self.find_panel.as_mut() {
+            // 计划基于不可变快照构造，避免解析和替换展开占满 GPUI，同时保留一次
+            // revision/generation gate 提交。
+            state.replace_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
+                let result = cx
+                    .background_spawn(async move {
+                        let source = snapshot.text();
+                        build_replace_all_plan(
+                            &source,
+                            query_for_task.as_ref(),
+                            replacement_for_task.as_ref(),
+                            options,
+                            &matches,
+                            &metadata,
                         )
-                        .bg(solid_material.background)
-                        .child(state.replacement.clone()),
-                )
-                .child(compact_button(
-                    "document-replace-current",
-                    strings.find_replace.clone(),
-                    Editor::replace_current_find_match,
-                ))
-                .child(compact_button(
-                    "document-replace-all",
-                    strings.find_replace_all.clone(),
-                    Editor::replace_all_find_matches,
-                ))
-                .into_any_element()
-        });
-        Some(
-            div()
-                .id("document-find-panel")
-                .debug_selector(|| "document-find-panel".to_owned())
-                .absolute()
-                .top(px(top + 8.0))
-                .right(px(12.0))
-                .w(px(540.0))
-                .max_w(relative(0.94))
-                .track_focus(&state.focus_handle)
-                .p(px(6.0))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .occlude()
-                .bg(material.background)
-                .border(px(d.dialog_border_width))
-                .border_color(material.border)
-                .rounded(px(14.0))
-                .shadow_lg()
-                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                    cx.stop_propagation();
-                })
-                .child(find_row)
-                .children(replace_row)
-                .into_any_element(),
-        )
+                    })
+                    .await;
+                let _ = this.update(cx, |editor, cx| {
+                    let Some(state) = editor.find_panel.as_mut() else {
+                        return;
+                    };
+                    state.replace_task = None;
+                    let current_revision = editor.source_document.revision();
+                    if !find_replace_result_is_current(
+                        revision,
+                        generation,
+                        current_revision,
+                        state.generation,
+                    ) {
+                        if state.generation == generation && current_revision != revision {
+                            state.error = Some("文档已发生变化，请重新搜索".to_owned());
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    let plan = match result {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            state.error = Some(error);
+                            cx.notify();
+                            return;
+                        }
+                    };
+                    if editor.apply_find_edits(plan.edits, plan.selection, cx) {
+                        editor.schedule_find(cx);
+                    }
+                });
+            }));
+        }
+        // 后台计划未完成时仍把键盘导航留在查询框，避免等待期间焦点跳走。
+        if let Some(state) = self.find_panel.as_ref() {
+            state.query.read(cx).focus_handle.focus(window);
+        }
+        cx.notify();
     }
 }

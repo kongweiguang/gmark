@@ -62,25 +62,142 @@ impl Editor {
         trailing: &InlineTextTree,
         cx: &mut Context<Self>,
     ) {
-        let (markdown, materialized) = match source {
-            PastedImageSource::LocalResource(path) => match self.pasted_resource_markdown(path) {
-                Ok((markdown, materialized)) => (markdown, Some(materialized)),
-                Err(err) => {
-                    self.show_image_paste_error(err, cx);
-                    return;
+        if let PastedImageSource::LocalResource(path) | PastedImageSource::LocalPath(path) = source
+        {
+            let label = match source {
+                PastedImageSource::LocalPath(path) => path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .filter(|stem| !stem.is_empty())
+                    .unwrap_or("image")
+                    .to_owned(),
+                PastedImageSource::LocalResource(_) | PastedImageSource::ClipboardImage(_) => {
+                    String::new()
                 }
-            },
-            PastedImageSource::ClipboardImage(_) | PastedImageSource::LocalPath(_) => {
-                match self.pasted_image_markdown(source) {
-                    Ok(markdown) => (markdown, None),
-                    Err(err) => {
-                        self.show_image_paste_error(err, cx);
-                        return;
-                    }
-                }
+            };
+            self.schedule_pasted_resource_insert(
+                block,
+                leading.clone(),
+                path.clone(),
+                label,
+                trailing.clone(),
+                cx,
+            );
+            return;
+        }
+
+        let markdown = match self.pasted_image_markdown(source) {
+            Ok(markdown) => markdown,
+            Err(err) => {
+                self.show_image_paste_error(err, cx);
+                return;
             }
         };
+        self.commit_paste_image_markdown(block, leading, markdown, None, trailing, cx);
+    }
 
+    /// 把路径粘贴的文件系统读取、复制和 Markdown 生成放到后台，避免 UNC 或大文件占用 UI。
+    fn schedule_pasted_resource_insert(
+        &mut self,
+        block: Entity<super::Block>,
+        leading: InlineTextTree,
+        source: PathBuf,
+        label: String,
+        trailing: InlineTextTree,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(fingerprint) = self.current_dropped_resource_target(&block, cx) else {
+            return;
+        };
+        let document_path = self.file_path.clone();
+        let behavior = crate::preferences::read_app_preferences()
+            .map(|preferences| preferences.resource_insert_behavior())
+            .unwrap_or(crate::preferences::ImagePasteBehavior::None);
+        let weak_editor = cx.entity().downgrade();
+        let error_block = block.clone();
+        let error_fingerprint = fingerprint.clone();
+        let fallback_text = source.to_string_lossy().into_owned();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    Self::materialize_resource_with_limits(
+                        &label,
+                        &source,
+                        document_path.as_deref(),
+                        behavior,
+                        None,
+                    )
+                })
+                .await;
+            match result {
+                Err(error) => {
+                    let missing_source =
+                        crate::editor::file_drop::resource_materialization_is_missing(&error);
+                    let _ = weak_editor.update(cx, |editor, cx| {
+                        let Some(current) =
+                            editor.current_dropped_resource_target(&error_block, cx)
+                        else {
+                            return;
+                        };
+                        if !crate::editor::file_drop::resource_drop_target_is_current(
+                            &error_fingerprint,
+                            &current,
+                        ) {
+                            return;
+                        }
+                        if missing_source {
+                            editor.commit_paste_plain_text(
+                                error_block,
+                                &leading,
+                                fallback_text,
+                                &trailing,
+                                cx,
+                            );
+                        } else {
+                            editor.show_image_paste_error(error, cx);
+                        }
+                    });
+                }
+                Ok((markdown, materialized)) => {
+                    // 在 update 前持有 guard，实体消失或任务取消时仍会删除本次创建的副本。
+                    let mut cleanup =
+                        crate::editor::file_drop::ResourceCleanupGuard::new(materialized);
+                    let _ = weak_editor.update(cx, move |editor, cx| {
+                        let Some(current) = editor.current_dropped_resource_target(&block, cx)
+                        else {
+                            return;
+                        };
+                        if !crate::editor::file_drop::resource_drop_target_is_current(
+                            &fingerprint,
+                            &current,
+                        ) {
+                            return;
+                        }
+                        editor.commit_paste_image_markdown(
+                            block,
+                            &leading,
+                            markdown,
+                            Some(&mut cleanup),
+                            &trailing,
+                            cx,
+                        );
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 在目标 gate 通过后复用图片粘贴事务，成功才 disarm，失败则由 guard 回收副本。
+    fn commit_paste_image_markdown(
+        &mut self,
+        block: Entity<super::Block>,
+        leading: &InlineTextTree,
+        markdown: String,
+        mut cleanup: Option<&mut crate::editor::file_drop::ResourceCleanupGuard>,
+        trailing: &InlineTextTree,
+        cx: &mut Context<Self>,
+    ) {
         if self.replace_cross_block_selection_with_text(
             &markdown,
             None,
@@ -88,6 +205,9 @@ impl Editor {
             crate::components::UndoCaptureKind::NonCoalescible,
             cx,
         ) {
+            if let Some(cleanup) = cleanup.as_mut() {
+                cleanup.disarm();
+            }
             return;
         }
 
@@ -99,9 +219,6 @@ impl Editor {
 
         if can_insert_image_block {
             if !self.insert_image_block_after_paragraph(&block, leading, &markdown, trailing, cx) {
-                if let Some(materialized) = materialized.as_ref() {
-                    materialized.cleanup_if_created();
-                }
                 self.finalize_pending_undo_capture(cx);
                 return;
             }
@@ -111,6 +228,46 @@ impl Editor {
             );
         }
 
+        if let Some(cleanup) = cleanup.as_mut() {
+            cleanup.disarm();
+        }
+        self.mark_dirty(cx);
+        self.finalize_pending_undo_capture(cx);
+        cx.notify();
+    }
+
+    /// 缺失源路径回到普通文本粘贴，只有原目标 gate 通过时才允许这次兼容回退。
+    fn commit_paste_plain_text(
+        &mut self,
+        block: Entity<super::Block>,
+        leading: &InlineTextTree,
+        text: String,
+        trailing: &InlineTextTree,
+        cx: &mut Context<Self>,
+    ) {
+        if self.replace_cross_block_selection_with_text(
+            &text,
+            None,
+            false,
+            crate::components::UndoCaptureKind::NonCoalescible,
+            cx,
+        ) {
+            return;
+        }
+
+        self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+        let (kind, title, cursor) = block.read_with(cx, |block, _cx| {
+            let mut title = leading.clone();
+            title.append_tree(InlineTextTree::plain(text.clone()));
+            let cursor = title.visible_len();
+            title.append_tree(trailing.clone());
+            (block.kind(), title, cursor)
+        });
+        Self::set_block_title_and_kind(&block, kind, title, cursor, cx);
+        if let Some(binding) = self.table_cell_binding(block.entity_id()) {
+            self.sync_table_record_from_runtime(&binding.table_block, cx);
+        }
+        self.focus_block(block.entity_id());
         self.mark_dirty(cx);
         self.finalize_pending_undo_capture(cx);
         cx.notify();

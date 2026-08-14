@@ -126,6 +126,19 @@ fn paste_image_text_accepts_plain_local_image_path() {
     remove_temp_image(&path);
 }
 
+/// 路径不存在时仍只做语法分类；真实存在性与 64 MiB 校验必须留给后台 materialize，
+/// 这样慢盘或 UNC 探测不会阻塞剪贴板回调的 UI heartbeat。
+#[test]
+fn paste_image_text_defers_missing_path_validation_to_background() {
+    let path = temp_image_path("missing.png");
+    remove_temp_image(&path);
+    let text = path.to_string_lossy().to_string();
+
+    let source = Block::pasted_image_source_from_text(&text);
+
+    assert_eq!(source, Some(PastedImageSource::LocalPath(path)));
+}
+
 #[test]
 fn paste_image_text_accepts_quoted_local_image_path() {
     let path = temp_image_path("quoted image.png");

@@ -2,7 +2,10 @@
 
 //! 最近文件历史及其兼容的文本格式。
 
+use std::fs::File;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -10,6 +13,15 @@ use crate::{AppDirs, persistence::atomic_write_private};
 
 /// 历史文件中最多保留的路径数。
 pub const RECENT_FILES_LIMIT: usize = 20;
+
+/// 历史文件属于低信任持久化输入，读取时固定上限以免坏文件放大内存和启动延迟。
+pub const RECENT_FILES_MAX_BYTES: usize = 64 * 1024;
+
+static RECENT_FILES_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn recent_files_write_lock() -> &'static Mutex<()> {
+    RECENT_FILES_WRITE_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// 从系统配置目录读取最近文件。
 pub fn read_recent_files() -> Result<Vec<PathBuf>> {
@@ -20,7 +32,7 @@ pub fn read_recent_files() -> Result<Vec<PathBuf>> {
 pub fn read_recent_files_with_dirs(dirs: &AppDirs) -> Result<Vec<PathBuf>> {
     dirs.validate_state_root()?;
     let path = dirs.history_file();
-    let text = match std::fs::read_to_string(&path) {
+    let text = match read_history_text(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
@@ -37,6 +49,9 @@ pub fn record_recent_file(path: &Path) -> Result<Vec<PathBuf>> {
 
 /// 将路径提升到显式配置目录中的历史首位。
 pub fn record_recent_file_with_dirs(path: &Path, dirs: &AppDirs) -> Result<Vec<PathBuf>> {
+    let _write_guard = recent_files_write_lock()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("recent-file history lock is poisoned"))?;
     if path.to_string_lossy().trim().is_empty() {
         bail!("recent file path cannot be empty");
     }
@@ -59,6 +74,9 @@ pub fn remove_recent_file(path: &Path) -> Result<Vec<PathBuf>> {
 
 /// 从显式配置目录中的历史移除路径。
 pub fn remove_recent_file_with_dirs(path: &Path, dirs: &AppDirs) -> Result<Vec<PathBuf>> {
+    let _write_guard = recent_files_write_lock()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("recent-file history lock is poisoned"))?;
     let mut paths = read_recent_files_with_dirs(dirs)?;
     paths.retain(|existing| !same_recent_path(existing, path));
     write_recent_files_with_dirs(&paths, dirs)?;
@@ -112,6 +130,35 @@ fn write_recent_files_with_dirs(paths: &[PathBuf], dirs: &AppDirs) -> Result<()>
         content.push('\n');
     }
     atomic_write_private(&history_file, content.as_bytes())
+}
+
+/// 先检查元数据再以 `take` 读取，防止并发替换或异常增长绕过历史文件上限。
+fn read_history_text(path: &Path) -> Result<String, std::io::Error> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || metadata.len() > RECENT_FILES_MAX_BYTES as u64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "recent-file history exceeds the {} byte safety limit",
+                RECENT_FILES_MAX_BYTES
+            ),
+        ));
+    }
+    let file = File::open(path)?;
+    let mut bytes = Vec::with_capacity(RECENT_FILES_MAX_BYTES.min(metadata.len() as usize));
+    file.take((RECENT_FILES_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > RECENT_FILES_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "recent-file history exceeds the {} byte safety limit",
+                RECENT_FILES_MAX_BYTES
+            ),
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
 }
 
 fn is_recordable_recent_file_path(path: &Path) -> bool {

@@ -5,6 +5,37 @@
 use super::*;
 
 impl DocumentHost {
+    /// 空文件只有一个稳定的 `0..0` 行；提前发布这份快照可让首帧直接挂载
+    /// 可编辑 Block，避免 uniform_list 等待后台 viewport 任务时吞掉第一次点击。
+    pub(super) fn install_empty_source_row(&mut self) {
+        if self
+            .document
+            .as_ref()
+            .is_none_or(|document| !document.is_empty())
+        {
+            return;
+        }
+        let row = Arc::new(BoundedLineWindow::new(
+            0..0,
+            0..0,
+            String::new(),
+            String::new(),
+            false,
+            false,
+        ));
+        self.source_rows.insert(0, row.clone());
+        self.source_row_epochs.insert(0, self.source_cache_epoch);
+        let document_revision = self.document.as_ref().map_or(0, SharedDocument::revision);
+        self.displayed_screen_lines = Arc::new(ScreenLines {
+            document_revision,
+            generation: self.coordinator.source_generation,
+            cache_epoch: self.source_cache_epoch,
+            column_window_start: self.source_window_start,
+            visible: 0..1,
+            rows: Arc::new(BTreeMap::from([(0, row)])),
+        });
+    }
+
     /// 为可见源码行创建普通 Block 输入面。实体数量受 Source row LRU 同一上限约束，
     /// 因而字符命中测试、IME 与布局缓存不会随文件行数增长。
     pub(super) fn ensure_source_row_block(
@@ -116,7 +147,12 @@ impl DocumentHost {
         self.set_source_selection(selection, cx);
         self.source_drag_anchor = Some(selection.anchor);
 
-        if event.modifiers.shift && self.selection_spans_multiple_lines(selection) {
+        if block.read(cx).is_read_only() {
+            // provisional 行只承担浏览与选择；不设置 active_edit，避免 Changed 事件
+            // 在 document 尚未安装时被 export.rs 静默丢弃并留下“卡死”焦点。
+            self.active_edit = None;
+            self.focus_handle.focus(window);
+        } else if event.modifiers.shift && self.selection_spans_multiple_lines(selection) {
             self.active_edit = None;
             self.focus_handle.focus(window);
         } else {

@@ -29,7 +29,6 @@ use crate::components::{
 };
 use crate::config::{
     apply_configured_language, import_language_config_and_select, open_preferences_window,
-    read_recent_files, record_recent_file, remove_recent_file,
 };
 use crate::editor::{Editor, InfoDialogKind};
 use crate::export::ExportFormat;
@@ -125,6 +124,8 @@ pub(crate) struct AppMenuState {
     /// Windows' native menu bridge may expose only the launcher menu back to GPUI.
     /// Keep the authoritative owned snapshot for the custom in-window renderer.
     pub(crate) in_window_menus: Vec<OwnedMenu>,
+    /// Menu rebuilding consumes this snapshot so the UI thread never rereads history storage.
+    pub(crate) recent_files: Vec<PathBuf>,
 }
 
 impl Global for AppMenuState {}
@@ -151,15 +152,17 @@ use cli_support::applescript_string_literal;
 use cli_support::is_cli_symlink_current_app;
 use command_support::{
     open_crash_reports, open_recent_file, open_recent_file_with_error_window,
-    recent_files_for_menu, request_update_check_on_active_editor,
-    show_info_dialog_on_active_editor, show_window_prompt, with_active_editor,
+    request_update_check_on_active_editor, show_info_dialog_on_active_editor, show_window_prompt,
+    with_active_editor,
 };
 use file_prompts::{
     prompt_and_import_language_config, prompt_and_import_language_config_with_error_window,
     prompt_and_open_files, prompt_and_open_files_with_error_window, prompt_and_open_safe_source,
     prompt_and_open_safe_source_with_error_window,
 };
-use recent::record_recent_file_and_refresh;
+pub(crate) use recent::{
+    load_recent_files_in_background, record_recent_file_and_refresh, remove_recent_file_and_refresh,
+};
 
 pub(crate) use cli_tool::{install_cli_tool, uninstall_cli_tool};
 pub(crate) use command_support::record_recent_file_from_editor;
@@ -168,7 +171,7 @@ pub(crate) use dispatch::{
     dispatch_menu_action_for_editor, request_quit_application, request_update_quit_application,
 };
 pub(crate) use initialization::init;
-pub(crate) use menu_build::install_menus;
+pub(crate) use menu_build::{install_menus, install_menus_with_recent_files};
 // 原因：测试与过渡调用方仍从 app_menu 根访问退出类型；当全部迁移到 quit 子模块后移除。
 #[allow(unused_imports)]
 pub(crate) use quit::{QuitCoordinator, QuitIntent, QuitPhase, QuitRequestOutcome};

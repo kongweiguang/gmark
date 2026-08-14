@@ -5,7 +5,7 @@ use std::io::Write;
 use csv::ByteRecord;
 
 use super::model::{DelimitedEdit, DelimitedIndexOptions};
-use super::source::{csv_error, decode_fields, reader, record_terminator};
+use super::source::{csv_error, decode_fields, ensure_file_record_size, reader, record_terminator};
 use crate::{FileSource, PagedDocumentError, PieceDocument, SearchCancellation};
 
 /// 以字段值生成一条 RFC 4180 兼容记录；终止符由调用方传入以保留源文档格式。
@@ -87,6 +87,7 @@ pub fn apply_delimited_column_edit(
             break;
         }
         let end = reader.position().byte();
+        ensure_file_record_size(&source, start, end)?;
         let raw_end = if end < source_len {
             (end + 1).min(source_len)
         } else {

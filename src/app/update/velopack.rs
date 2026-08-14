@@ -18,6 +18,15 @@ struct VerifiedPackageSource {
     asset: VelopackAsset,
 }
 
+/// Describes a package already imported into Velopack; keeping only immutable metadata lets the
+/// UI wait for quit approval without retaining a live download operation or starting a second copy.
+#[derive(Clone)]
+pub(super) struct StagedInstall {
+    pub(super) release: UpdateRelease,
+    pub(super) artifact_path: PathBuf,
+    asset: VelopackAsset,
+}
+
 impl UpdateSource for VerifiedPackageSource {
     /// 返回由签名 V2 清单构造的单资产 feed，避免 Velopack 再信任一个未签名的远端索引。
     fn get_release_feed(
@@ -57,14 +66,13 @@ pub(super) fn is_managed_install() -> bool {
         .is_ok_and(|manager| manager.get_app_id() == VELOPACK_PACKAGE_ID)
 }
 
-/// 将已验签的 nupkg 导入 Velopack 缓存并启动其退出等待器；本函数成功返回后，
-/// 调用方只需正常退出，目录替换、失败提示和新版拉起都由 Velopack 负责。
-pub(super) fn prepare_install(release: &UpdateRelease, artifact_path: &Path) -> Result<(), String> {
+/// Builds the single Velopack asset from Gmark's already verified release metadata.
+fn build_asset(release: &UpdateRelease, artifact_path: &Path) -> Result<VelopackAsset, String> {
     validate_platform_package(release.artifact_format)?;
     validate_verified_file(artifact_path)?;
     let filename = package_filename(&release.artifact_url)?;
 
-    let asset = VelopackAsset {
+    Ok(VelopackAsset {
         PackageId: VELOPACK_PACKAGE_ID.to_owned(),
         Version: release.version.clone(),
         Type: "Full".to_owned(),
@@ -74,7 +82,16 @@ pub(super) fn prepare_install(release: &UpdateRelease, artifact_path: &Path) -> 
         Size: release.artifact_size,
         NotesMarkdown: release.notes.clone(),
         NotesHtml: String::new(),
-    };
+    })
+}
+
+/// Imports the verified package into Velopack's package cache without starting an external
+/// updater; this is deliberately called only from the background staging worker.
+pub(super) fn stage_install(
+    release: &UpdateRelease,
+    artifact_path: &Path,
+) -> Result<StagedInstall, String> {
+    let asset = build_asset(release, artifact_path)?;
     let source = VerifiedPackageSource {
         artifact_path: artifact_path.to_path_buf(),
         asset: asset.clone(),
@@ -93,8 +110,27 @@ pub(super) fn prepare_install(release: &UpdateRelease, artifact_path: &Path) -> 
     manager
         .download_updates(&update, None)
         .map_err(|error| format!("无法把已验证更新交给 Velopack：{error}"))?;
+    Ok(StagedInstall {
+        release: release.clone(),
+        artifact_path: artifact_path.to_path_buf(),
+        asset,
+    })
+}
+
+/// Recreates a lightweight manager after quit approval and performs only Velopack's wait handoff;
+/// the package copy already happened during staging, so this path must not call download_updates.
+pub(super) fn handoff_staged_install(staged: &StagedInstall) -> Result<(), String> {
+    let source = VerifiedPackageSource {
+        artifact_path: staged.artifact_path.clone(),
+        asset: staged.asset.clone(),
+    };
+    let manager = UpdateManager::new(source, None, None)
+        .map_err(|error| format!("当前安装不是可自更新的 Velopack 布局：{error}"))?;
+    if manager.get_app_id() != VELOPACK_PACKAGE_ID {
+        return Err("当前 Velopack 安装标识与 Gmark 不匹配".to_owned());
+    }
     manager
-        .wait_exit_then_apply_updates(&asset, false, true, std::env::args_os().skip(1))
+        .wait_exit_then_apply_updates(&staged.asset, false, true, std::env::args_os().skip(1))
         .map_err(|error| format!("无法启动 Velopack 更新进程：{error}"))
 }
 

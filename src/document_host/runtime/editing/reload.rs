@@ -58,9 +58,6 @@ impl DocumentHost {
             }
         };
         let path = self.path.clone();
-        #[cfg(test)]
-        let configured_loading = gmark_document_core::LoadingPolicy::default();
-        #[cfg(not(test))]
         let configured_loading = gmark_config::read_app_preferences()
             .map(|preferences| preferences.document_loading.policy())
             .unwrap_or_default();
@@ -73,25 +70,16 @@ impl DocumentHost {
             configured_loading
         };
         let loading_limits = loading.effective_limits();
-        #[cfg(not(test))]
-        let recovery_dir = match gmark_config::AppDirs::from_system() {
-            Ok(dirs) => {
-                let recovery_dir = dirs.recovery_dir();
-                match dirs.ensure_state_parent(&recovery_dir.join(".gmark-recovery-root")) {
-                    Ok(()) => Some(recovery_dir),
-                    Err(error) => {
-                        eprintln!("recovery persistence disabled: {error:#}");
-                        None
-                    }
-                }
-            }
+        let recovery_dirs = match gmark_config::AppDirs::from_system() {
+            Ok(dirs) => Some(dirs),
             Err(error) => {
                 eprintln!("recovery persistence disabled: {error:#}");
                 None
             }
         };
-        #[cfg(test)]
-        let recovery_dir: Option<PathBuf> = None;
+        if recovery_dirs.is_some() {
+            self.coordinator.recovery_enabled = true;
+        }
         let window_handle = window.window_handle();
         if let Some(cancellation) = self.coordinator.index_cancellation.take() {
             cancellation.cancel();
@@ -140,13 +128,18 @@ impl DocumentHost {
                         index.clone(),
                         false,
                     )?;
-                    let recovery = recovery_dir.as_ref().map(|dir| {
-                        DocumentRecoveryJournal::create(
-                            dir,
-                            &original_for_session,
-                            probe.encoding.clone(),
-                            &document,
-                        )
+                    let recovery = recovery_dirs.as_ref().map(|dirs| {
+                        let recovery_dir = dirs.recovery_dir();
+                        dirs.ensure_state_parent(&recovery_dir.join(".gmark-recovery-root"))
+                            .map_err(|error| PagedDocumentError::Recovery(error.to_string()))
+                            .and_then(|()| {
+                                DocumentRecoveryJournal::create(
+                                    &recovery_dir,
+                                    &original_for_session,
+                                    probe.encoding.clone(),
+                                    &document,
+                                )
+                            })
                     });
                     let (structure_source, structure_index, structure_bytes) =
                         structure_input_for_session(
@@ -215,22 +208,13 @@ impl DocumentHost {
                             Some(Err(error)) => (None, Some(error)),
                             None => (None, None),
                         };
-                        let cleanup_error = view
-                            .document
-                            .as_ref()
-                            .map(|current| {
-                                view.coordinator
-                                    .replace_recovery_journal_after_persistence(
-                                        replacement,
-                                        current,
-                                    )
-                                    .err()
-                            })
-                            .and_then(|value| value);
-                        view.coordinator.recovery_error = match recovery_creation_error {
-                            Some(error) => Some(localized_document_error(&error, cx)),
-                            None => cleanup_error.map(|error| localized_document_error(&error, cx)),
-                        };
+                        if let Some(current) = view.document.clone() {
+                            view.enqueue_recovery_checkpoint(&current, replacement, cx);
+                        }
+                        if let Some(error) = recovery_creation_error {
+                            view.coordinator.recovery_error =
+                                Some(localized_document_error(&error, cx));
+                        }
                         view.probe = probe;
                         view.document_epoch = view.document_epoch.wrapping_add(1);
                         view.provisional_source = None;

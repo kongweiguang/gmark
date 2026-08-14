@@ -6,12 +6,14 @@
 //! terminator. We validate that `SUN_LEN` invariant before binding the endpoint under
 //! `~/.gmark/runtime`.
 
+use std::collections::{HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    mpsc as std_mpsc,
 };
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -23,7 +25,7 @@ use gmark_config::{AppDirs, load_or_create_installation_id_with_dirs};
 use sha2::{Digest as _, Sha256};
 use uds_windows::{UnixListener, UnixStream};
 
-const PROTOCOL_MAGIC: [u8; 8] = *b"GMARKI01";
+const PROTOCOL_MAGIC: [u8; 8] = *b"GMARKI02";
 const ACK: u8 = 0x06;
 const NACK: u8 = 0x15;
 const MAX_PATHS: usize = 64;
@@ -34,16 +36,34 @@ const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const RETRY_DELAY: Duration = Duration::from_millis(25);
 const WINDOWS_AF_UNIX_MAX_PATH_BYTES: usize = 107;
 const SOCKET_ID_HASH_BYTES: usize = 12;
+const MAX_COMPLETED_REQUEST_IDS: usize = 256;
+const UI_ACCEPT_TIMEOUT: Duration = Duration::from_secs(3);
+
+static NEXT_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InstanceMessage {
+    pub(crate) request_id: u64,
     pub(crate) paths: Vec<PathBuf>,
+}
+
+pub(crate) struct InstanceRequest {
+    pub(crate) message: InstanceMessage,
+    acknowledgement: std_mpsc::Sender<bool>,
+}
+
+impl InstanceRequest {
+    /// UI 完成接收后才回传结果，避免 IPC 客户端把“进入队列”误认为“已处理”。
+    // 原因：只有 GPUI 回调成功返回，转发方才可以安全结束本次启动请求。
+    pub(crate) fn respond(self, accepted: bool) {
+        let _ = self.acknowledgement.send(accepted);
+    }
 }
 
 pub(crate) enum InstanceLaunch {
     Primary {
         guard: InstanceGuard,
-        receiver: mpsc::UnboundedReceiver<InstanceMessage>,
+        receiver: mpsc::UnboundedReceiver<InstanceRequest>,
     },
     Forwarded,
 }
@@ -161,6 +181,7 @@ fn acquire_with_paths(
         })?;
     }
     let deadline = Instant::now() + ACQUIRE_TIMEOUT;
+    let request_id = next_request_id();
 
     loop {
         if lock_file
@@ -169,7 +190,7 @@ fn acquire_with_paths(
         {
             return start_primary(lock_file, socket_path);
         }
-        match forward_to_primary(socket_path, paths) {
+        match forward_to_primary(socket_path, request_id, paths) {
             Ok(()) => return Ok(InstanceLaunch::Forwarded),
             Err(error) if Instant::now() < deadline => {
                 let _ = error;
@@ -231,9 +252,11 @@ fn start_primary(lock_file: File, socket_path: &Path) -> anyhow::Result<Instance
 
 fn run_listener(
     listener: UnixListener,
-    sender: mpsc::UnboundedSender<InstanceMessage>,
+    sender: mpsc::UnboundedSender<InstanceRequest>,
     shutdown: Arc<AtomicBool>,
 ) {
+    let mut completed_ids = HashSet::new();
+    let mut completed_order = VecDeque::new();
     while !shutdown.load(Ordering::Acquire) {
         let mut stream = match listener.accept() {
             Ok((stream, _address)) => stream,
@@ -252,9 +275,32 @@ fn run_listener(
         }
         let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
         let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-        let accepted = read_message(&mut stream)
-            .ok()
-            .is_some_and(|message| sender.unbounded_send(message).is_ok());
+        let accepted = match read_message(&mut stream) {
+            Ok(message) if completed_ids.contains(&message.request_id) => true,
+            Ok(message) => {
+                let request_id = message.request_id;
+                let (acknowledgement, result) = std_mpsc::channel();
+                if sender
+                    .unbounded_send(InstanceRequest {
+                        message,
+                        acknowledgement,
+                    })
+                    .is_err()
+                {
+                    false
+                } else if result.recv_timeout(UI_ACCEPT_TIMEOUT).unwrap_or(false) {
+                    remember_completed_request(
+                        &mut completed_ids,
+                        &mut completed_order,
+                        request_id,
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        };
         if accepted {
             let _ = stream.write_all(&[ACK]);
         } else {
@@ -263,12 +309,22 @@ fn run_listener(
     }
 }
 
-fn forward_to_primary(socket_path: &Path, paths: &[PathBuf]) -> anyhow::Result<()> {
+fn forward_to_primary(
+    socket_path: &Path,
+    request_id: u64,
+    paths: &[PathBuf],
+) -> anyhow::Result<()> {
     let mut stream = UnixStream::connect(socket_path)
         .with_context(|| format!("failed to connect IPC '{}'", socket_path.display()))?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    write_message(&mut stream, paths)?;
+    write_message(
+        &mut stream,
+        &InstanceMessage {
+            request_id,
+            paths: paths.to_vec(),
+        },
+    )?;
     let mut response = [0u8; 1];
     stream
         .read_exact(&mut response)
@@ -279,7 +335,8 @@ fn forward_to_primary(socket_path: &Path, paths: &[PathBuf]) -> anyhow::Result<(
     Ok(())
 }
 
-fn write_message(mut writer: impl Write, paths: &[PathBuf]) -> anyhow::Result<()> {
+fn write_message(mut writer: impl Write, message: &InstanceMessage) -> anyhow::Result<()> {
+    let paths = &message.paths;
     if paths.len() > MAX_PATHS {
         bail!("IPC request exceeds the {MAX_PATHS} path limit");
     }
@@ -293,7 +350,7 @@ fn write_message(mut writer: impl Write, paths: &[PathBuf]) -> anyhow::Result<()
         .collect::<anyhow::Result<Vec<_>>>()?;
     let total = encoded
         .iter()
-        .try_fold(PROTOCOL_MAGIC.len() + 4, |total, path| {
+        .try_fold(PROTOCOL_MAGIC.len() + 8 + 4, |total, path| {
             if path.len() > MAX_PATH_BYTES {
                 bail!("IPC path exceeds the {MAX_PATH_BYTES} byte limit");
             }
@@ -306,6 +363,7 @@ fn write_message(mut writer: impl Write, paths: &[PathBuf]) -> anyhow::Result<()
     }
 
     writer.write_all(&PROTOCOL_MAGIC)?;
+    writer.write_all(&message.request_id.to_le_bytes())?;
     writer.write_all(&(encoded.len() as u32).to_le_bytes())?;
     for path in encoded {
         writer.write_all(&(path.len() as u32).to_le_bytes())?;
@@ -321,11 +379,12 @@ fn read_message(mut reader: impl Read) -> anyhow::Result<InstanceMessage> {
     if magic != PROTOCOL_MAGIC {
         bail!("unsupported IPC protocol");
     }
+    let request_id = read_u64(&mut reader)?;
     let count = read_u32(&mut reader)? as usize;
     if count > MAX_PATHS {
         bail!("IPC request exceeds the {MAX_PATHS} path limit");
     }
-    let mut total = PROTOCOL_MAGIC.len() + 4;
+    let mut total = PROTOCOL_MAGIC.len() + 8 + 4;
     let mut paths = Vec::with_capacity(count);
     for _ in 0..count {
         let len = read_u32(&mut reader)? as usize;
@@ -343,7 +402,38 @@ fn read_message(mut reader: impl Read) -> anyhow::Result<InstanceMessage> {
         let path = String::from_utf8(bytes).context("IPC path is not valid UTF-8")?;
         paths.push(PathBuf::from(path));
     }
-    Ok(InstanceMessage { paths })
+    Ok(InstanceMessage { request_id, paths })
+}
+
+fn read_u64(reader: &mut impl Read) -> std::io::Result<u64> {
+    let mut bytes = [0; 8];
+    reader.read_exact(&mut bytes)?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+/// 为每次二次启动生成稳定于重试周期的 ID，避免 ACK 丢失导致重复派发。
+// 原因：同一进程的重试必须复用 ID，而不同进程仍需尽量避免碰撞。
+fn next_request_id() -> u64 {
+    let sequence = NEXT_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    (u64::from(std::process::id()) << 32) | (sequence & u64::from(u32::MAX))
+}
+
+/// 只保留最近一小段已接受请求，既能去重重试又不会让常驻进程无界增长。
+// 原因：IPC 请求可能无限到达，去重状态必须有明确的内存上限。
+fn remember_completed_request(
+    completed_ids: &mut HashSet<u64>,
+    completed_order: &mut VecDeque<u64>,
+    request_id: u64,
+) {
+    if !completed_ids.insert(request_id) {
+        return;
+    }
+    completed_order.push_back(request_id);
+    while completed_order.len() > MAX_COMPLETED_REQUEST_IDS {
+        if let Some(expired) = completed_order.pop_front() {
+            completed_ids.remove(&expired);
+        }
+    }
 }
 
 fn read_u32(reader: &mut impl Read) -> std::io::Result<u32> {

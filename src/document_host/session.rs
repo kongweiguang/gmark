@@ -227,6 +227,12 @@ pub(crate) enum DocumentRecoveryJournal {
 }
 
 impl DocumentRecoveryJournal {
+    /// Select the overflow policy without borrowing a live session or touching
+    /// the filesystem, keeping queue admission a UI-safe decision.
+    pub(super) fn is_paged(&self) -> bool {
+        matches!(self, Self::Paged(_))
+    }
+
     pub(super) fn create(
         recovery_dir: &Path,
         source: &FileSource,
@@ -258,8 +264,38 @@ impl DocumentRecoveryJournal {
         }
     }
 
+    /// Create a journal from an immutable Controller snapshot.  Shared hosts
+    /// use this background-only constructor because reconstructing a live
+    /// `DocumentSession` would re-enter the Controller while recovery setup is
+    /// still racing the first edit.
+    pub(super) fn create_from_snapshot(
+        recovery_dir: &Path,
+        source: &FileSource,
+        snapshot: &DocumentSaveSnapshot,
+    ) -> Result<Self, PagedDocumentError> {
+        let _ = retry_retired_recovery_journal_artifacts(recovery_dir);
+        if let Some(format) = snapshot.source_format.clone() {
+            let bytes = snapshot
+                .read_all()
+                .map_err(|error| PagedDocumentError::Recovery(error.to_string()))?;
+            let text = String::from_utf8(bytes)
+                .map_err(|error| PagedDocumentError::Recovery(error.to_string()))?;
+            return ResidentRecoveryJournal::create_formatted(
+                recovery_dir,
+                Some(snapshot.identity.canonical_path.clone()),
+                text,
+                format,
+            )
+            .map(|journal| Self::Resident(Box::new(journal)))
+            .map_err(map_resident_recovery_error);
+        }
+        PagedRecoveryJournal::create(recovery_dir, source, snapshot.encoding.clone())
+            .map(Self::Paged)
+    }
+
     /// Resident journals receive the resulting source snapshot so undo/redo and
     /// formatting-only changes retain the same journal semantics as direct edits.
+    #[cfg(test)]
     pub(super) fn record_after_change(
         &mut self,
         document: &DocumentSession,
@@ -288,8 +324,82 @@ impl DocumentRecoveryJournal {
         }
     }
 
+    /// Records a Controller-captured immutable snapshot without borrowing the
+    /// Controller.  This is the worker-only path: resident source material is
+    /// read from the detached snapshot and Paged journals consume the ordered
+    /// command, so no recovery I/O can re-enter the Controller mutex.
+    pub(super) fn record_snapshot(
+        &mut self,
+        snapshot: &gmark_document_runtime::DocumentSaveSnapshot,
+        record: &RecoveryRecord,
+    ) -> Result<(), PagedDocumentError> {
+        match self {
+            Self::Resident(journal) => {
+                let format = snapshot.source_format.clone().ok_or_else(|| {
+                    PagedDocumentError::Recovery(
+                        "resident recovery snapshot has no source format".to_owned(),
+                    )
+                })?;
+                let bytes = snapshot
+                    .read_all()
+                    .map_err(|error| PagedDocumentError::Recovery(error.to_string()))?;
+                let source = String::from_utf8(bytes)
+                    .map_err(|error| PagedDocumentError::Recovery(error.to_string()))?;
+                journal
+                    .record_formatted(
+                        &source,
+                        format,
+                        record.selection.unwrap_or_default(),
+                        record.view_id.as_str(),
+                    )
+                    .map(|_| ())
+                    .map_err(map_resident_recovery_error)
+            }
+            Self::Paged(journal) => gmark_document_core::RecoveryBackend::record(journal, record)
+                .map_err(|error| PagedDocumentError::Recovery(error.to_string())),
+        }
+    }
+
+    /// Checkpoints a detached save snapshot.  The caller may enqueue this
+    /// after a successful save; the active worker retains the journal state so
+    /// later edits cannot race a UI-thread file removal.
+    pub(super) fn checkpoint_snapshot(
+        &mut self,
+        snapshot: &gmark_document_runtime::DocumentSaveSnapshot,
+    ) -> Result<(), PagedDocumentError> {
+        #[cfg(test)]
+        if take_test_checkpoint_failure() {
+            return Err(PagedDocumentError::Recovery(
+                "test recovery checkpoint failure".to_owned(),
+            ));
+        }
+        match self {
+            Self::Resident(journal) => {
+                let format = snapshot.source_format.clone().ok_or_else(|| {
+                    PagedDocumentError::Recovery(
+                        "resident checkpoint snapshot has no source format".to_owned(),
+                    )
+                })?;
+                let bytes = snapshot
+                    .read_all()
+                    .map_err(|error| PagedDocumentError::Recovery(error.to_string()))?;
+                let source = String::from_utf8(bytes)
+                    .map_err(|error| PagedDocumentError::Recovery(error.to_string()))?;
+                journal
+                    .checkpoint_formatted(
+                        Some(snapshot.identity.canonical_path.clone()),
+                        source,
+                        format,
+                    )
+                    .map_err(map_resident_recovery_error)
+            }
+            Self::Paged(journal) => journal.checkpoint(),
+        }
+    }
+
     /// A successful save/discard removes the old durable session. The coordinator
     /// retains a failed removal as separate retired cleanup work.
+    #[cfg(test)]
     pub(super) fn checkpoint(
         &mut self,
         document: &DocumentSession,
@@ -319,6 +429,7 @@ impl DocumentRecoveryJournal {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn discard(self) -> Result<(), PagedDocumentError> {
         match self {
             Self::Resident(journal) => journal.discard().map_err(map_resident_recovery_error),
@@ -629,6 +740,7 @@ fn map_resident_recovery_error(error: ResidentRecoveryError) -> PagedDocumentErr
     PagedDocumentError::Recovery(error.to_string())
 }
 
+#[cfg(test)]
 pub(super) fn record_recovery_transaction(
     journal: &mut DocumentRecoveryJournal,
     document: &DocumentSession,

@@ -3,6 +3,7 @@
 use super::*;
 
 impl Editor {
+    /// 在后台执行新建/撤销并主动刷新窗口，保证慢盘完成状态无需后续输入才可见。
     pub(super) fn execute_workspace_create_plan(
         &mut self,
         plan: super::workspace_file_ops::WorkspaceCreatePlan,
@@ -73,6 +74,14 @@ impl Editor {
                                     editor.open_path_in_tab(plan.path.clone(), cx);
                                     crate::app_menu::record_recent_file_from_editor(&plan.path, cx);
                                 } else {
+                                    // 只有磁盘创建成功后才更新目录的选中/展开状态，避免
+                                    // 失败时留下指向不存在路径的视觉选择。
+                                    editor.workspace.selected =
+                                        Some(WorkspaceSelection::File(plan.path.clone()));
+                                    editor
+                                        .workspace
+                                        .expanded
+                                        .insert(plan.path.to_string_lossy().into_owned());
                                     editor
                                         .workspace
                                         .pinned_empty_directories
@@ -97,11 +106,13 @@ impl Editor {
                         }
                     }
                     cx.notify();
+                    cx.refresh_windows();
                 });
             }));
         cx.notify();
     }
 
+    /// 在后台完成当前路径规范化与移动，避免脏文档检查把慢盘 IO 带回 GPUI 回调。
     pub(super) fn execute_workspace_move_plan(
         &mut self,
         plan: super::workspace_file_ops::WorkspaceMovePlan,
@@ -111,35 +122,8 @@ impl Editor {
         if self.workspace.file_operation_task.is_some() {
             return;
         }
-        let active_path = self.file_path.as_ref().and_then(|path| {
-            super::workspace_file_ops::canonicalize_workspace_path(path)
-                .ok()
-                .or_else(|| Some(path.clone()))
-        });
-        let affects_dirty_document = self.is_document_dirty()
-            && active_path.as_ref().is_some_and(|current| {
-                current.starts_with(&plan.source)
-                    || plan
-                        .rewrites
-                        .iter()
-                        .any(|rewrite| rewrite.before_path == *current)
-            });
-        if affects_dirty_document {
-            let message = cx
-                .global::<crate::i18n::I18nManager>()
-                .strings()
-                .workspace_operation_dirty_error
-                .clone();
-            if from_dialog {
-                if let Some(dialog) = self.workspace.operation_dialog.as_mut() {
-                    dialog.error = Some(message);
-                }
-            } else {
-                self.workspace.operation_error = Some(message);
-            }
-            cx.notify();
-            return;
-        }
+        let active_path_hint = self.file_path.clone();
+        let document_dirty = self.is_document_dirty();
         let selection = self.capture_source_selection_snapshot(cx);
         let view_mode = self.view_mode;
         let generation = self.workspace.file_operation_generation.wrapping_add(1);
@@ -152,34 +136,76 @@ impl Editor {
         let worker_plan = plan.clone();
         self.workspace.file_operation_task =
             Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
-                let result = cx
-                    .background_spawn(async move { worker_plan.execute() })
+                // 当前文档路径可能来自 UNC/慢盘别名；规范化与真正执行必须共用后台阶段，
+                // 否则“确认移动”仍会在 GPUI 回调先卡一次 metadata。
+                let (active_path, affects_dirty_document, result) = cx
+                    .background_spawn(async move {
+                        let active_path = active_path_hint.as_ref().map(|path| {
+                            dunce::canonicalize(path)
+                                .ok()
+                                .unwrap_or_else(|| path.clone())
+                        });
+                        let affects_dirty_document = document_dirty
+                            && active_path.as_ref().is_some_and(|current| {
+                                current.starts_with(&worker_plan.source)
+                                    || worker_plan
+                                        .rewrites
+                                        .iter()
+                                        .any(|rewrite| rewrite.before_path == *current)
+                            });
+                        let result = if affects_dirty_document {
+                            Err(anyhow::anyhow!(
+                                "workspace operation blocked by dirty document"
+                            ))
+                        } else {
+                            worker_plan.execute()
+                        };
+                        (active_path, affects_dirty_document, result)
+                    })
                     .await;
                 let _ = this.update(cx, |editor, cx| {
                     if editor.workspace.file_operation_generation != generation {
                         return;
                     }
                     editor.workspace.file_operation_task = None;
-                    match result {
-                        Ok(()) => editor.finish_workspace_move(
-                            &plan,
-                            active_path.as_deref(),
-                            &selection,
-                            view_mode,
-                            cx,
-                        ),
-                        Err(error) => {
-                            if from_dialog {
-                                if let Some(dialog) = editor.workspace.operation_dialog.as_mut() {
-                                    dialog.running = false;
-                                    dialog.error = Some(error.to_string());
+                    if affects_dirty_document {
+                        let message = cx
+                            .global::<crate::i18n::I18nManager>()
+                            .strings()
+                            .workspace_operation_dirty_error
+                            .clone();
+                        if from_dialog {
+                            if let Some(dialog) = editor.workspace.operation_dialog.as_mut() {
+                                dialog.running = false;
+                                dialog.error = Some(message);
+                            }
+                        } else {
+                            editor.workspace.operation_error = Some(message);
+                        }
+                    } else {
+                        match result {
+                            Ok(()) => editor.finish_workspace_move(
+                                &plan,
+                                active_path.as_deref(),
+                                &selection,
+                                view_mode,
+                                cx,
+                            ),
+                            Err(error) => {
+                                if from_dialog {
+                                    if let Some(dialog) = editor.workspace.operation_dialog.as_mut()
+                                    {
+                                        dialog.running = false;
+                                        dialog.error = Some(error.to_string());
+                                    }
+                                } else {
+                                    editor.workspace.operation_error = Some(error.to_string());
                                 }
-                            } else {
-                                editor.workspace.operation_error = Some(error.to_string());
                             }
                         }
                     }
                     cx.notify();
+                    cx.refresh_windows();
                 });
             }));
         cx.notify();

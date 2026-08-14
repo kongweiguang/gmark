@@ -28,7 +28,9 @@ mod session;
 #[cfg(test)]
 pub(crate) use open::open_recovered_editor_window;
 pub(crate) use open::{
-    open_detached_tab_window, open_editor_window, open_file_in_new_window,
-    open_file_in_safe_source_window, open_paged_recovery_window, open_recovered_editor_tabs_window,
+    PreparedPagedRecovery, PreparedRecoveredDocument, open_detached_tab_window, open_editor_window,
+    open_file_in_new_window, open_file_in_safe_source_window, open_paged_recovery_window,
+    open_prepared_paged_recovery_window, open_prepared_recovered_editor_tabs_window,
+    open_recovered_editor_tabs_window, prepare_paged_recovery, prepare_recovered_document,
 };
 pub(crate) use session::open_workspace_session_window;

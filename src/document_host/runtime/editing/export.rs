@@ -147,6 +147,8 @@ impl DocumentHost {
         });
     }
 
+    /// Commit a Source row edit once and enqueue its immutable post-edit state;
+    /// this keeps IME/finalized input from performing journal I/O in the UI lock.
     pub(super) fn on_line_edit_event(
         &mut self,
         block: Entity<Block>,
@@ -233,35 +235,37 @@ impl DocumentHost {
                 .unwrap_or(start);
             (start, end)
         });
+        // 0 字节文件的首个 Changed 事件可能与旧 provisional 视图同帧到达；在提交
+        // 前补做有界 session 安装，确保该字符进入权威文档，而不是被 document=None
+        // 的早退静默吞掉。非空文件仍沿用后台索引，不会在 UI 线程扫描正文。
+        if self.document.is_none() && self.probe.len == 0 {
+            self.start_initial_index(cx);
+        }
         let Some(document) = self.document.clone() else {
+            self.active_edit = None;
+            self.error = Some(
+                cx.global::<I18nManager>()
+                    .strings()
+                    .large_document_text("source_backend_unavailable")
+                    .into(),
+            );
+            cx.notify();
             return;
         };
         match document.replace_range(range.clone(), replacement.as_str()) {
             Ok(_) => {
-                // 先在持久根的廉价快照上验证范围与 UTF-8 边界，再追加恢复记录；
-                // 失败输入不得留下一个正文从未接受过的 journal 事务。
-                if let Some(journal) = self.coordinator.recovery_journal.as_mut() {
-                    let result = document.with_session(|session| {
-                        record_recovery_transaction(
-                            journal,
-                            session,
-                            document.revision().saturating_sub(1),
-                            range.clone(),
-                            replacement.as_str(),
-                            recovery_selection,
-                            DocumentViewId::source(),
-                        )
-                    });
-                    match result {
-                        Ok(Err(error)) => {
-                            self.coordinator.recovery_error = Some(error.to_string().into())
-                        }
-                        Err(error) => {
-                            self.coordinator.recovery_error = Some(error.to_string().into())
-                        }
-                        Ok(Ok(())) => {}
-                    }
-                }
+                // Capture the post-edit snapshot outside the Controller lock;
+                // the recovery worker performs the journal append later.
+                let revision_before = document.revision().saturating_sub(1);
+                self.enqueue_recovery_transaction(
+                    &document,
+                    revision_before,
+                    range.clone(),
+                    replacement.as_str(),
+                    recovery_selection,
+                    DocumentViewId::source(),
+                    cx,
+                );
                 let reanchored = text
                     .contains(['\r', '\n'])
                     .then(|| {

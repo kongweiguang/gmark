@@ -92,10 +92,12 @@ pub enum PaneEvent {
 /// `Rc` is intentional: GPUI callbacks run on the UI thread and the editor
 /// owns their lifetime.  No document body or runtime task crosses this bridge.
 type PaneEventCallback = dyn Fn(PaneEvent, &mut gpui::Window, &mut App);
+type PaneWorkspaceChangedCallback = dyn Fn(&mut App);
 
 #[derive(Clone)]
 pub struct PaneWorkspaceController {
     callback: Rc<PaneEventCallback>,
+    workspace_changed: Rc<PaneWorkspaceChangedCallback>,
 }
 
 impl fmt::Debug for PaneWorkspaceController {
@@ -113,7 +115,22 @@ impl PaneWorkspaceController {
     pub fn new(callback: impl Fn(PaneEvent, &mut gpui::Window, &mut App) + 'static) -> Self {
         Self {
             callback: Rc::new(callback),
+            workspace_changed: Rc::new(|_| {}),
         }
+    }
+
+    /// Attaches persistence notification separately from command dispatch so
+    /// divider changes can schedule a session snapshot without inventing a
+    /// window-bound `PaneEvent` or mutating the pane model twice.
+    pub fn with_workspace_changed(mut self, callback: impl Fn(&mut App) + 'static) -> Self {
+        self.workspace_changed = Rc::new(callback);
+        self
+    }
+
+    /// Notifies the owning editor after a ratio change has been committed; the
+    /// callback remains UI-thread-only and cannot retain document/runtime state.
+    pub(super) fn notify_workspace_changed(&self, cx: &mut App) {
+        (self.workspace_changed)(cx);
     }
 
     /// Construct a no-op controller for isolated view tests and previews.

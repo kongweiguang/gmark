@@ -11,7 +11,10 @@ use super::model::{
     DELIMITED_CACHE_BUDGET_BYTES, DELIMITED_SIDECAR_SAMPLE_BYTES, DELIMITED_SIDECAR_VERSION,
     DelimitedIndex, DelimitedIndexOptions, MAX_DELIMITED_SIDECAR_BYTES, RecordCheckpoint,
 };
-use super::source::{DelimitedSource, csv_error, decode_fields, extend_synthetic_headers, reader};
+use super::source::{
+    DelimitedSource, csv_error, decode_fields, ensure_file_record_size, extend_synthetic_headers,
+    reader,
+};
 use crate::{FileSource, PagedDocumentError, SearchCancellation};
 
 impl DelimitedIndex {
@@ -206,10 +209,12 @@ fn read_headers(
     }
     let mut reader = reader(source, options)?;
     let mut record = ByteRecord::new();
+    let start = reader.position().byte();
     if reader
         .read_byte_record(&mut record)
         .map_err(|error| csv_error(source, error))?
     {
+        ensure_file_record_size(source, start, reader.position().byte())?;
         Ok(decode_fields(&record))
     } else {
         Ok(Vec::new())

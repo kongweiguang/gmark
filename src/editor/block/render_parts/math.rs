@@ -30,6 +30,13 @@ const MATH_PALETTE_WIDTH: f32 = 200.0;
 const MATH_PALETTE_GAP: f32 = 6.0;
 const MATH_PALETTE_VIEWPORT_INSET: f32 = 8.0;
 const MATH_FORMULA_ANCHOR_HEIGHT: f32 = 56.0;
+const MATH_PALETTE_CONTROL_RADIUS: f32 = 8.0;
+
+/// Keeps the formula palette in the same floating-surface radius range as other transient
+/// editor actions while allowing a theme's larger dialog radius to remain bounded.
+pub(super) fn math_palette_radius(dialog_radius: f32) -> f32 {
+    dialog_radius.clamp(14.0, 18.0)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct MathPalettePlacement {
@@ -380,6 +387,7 @@ impl Block {
             crate::theme::workbench::SurfaceKind::GlassStrong,
             visual_preferences,
         );
+        let panel_radius = math_palette_radius(theme.dimensions.dialog_radius);
         let strings = cx.global::<I18nManager>().strings_arc();
         let block = cx.entity().downgrade();
         let drag_target = block.clone();
@@ -571,7 +579,7 @@ impl Block {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(5.0))
+                .rounded(px(MATH_PALETTE_CONTROL_RADIUS))
                 .text_size(px(11.0))
                 .text_color(if active {
                     palette.text_primary
@@ -631,7 +639,7 @@ impl Block {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(6.0))
+                    .rounded(px(MATH_PALETTE_CONTROL_RADIUS))
                     .border_1()
                     .border_color(palette.border_subtle)
                     .bg(palette.control_surface)
@@ -675,7 +683,8 @@ impl Block {
             .flex()
             .flex_col()
             .gap(px(4.0))
-            .rounded(px(6.0))
+            .rounded(px(panel_radius))
+            .overflow_hidden()
             .border_1()
             .border_color(material.border)
             .bg(material.background)

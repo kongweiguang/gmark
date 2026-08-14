@@ -2,6 +2,34 @@
 
 use super::*;
 
+#[cfg(test)]
+#[path = "../../../../tests/unit/editor/session_persistence_private.rs"]
+mod tests;
+
+/// Serializes one session write and rechecks its generation after lock wait.
+///
+/// The recheck must happen while holding `write_lock`; checking before the lock
+/// would leave a window where an older task can pass validation, wait, and then
+/// overwrite a snapshot that was queued later.
+pub(super) fn run_current_session_write<T, F>(
+    write_lock: &Mutex<()>,
+    generations: &SessionWriteGenerationRegistry,
+    session_id: uuid::Uuid,
+    generation: u64,
+    write: F,
+) -> anyhow::Result<Option<T>>
+where
+    F: FnOnce() -> anyhow::Result<T>,
+{
+    let _guard = write_lock
+        .lock()
+        .map_err(|_| anyhow::anyhow!("workspace session write lock poisoned"))?;
+    if !generations.is_current(session_id, generation)? {
+        return Ok(None);
+    }
+    write().map(Some)
+}
+
 impl Editor {
     pub(in crate::editor) fn install_workspace_session_window_observer(
         &mut self,
@@ -55,6 +83,8 @@ impl Editor {
         true
     }
 
+    /// Debounces ordinary session snapshots while generation-gating background
+    /// writes so a delayed task cannot overwrite a newer layout.
     pub(in crate::editor) fn schedule_workspace_session_save(&mut self, cx: &mut Context<Self>) {
         #[cfg(test)]
         {
@@ -62,8 +92,6 @@ impl Editor {
         }
         #[cfg(not(test))]
         {
-            let generation = self.tabs.session_generation.wrapping_add(1);
-            self.tabs.session_generation = generation;
             let session = match self.workspace_session_snapshot_result(cx) {
                 Ok(session) => session,
                 Err(error) => {
@@ -71,35 +99,31 @@ impl Editor {
                     return;
                 }
             };
-            SESSION_WRITE_GENERATIONS
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .expect("workspace session generation lock poisoned")
-                .insert(session.id, generation);
+            let generation = self.tabs.session_generation.wrapping_add(1);
+            self.tabs.session_generation = generation;
+            if let Err(error) = SESSION_WRITE_GENERATIONS
+                .get_or_init(SessionWriteGenerationRegistry::default)
+                .set(session.id, generation)
+            {
+                eprintln!("failed to record workspace session generation: {error}");
+                return;
+            }
+            let session_id = session.id;
             self.tabs.session_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
                 cx.background_executor()
                     .timer(Duration::from_millis(250))
                     .await;
                 let result = cx
                     .background_spawn(async move {
-                        // 原子 rename 只保证单次写完整；串行锁与持锁后的 generation 校验
-                        // 共同阻止较旧窗口任务在新状态之后完成并覆盖磁盘。
-                        let _guard = SESSION_WRITE_LOCK.lock().map_err(|_| {
-                            anyhow::anyhow!("workspace session write lock poisoned")
-                        })?;
-                        let is_current = SESSION_WRITE_GENERATIONS
-                            .get_or_init(|| Mutex::new(HashMap::new()))
-                            .lock()
-                            .map_err(|_| {
-                                anyhow::anyhow!("workspace session generation lock poisoned")
-                            })?
-                            .get(&session.id)
-                            .copied()
-                            == Some(generation);
-                        if !is_current {
-                            return Ok(());
-                        }
-                        crate::config::workspace_session::upsert_workspace_session(&session)
+                        run_current_session_write(
+                            &SESSION_WRITE_LOCK,
+                            SESSION_WRITE_GENERATIONS
+                                .get_or_init(SessionWriteGenerationRegistry::default),
+                            session_id,
+                            generation,
+                            || crate::config::workspace_session::upsert_workspace_session(&session),
+                        )
+                        .map(|_| ())
                     })
                     .await;
                 let _ = this.update(cx, |editor, _cx| {
@@ -145,7 +169,12 @@ impl Editor {
         }
     }
 
-    pub(in crate::editor) fn persist_workspace_session_before_quit(&self, cx: &App) {
+    /// Enqueues a best-effort quit snapshot off the GPUI callback thread; the
+    /// generation gate preserves ordering without synchronously holding I/O locks.
+    pub(in crate::editor) fn persist_workspace_session_before_quit(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
         #[cfg(test)]
         let _ = cx;
         #[cfg(not(test))]
@@ -157,15 +186,33 @@ impl Editor {
                     return;
                 }
             };
-            let result = SESSION_WRITE_LOCK
-                .lock()
-                .map_err(|_| anyhow::anyhow!("workspace session write lock poisoned"))
-                .and_then(|_guard| {
-                    crate::config::workspace_session::upsert_workspace_session(&session)
-                });
-            if let Err(error) = result {
-                eprintln!("failed to flush workspace session before quit: {error}");
+            let generation = self.tabs.session_generation.wrapping_add(1);
+            self.tabs.session_generation = generation;
+            if let Err(error) = SESSION_WRITE_GENERATIONS
+                .get_or_init(SessionWriteGenerationRegistry::default)
+                .set(session.id, generation)
+            {
+                eprintln!("failed to record workspace session generation before quit: {error}");
+                return;
             }
+            // A quit snapshot supersedes a delayed debounce task.  The task may
+            // already be inside the background executor, so generation gating
+            // remains necessary even after dropping this UI-owned handle.
+            self.tabs.session_task = None;
+            let session_id = session.id;
+            cx.background_spawn(async move {
+                let result = run_current_session_write(
+                    &SESSION_WRITE_LOCK,
+                    SESSION_WRITE_GENERATIONS.get_or_init(SessionWriteGenerationRegistry::default),
+                    session_id,
+                    generation,
+                    || crate::config::workspace_session::upsert_workspace_session(&session),
+                );
+                if let Err(error) = result {
+                    eprintln!("failed to persist workspace session before quit: {error}");
+                }
+            })
+            .detach();
         }
     }
 
@@ -646,10 +693,16 @@ impl Editor {
         let workspace = crate::editor::panes::PaneWorkspace::from_parts(root, pane_states, focused)
             .map_err(|error| anyhow::anyhow!("invalid workspace pane tree: {error}"))?;
         let editor = cx.entity().downgrade();
+        let editor_for_persistence = editor.clone();
         let controller =
             crate::editor::panes::PaneWorkspaceController::new(move |event, window, cx| {
                 let _ = editor.update(cx, |editor, cx| {
                     editor.handle_pane_event(event, Some(window), cx)
+                });
+            })
+            .with_workspace_changed(move |cx| {
+                let _ = editor_for_persistence.update(cx, |editor, cx| {
+                    editor.schedule_workspace_session_save(cx);
                 });
             });
         self.pane_workspace =

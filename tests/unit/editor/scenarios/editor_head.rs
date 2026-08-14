@@ -492,6 +492,7 @@ fn assert_dialog_title_icon(
     assert!(label.top() >= dialog.top());
 }
 
+/// 通过等待后台计划完成再断言，覆盖 Replace All 的原子提交和 20,000 条结果预算。
 #[gpui::test]
 async fn document_find_replace_is_unicode_safe_undoable_and_bounded(cx: &mut TestAppContext) {
     use super::find_replace::{
@@ -611,6 +612,9 @@ async fn document_find_replace_is_unicode_safe_undoable_and_bounded(cx: &mut Tes
             input.replace_text_in_visible_range(0..0, "omega", None, false, input_cx);
         });
         editor.replace_all_find_matches(window, cx);
+    });
+    visual_cx.run_until_parked();
+    editor.update_in(visual_cx, |editor, _window, cx| {
         assert_eq!(editor.source_document.text(), "omega beta omega");
         assert!(editor.document_dirty);
         editor.undo_document(cx);
@@ -644,6 +648,9 @@ async fn document_find_replace_is_unicode_safe_undoable_and_bounded(cx: &mut Tes
         assert!(editor.scroll_handle.offset().y < px(0.0));
         assert!(editor.active_entity_id.is_some());
         editor.replace_all_find_matches(window, cx);
+    });
+    large_cx.run_until_parked();
+    large_editor.update_in(large_cx, |editor, _window, cx| {
         assert!(editor.virtual_surface.is_some());
         assert!(editor.source_document.text().starts_with("pin paragraph 0"));
         assert!(

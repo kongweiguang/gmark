@@ -190,6 +190,8 @@ impl Block {
             return None;
         }
 
+        // 这里只做无副作用的路径语法分类；文件存在性、metadata 与大小限制在
+        // Editor 的后台 materialize 阶段验证，避免剪贴板回调被 UNC 或慢盘阻塞。
         let path = Self::pasted_local_path_from_text_item(trimmed)?;
         if Self::is_supported_local_image_path(&path) {
             Some(PastedImageSource::LocalPath(path))
@@ -200,16 +202,16 @@ impl Block {
 
     /// Parses a single clipboard text item as a local file path.
     ///
-    /// Windows file-copy paste reaches GPUI as a plain drive-letter path; that
-    /// must be tested as a path before URL parsing, because `url::Url` treats
-    /// the drive letter as a URL scheme.
+    /// Windows file-copy paste reaches GPUI as a plain drive-letter or UNC path;
+    /// classify its lexical shape before URL parsing because `url::Url` treats
+    /// a drive letter as a URL scheme. The backend owns existence validation.
     fn pasted_local_path_from_text_item(text: &str) -> Option<std::path::PathBuf> {
         let unquoted = text
             .strip_prefix('"')
             .and_then(|rest| rest.strip_suffix('"'))
             .unwrap_or(text);
         let direct_path = std::path::PathBuf::from(unquoted);
-        let path = if direct_path.is_file() {
+        let path = if direct_path.is_absolute() {
             direct_path
         } else if let Ok(url) = url::Url::parse(unquoted) {
             if url.scheme().eq_ignore_ascii_case("file") {
@@ -220,16 +222,10 @@ impl Block {
         } else {
             return None;
         };
-        if !path.is_file() {
-            return None;
-        }
         Some(path)
     }
 
     fn is_supported_local_image_path(path: &std::path::Path) -> bool {
-        if !path.is_file() {
-            return false;
-        }
         let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
             return false;
         };

@@ -1,7 +1,7 @@
 // @author kongweiguang
 
 use super::super::MermaidViewMode;
-use super::math::{math_caret_scroll_offset, math_palette_placement};
+use super::math::{math_caret_scroll_offset, math_palette_placement, math_palette_radius};
 use super::{
     HtmlComputedStyle, block_content_insets, column_axis_gutter_visible, html_node_visual_style,
     inline_word_chunks, mermaid_preview_canvas_height, mermaid_workbench_body_height,
@@ -62,6 +62,32 @@ fn math_palette_horizontal_drag_is_clamped_inside_the_viewport() {
         point(px(-500.0), px(0.0)),
     );
     assert_eq!(placement.left, 8.0);
+}
+
+/// Verifies that floating formula chrome keeps a dialog-like surface radius without letting
+/// compact themes collapse it into a sharp control or large themes turn it into a modal shell.
+#[test]
+fn math_palette_uses_bounded_floating_surface_radius() {
+    assert_eq!(math_palette_radius(10.0), 14.0);
+    assert_eq!(math_palette_radius(16.0), 16.0);
+    assert_eq!(math_palette_radius(24.0), 18.0);
+}
+
+/// Keeps the default below-anchor placement separated from the formula content so the palette
+/// remains a transient companion instead of obscuring the expression being edited.
+#[test]
+fn math_palette_below_anchor_preserves_a_content_gap() {
+    let anchor = math_anchor(300.0, 100.0, 400.0, 40.0);
+    let placement = math_palette_placement(
+        anchor,
+        None,
+        size(px(1000.0), px(900.0)),
+        MathPalettePage::Structures,
+        point(px(0.0), px(0.0)),
+    );
+
+    assert!(!placement.above);
+    assert!(placement.top >= f32::from(anchor.bottom()) + 6.0);
 }
 
 #[test]

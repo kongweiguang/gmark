@@ -133,8 +133,9 @@ mod view;
 pub(crate) use layout::open_about_github_url;
 pub(in crate::editor) use layout::{
     DialogButtonKind, DialogTitleIcon, RenderedRowCache, clamped_floating_panel_origin,
-    dialog_actions, dialog_body, dialog_button, dialog_content, dialog_panel,
-    dialog_title_with_icon, floating_submenu_x, modal_overlay, supports_in_window_menu,
+    compact_dialog_actions, dialog_actions, dialog_body, dialog_button, dialog_content,
+    dialog_panel, dialog_title_with_icon, floating_submenu_x, modal_overlay,
+    supports_in_window_menu,
 };
 
 #[cfg(test)]

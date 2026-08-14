@@ -178,7 +178,8 @@ impl DocumentHost {
     }
 
     /// 编辑遮罩必须挂在 SourceBacked 内容根层，不能成为可缩放、可裁剪画布的子元素。
-    /// 这样 Preview 与 Split 共享同一套焦点和尺寸语义，窗口变化时也不会丢失草稿。
+    /// 这样 Preview 与 Split 共享同一套焦点和尺寸语义，窗口变化时也不会丢失草稿；
+    /// 紧凑面板仍沿用模态层的圆角与按钮 token，避免编辑密度和阻塞层层级互相打架。
     pub(in crate::document_host::implementation) fn render_json_graph_edit_overlay(
         &self,
         viewport_width: f32,
@@ -188,6 +189,7 @@ impl DocumentHost {
         let target = self.graph_edit_target.clone()?;
         let theme = cx.global::<ThemeManager>().current();
         let colors = &theme.colors;
+        let d = &theme.dimensions;
         let strings = cx.global::<I18nManager>().strings();
         let visual_preferences = cx
             .try_global::<VisualPreferencesManager>()
@@ -244,7 +246,7 @@ impl DocumentHost {
                         .flex()
                         .flex_col()
                         .gap(px(9.0))
-                        .rounded(px(9.0))
+                        .rounded(px(d.dialog_radius.clamp(18.0, 22.0)))
                         .border(px(1.0))
                         .border_color(overlay_material.border)
                         .bg(overlay_material.background)
@@ -298,12 +300,12 @@ impl DocumentHost {
                                     div()
                                         .id("json-graph-edit-reload")
                                         .debug_selector(|| "json-graph-edit-reload".to_owned())
-                                        .h(px(30.0))
+                                        .h(px(d.dialog_button_height))
                                         .tab_index(0)
                                         .px(px(11.0))
                                         .flex()
                                         .items_center()
-                                        .rounded(px(6.0))
+                                        .rounded(px((d.dialog_radius - 6.0).clamp(10.0, 12.0)))
                                         .cursor_pointer()
                                         .bg(control_material.background)
                                         .hover(|button| button.bg(colors.workbench.control_hover))
@@ -323,12 +325,12 @@ impl DocumentHost {
                                         div()
                                             .id("json-graph-edit-source")
                                             .debug_selector(|| "json-graph-edit-source".to_owned())
-                                            .h(px(30.0))
+                                            .h(px(d.dialog_button_height))
                                             .tab_index(0)
                                             .px(px(11.0))
                                             .flex()
                                             .items_center()
-                                            .rounded(px(6.0))
+                                            .rounded(px((d.dialog_radius - 6.0).clamp(10.0, 12.0)))
                                             .cursor_pointer()
                                             .bg(control_material.background)
                                             .hover(|button| {
@@ -357,12 +359,12 @@ impl DocumentHost {
                                     div()
                                         .id("json-graph-edit-cancel")
                                         .debug_selector(|| "json-graph-edit-cancel".to_owned())
-                                        .h(px(30.0))
+                                        .h(px(d.dialog_button_height))
                                         .tab_index(0)
                                         .px(px(11.0))
                                         .flex()
                                         .items_center()
-                                        .rounded(px(6.0))
+                                        .rounded(px((d.dialog_radius - 6.0).clamp(10.0, 12.0)))
                                         .cursor_pointer()
                                         .bg(control_material.background)
                                         .hover(|button| button.bg(colors.workbench.control_hover))
@@ -381,12 +383,12 @@ impl DocumentHost {
                                         div()
                                             .id("json-graph-edit-save")
                                             .debug_selector(|| "json-graph-edit-save".to_owned())
-                                            .h(px(30.0))
+                                            .h(px(d.dialog_button_height))
                                             .tab_index(0)
                                             .px(px(11.0))
                                             .flex()
                                             .items_center()
-                                            .rounded(px(6.0))
+                                            .rounded(px((d.dialog_radius - 6.0).clamp(10.0, 12.0)))
                                             .cursor_pointer()
                                             .bg(colors.workbench.accent)
                                             .hover(|button| {

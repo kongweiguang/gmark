@@ -92,6 +92,14 @@ async fn discard_and_close_checkpoints_paged_recovery_and_clears_host_dirty(
         });
     });
 
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while journal_path.exists() && std::time::Instant::now() < deadline {
+        // Discard deliberately checkpoints on the recovery worker so closing a
+        // window never waits for filesystem deletion; let that worker publish
+        // its durable terminal state before asserting the disk contract.
+        visual.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     assert!(!journal_path.exists());
 }
 

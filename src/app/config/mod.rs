@@ -11,8 +11,8 @@ pub(crate) use crate::preferences::{
     read_app_preferences,
 };
 pub(crate) use gmark_config::{
-    AppDirs, load_or_create_installation_id, read_recent_files, record_recent_file,
-    remove_recent_file,
+    AppDirs, RECENT_FILES_MAX_BYTES, load_or_create_installation_id, read_recent_files,
+    record_recent_file, remove_recent_file,
 };
 
 #[cfg(test)]

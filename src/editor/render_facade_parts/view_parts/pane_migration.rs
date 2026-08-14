@@ -474,10 +474,16 @@ impl Editor {
             self.file_watch_guard = None;
             self.shared_event_task = None;
             let editor = cx.entity().downgrade();
+            let editor_for_persistence = editor.clone();
             let controller =
                 crate::editor::panes::PaneWorkspaceController::new(move |event, window, cx| {
                     let _ = editor.update(cx, |editor, cx| {
                         editor.handle_pane_event(event, Some(window), cx)
+                    });
+                })
+                .with_workspace_changed(move |cx| {
+                    let _ = editor_for_persistence.update(cx, |editor, cx| {
+                        editor.schedule_workspace_session_save(cx);
                     });
                 });
             let entity =

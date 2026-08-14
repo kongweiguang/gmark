@@ -357,10 +357,12 @@ impl Editor {
         )
     }
 
+    /// 只从扫描快照读取文件类型，避免菜单可用性判断在慢盘上同步触发 metadata。
     pub(in crate::editor) fn workspace_context_target_is_file(&self) -> bool {
         matches!(
             self.context_menu.as_ref(),
-            Some(ContextMenuState::Workspace { path, .. }) if path.is_file()
+            Some(ContextMenuState::Workspace { path, .. })
+                if self.workspace.snapshot_path_is_file(path)
         )
     }
 
@@ -380,6 +382,7 @@ impl Editor {
             self.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;
             self.sync_workspace_models(cx);
             self.ensure_workspace_focus_handle(cx).focus(window);
+            self.ensure_workspace_resize_focus_handle(cx);
         }
         if !compact {
             self.workspace.docked_open_preference = Some(self.workspace.is_open);
@@ -399,6 +402,8 @@ impl Editor {
             self.dismiss_contextual_overlays(cx);
             self.workspace.is_open = true;
             self.sync_workspace_models(cx);
+            self.ensure_workspace_focus_handle(cx);
+            self.ensure_workspace_resize_focus_handle(cx);
             if !compact {
                 self.workspace.docked_open_preference = Some(true);
                 self.schedule_workspace_session_save(cx);
@@ -542,7 +547,32 @@ impl Editor {
         }
     }
 
+    /// 只消费扫描阶段生成的平面索引，避免 Quick Open 输入时再次递归工作区树。
     pub(super) fn schedule_quick_open(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = self
+            .workspace
+            .quick_open
+            .as_ref()
+            .map(|state| state.input.clone())
+        else {
+            return;
+        };
+        let query = input.read(cx).display_text().trim().to_owned();
+        let Some(root) = self.workspace.root.clone() else {
+            if let Some(state) = self.workspace.quick_open.as_mut() {
+                state.generation = state.generation.wrapping_add(1);
+                state.task = None;
+                state.results.clear();
+                state.running = false;
+            }
+            cx.notify();
+            return;
+        };
+        let paths = self.workspace.quick_open_paths.clone();
+        let scanning = matches!(
+            self.workspace.file_scan_state,
+            WorkspaceScanState::Scanning { .. }
+        );
         let Some(state) = self.workspace.quick_open.as_mut() else {
             return;
         };
@@ -550,17 +580,7 @@ impl Editor {
         state.task = None;
         state.running = true;
         let generation = state.generation;
-        let query = state.input.read(cx).display_text().trim().to_owned();
-        let Some(root) = self.workspace.root.clone() else {
-            state.results.clear();
-            state.running = false;
-            return;
-        };
-        let mut paths = Vec::new();
-        if let Some(tree) = self.workspace.file_tree.as_ref() {
-            collect_markdown_paths(tree, &mut paths);
-        }
-        if paths.is_empty() && self.workspace.file_scanning {
+        if paths.is_empty() && scanning {
             cx.notify();
             return;
         }
@@ -581,6 +601,7 @@ impl Editor {
                 state.results = results;
                 state.selected = 0;
                 cx.notify();
+                cx.refresh_windows();
             });
         }));
         cx.notify();

@@ -68,6 +68,7 @@ impl DelimitedIndex {
             {
                 break;
             }
+            source.ensure_record_size(position.byte(), reader.position().byte())?;
             if physical_records == 0 && options.has_headers {
                 headers = decode_fields(&record);
             }
@@ -198,6 +199,7 @@ impl DelimitedIndex {
                 break;
             }
             let byte_end = reader.position().byte();
+            self.source.ensure_record_size(byte_start, byte_end)?;
             if physical >= target_physical {
                 let byte_range =
                     normalized_record_range(&self.source, byte_start, byte_end, source_len)?;
@@ -240,12 +242,15 @@ impl DelimitedIndex {
             if physical.is_multiple_of(1_024) && cancellation.is_cancelled() {
                 return Err(PagedDocumentError::Cancelled);
             }
+            let byte_start = reader.position().byte();
             if !reader
                 .read_byte_record(&mut record)
                 .map_err(|error| self.source.csv_error(error))?
             {
                 break;
             }
+            self.source
+                .ensure_record_size(byte_start, reader.position().byte())?;
             if physical == 0 && self.options.has_headers {
                 physical += 1;
                 continue;

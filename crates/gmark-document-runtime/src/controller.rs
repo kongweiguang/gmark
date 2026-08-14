@@ -12,10 +12,12 @@
 // Reason: the callback registry keeps its Send/Sync trait object inline for allocation-free registration; remove when the registry is factored into named callback aliases.
 #![allow(clippy::type_complexity)]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::any::{Any, TypeId};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::time::Duration;
 
 use gmark_document::{LineEnding, SourceFormatSnapshot};
 use gmark_document_core::{
@@ -260,6 +262,9 @@ struct DocumentHandleInner {
     last_lease_callback: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     save_state_callbacks: Mutex<BTreeMap<usize, Arc<dyn Fn(SaveStateNotification) + Send + Sync>>>,
     next_save_callback_id: AtomicUsize,
+    /// Adapter state is anchored to the shared Controller rather than a view
+    /// Entity, so document-scoped background work survives pane migration.
+    shared_extensions: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 }
 
 /// 明确表示一个打开视图对共享文档的生命周期租约。句柄 clone 不会延长租约；
@@ -347,6 +352,11 @@ pub enum ControllerError {
     Poisoned,
     #[error("document open failed: {0}")]
     OpenFailed(String),
+    #[error("document opening timed out after {timeout_ms}ms: {key:?}")]
+    OpenTimedOut {
+        key: DocumentRegistryKey,
+        timeout_ms: u64,
+    },
     #[error(
         "document event subscription lagged: expected sequence {expected}, oldest retained {oldest}"
     )]

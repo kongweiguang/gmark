@@ -26,7 +26,15 @@ pub(super) const UPDATE_ACK_CAPABILITY_ENV: &str = "GMARK_UPDATE_ACK_CAPABILITY"
 
 pub(super) enum WorkerEvent {
     Download(DownloadEvent),
-    Failed { message: String, retryable: bool },
+    Failed {
+        message: String,
+        retryable: bool,
+    },
+    Staged(Box<super::velopack::StagedInstall>),
+    StageFailed {
+        release: UpdateRelease,
+        message: String,
+    },
 }
 
 pub(super) struct PreparedInstall {

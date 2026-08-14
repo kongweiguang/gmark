@@ -26,7 +26,7 @@ impl DocumentHost {
         expected_owned_leases: usize,
         cx: &mut Context<Self>,
     ) -> bool {
-        let mut discard_succeeded = match self.document.as_ref() {
+        let discard_succeeded = match self.document.as_ref() {
             Some(document) => match document
                 .handle()
                 .discard_current_changes_for_owned_leases(expected_owned_leases)
@@ -39,12 +39,11 @@ impl DocumentHost {
             },
             None => true,
         };
-        if discard_succeeded
-            && let Some(journal) = self.coordinator.recovery_journal.take()
-            && let Err(error) = journal.discard()
-        {
-            self.coordinator.recovery_error = Some(localized_document_error(&error, cx));
-            discard_succeeded = false;
+        if discard_succeeded && let Some(document) = self.document.clone() {
+            // Discard changes only mutates the Controller baseline here; the
+            // journal removal is queued so a slow or failing filesystem never
+            // blocks the close/UI path and the old log remains recoverable.
+            self.enqueue_recovery_checkpoint(&document, None, cx);
         }
         cx.emit(DocumentHostEvent::StateChanged);
         cx.notify();

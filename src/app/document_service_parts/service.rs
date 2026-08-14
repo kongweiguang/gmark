@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use gmark_document_core::{DocumentBackendKind, LoadingPolicy};
 use gmark_document_runtime::{
@@ -36,6 +37,12 @@ use super::watcher::{
 use super::watcher_runtime::{
     clear_probe_entries, remove_watcher, run_watcher, watcher_registration_parts,
 };
+
+/// 后台打开等待的上限；超过后让调用方恢复 UI 控制权，迟到结果由代次丢弃。
+pub(super) const OPEN_WAIT_DEADLINE: Duration = Duration::from_secs(30);
+
+#[path = "service_probe.rs"]
+mod service_probe;
 
 /// Process-wide owner of the application document registry.
 #[derive(Clone)]
@@ -172,6 +179,9 @@ impl DocumentService {
         }
     }
 
+    /// Reuse a ready probe for an existing target so Save As does not perform
+    /// another filesystem probe while the service already owns its result.
+    // 原因：已有 registry 会话的元数据足以构造目标预览，复用缓存可避免重复阻塞 I/O。
     fn cached_probe(&self, key: &DocumentRegistryKey) -> Option<OpenProbe> {
         let probes = match self.probes.lock() {
             Ok(probes) => probes,
@@ -190,96 +200,6 @@ impl DocumentService {
             }
         }
         None
-    }
-
-    /// Single-flight the metadata probe/plan before a Resident body is read.
-    /// Probe IO runs only in the Opening owner and is cached while the
-    /// corresponding document lease/watcher remains alive.
-    pub(crate) fn probe_file<F, E>(
-        &self,
-        path: impl AsRef<Path>,
-        policy: LoadingPolicy,
-        loader: F,
-    ) -> Result<gmark_paged_document::OpenProbe, DocumentServiceError>
-    where
-        F: FnOnce(&Path, LoadingPolicy) -> Result<gmark_paged_document::OpenProbe, E>,
-        E: std::fmt::Display,
-    {
-        let normalized_path = normalize_path(path.as_ref())?;
-        let probe_key = ProbeKey {
-            key: file_key(&normalized_path),
-            max_resident_bytes: policy.effective_limits().max_resident_bytes,
-            force_safe_source: policy.force_safe_source,
-        };
-        let loader_path = normalized_path.clone();
-        let (slot, inserted) = {
-            let mut probes = match self.probes.lock() {
-                Ok(probes) => probes,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Some(slot) = probes.get(&probe_key) {
-                (Arc::clone(slot), false)
-            } else {
-                let slot = Arc::new(ProbeSlot {
-                    state: Mutex::new(ProbeSlotState::Opening),
-                    ready: std::sync::Condvar::new(),
-                });
-                probes.insert(probe_key.clone(), Arc::clone(&slot));
-                (slot, true)
-            }
-        };
-
-        if inserted {
-            let result = loader(&loader_path, policy)
-                .map_err(|error| DocumentServiceError::OpenFailed(error.to_string()));
-            let mut state = match slot.state.lock() {
-                Ok(state) => state,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            match result {
-                Ok(probe) => {
-                    *state = ProbeSlotState::Ready(probe.clone());
-                    slot.ready.notify_all();
-                    Ok(probe)
-                }
-                Err(error) => {
-                    let message = error.to_string();
-                    *state = ProbeSlotState::Failed(message.clone());
-                    slot.ready.notify_all();
-                    drop(state);
-                    let mut probes = match self.probes.lock() {
-                        Ok(probes) => probes,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    if probes
-                        .get(&probe_key)
-                        .is_some_and(|candidate| Arc::ptr_eq(candidate, &slot))
-                    {
-                        probes.remove(&probe_key);
-                    }
-                    Err(DocumentServiceError::OpenFailed(message))
-                }
-            }
-        } else {
-            let mut state = match slot.state.lock() {
-                Ok(state) => state,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            loop {
-                match &*state {
-                    ProbeSlotState::Ready(probe) => return Ok(probe.clone()),
-                    ProbeSlotState::Failed(message) => {
-                        return Err(DocumentServiceError::OpenFailed(message.clone()));
-                    }
-                    ProbeSlotState::Opening => {
-                        state = match slot.ready.wait(state) {
-                            Ok(state) => state,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                    }
-                }
-            }
-        }
     }
 
     /// Drop a probe that was classified as Paged or whose resident open

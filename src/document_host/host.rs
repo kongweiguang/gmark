@@ -21,8 +21,8 @@ use gmark_document_core::{
 };
 use gmark_document_runtime::{
     ControllerError, DocumentController, DocumentEvent, DocumentEventSubscription, DocumentHandle,
-    DocumentId, DocumentLease, DocumentSession, DocumentViewInstanceId, FileIdentity,
-    ResidentRecoveryError, ResidentRecoveryJournal, SaveFailureCode,
+    DocumentId, DocumentLease, DocumentSaveSnapshot, DocumentSession, DocumentViewInstanceId,
+    FileIdentity, ResidentRecoveryError, ResidentRecoveryJournal, SaveFailureCode,
 };
 #[cfg(test)]
 use gmark_json_graph::JsonGraphEdgeKind;
@@ -101,8 +101,7 @@ use session::build_document_session;
 use session::verify_saved_session_readback;
 use session::{
     build_document_session_from_prepared, build_paged_session, derived_views_enabled,
-    modifier_horizontal_wheel_delta, record_recovery_transaction, recovery_view_id, session_plan,
-    structure_input_for_session,
+    modifier_horizontal_wheel_delta, recovery_view_id, session_plan, structure_input_for_session,
 };
 
 #[path = "projections.rs"]
@@ -318,6 +317,8 @@ mod editing_structured_cells;
 mod editing_structured_support;
 #[path = "runtime/indexing.rs"]
 mod indexing;
+#[path = "runtime/recovery/worker.rs"]
+mod recovery_worker;
 use editing_save::{delimited_record_terminator, transform_delimited_adapter};
 #[path = "views/navigation_contract.rs"]
 mod navigation_contract;
@@ -654,14 +655,21 @@ impl Drop for DocumentHost {
             cancellation.cancel();
         }
         // 未编辑的预建日志只有身份帧，不应在下次启动伪装成恢复文档。
+        // Drop 没有 GPUI context，因而只向已经存在的 worker 投递快照；worker
+        // 会在后台完成清理，失败时保留原日志而不阻塞实体销毁。
         if !document_dirty_state(&self.document)
-            && let Some(mut journal) = self.coordinator.recovery_journal.take()
+            && let (Some(document), Some(worker)) = (
+                self.document.as_ref(),
+                self.coordinator.recovery_worker.as_mut(),
+            )
+            && let Ok(snapshot) = document.save_snapshot()
         {
-            if let Some(document) = self.document.as_ref() {
-                let _ = document.with_session(|session| journal.checkpoint(session));
-            } else {
-                let _ = journal.discard();
-            }
+            let revision = snapshot.revision;
+            let _ = worker.enqueue(recovery_worker::RecoveryJob::Checkpoint {
+                revision,
+                snapshot,
+                replacement: None,
+            });
         }
     }
 }

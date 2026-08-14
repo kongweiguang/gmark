@@ -8,11 +8,6 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-#[cfg(target_os = "macos")]
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -31,8 +26,8 @@ use crate::single_instance;
 use crate::{
     app::document_service::DocumentService,
     app_menu::{
-        self, init as init_app_menu, open_editor_window, open_paged_recovery_window,
-        open_recovered_editor_tabs_window, open_workspace_session_window,
+        self, init as init_app_menu, open_editor_window, open_prepared_paged_recovery_window,
+        open_workspace_session_window, prepare_paged_recovery, prepare_recovered_document,
     },
     components::init_with_keybindings as init_editor,
     config, crash_report, editor,

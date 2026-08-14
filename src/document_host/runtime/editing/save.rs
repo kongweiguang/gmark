@@ -127,10 +127,23 @@ impl DocumentHost {
                 match result {
                     Ok(identity) => {
                         let revision = snapshot_for_event.revision;
-                        let _ = document.save_succeeded(
-                            revision,
-                            gmark_document_runtime::FileIdentity::from(&identity),
-                        );
+                        let save_accepted = document
+                            .save_succeeded(
+                                revision,
+                                gmark_document_runtime::FileIdentity::from(&identity),
+                            )
+                            .is_ok();
+                        if save_accepted {
+                            // The saved revision is the new durable baseline;
+                            // enqueue that exact immutable snapshot after the
+                            // Controller transition so newer edits cannot be
+                            // mistaken for persisted content.
+                            view.enqueue_recovery_checkpoint_snapshot(
+                                snapshot_for_event.clone(),
+                                None,
+                                cx,
+                            );
+                        }
                         view.document_epoch = view.document_epoch.wrapping_add(1);
                         view.invalidate_source_rows();
                         view.scroll_handle

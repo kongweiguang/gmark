@@ -29,3 +29,37 @@ fn platform_package_format_is_not_interchangeable() {
     assert!(validate_platform_package(current).is_ok());
     assert!(validate_platform_package(ArtifactFormat::WindowsSetupExe).is_err());
 }
+
+#[test]
+/// Reject platform-incompatible artifacts before Velopack can copy or hand them to an updater.
+fn staging_rejects_an_incompatible_package_before_velopack_import() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact = root.path().join("artifact.nupkg");
+    std::fs::write(&artifact, b"verified package placeholder").unwrap();
+    let release = UpdateRelease {
+        current_version: "1.0.0".to_owned(),
+        version: "1.1.0".to_owned(),
+        published_at: "2026-07-22T00:00:00Z".to_owned(),
+        notes: "Release notes".to_owned(),
+        release_url: "https://github.com/kongweiguang/gmark/releases/tag/v1.1.0".to_owned(),
+        artifact_url:
+            "https://github.com/kongweiguang/gmark/releases/download/v1.1.0/gmark-full.nupkg"
+                .to_owned(),
+        artifact_size: 100,
+        artifact_sha256: "00".repeat(32),
+        artifact_format: if cfg!(target_os = "windows") {
+            ArtifactFormat::LinuxVelopackNupkg
+        } else {
+            ArtifactFormat::WindowsVelopackNupkg
+        },
+        system_trust: gmark_update_core::SystemTrust::Unsigned,
+        signed_envelope: std::sync::Arc::from(&b"{}"[..]),
+    };
+
+    // Rejecting the signed platform mismatch first keeps staging failure local and prevents a
+    // malformed package from reaching either Velopack download or exit handoff.
+    match stage_install(&release, &artifact) {
+        Err(error) => assert!(error.contains("安装包格式")),
+        Ok(_) => panic!("incompatible package must fail"),
+    }
+}

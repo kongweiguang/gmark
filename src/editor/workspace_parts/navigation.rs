@@ -3,6 +3,11 @@
 use super::*;
 use crate::i18n::I18nManager;
 
+#[path = "navigation/delete.rs"]
+mod delete;
+#[path = "navigation/undo.rs"]
+mod undo;
+
 impl Editor {
     pub(super) fn jump_to_source_line(&mut self, line: usize, cx: &mut Context<Self>) {
         let source = self.source_document.text();
@@ -170,6 +175,9 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.close_menu_bar(cx);
+        // 右键本身就是一次树选择：让菜单关闭后的视觉选中与操作目标一致，
+        // 空白区传入的 root 也因此不会继续高亮上一次打开的文件。
+        self.workspace.selected = Some(WorkspaceSelection::File(path.clone()));
         self.context_menu = Some(ContextMenuState::Workspace { position, path });
         self.context_menu_keyboard_item = None;
         self.context_menu_keyboard_submenu_item = None;
@@ -187,6 +195,7 @@ impl Editor {
         self.open_workspace_operation_dialog(WorkspaceOperationKind::Rename, window, cx);
     }
 
+    /// 依据已交付的树快照打开文件，避免菜单点击为了判断类型再次访问磁盘。
     pub(in crate::editor) fn on_workspace_open_menu(
         &mut self,
         _: &ClickEvent,
@@ -198,28 +207,50 @@ impl Editor {
         };
         self.context_menu_keyboard_item = None;
         self.context_menu_keyboard_submenu_item = None;
-        if path.is_file() {
+        if self.workspace.snapshot_path_is_file(&path) {
             self.open_workspace_file(path, window, cx);
         } else {
             cx.notify();
         }
     }
 
+    /// 将 Reveal 的 Windows 文件类型查询与 Shell 调用放到后台，避免菜单回调阻塞 UNC/慢盘。
     pub(in crate::editor) fn on_workspace_reveal_menu(
         &mut self,
         _: &ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.workspace.file_operation_task.is_some() {
+            return;
+        }
         let Some(ContextMenuState::Workspace { path, .. }) = self.context_menu.take() else {
             return;
         };
         self.context_menu_keyboard_item = None;
         self.context_menu_keyboard_submenu_item = None;
-        self.workspace.operation_error = crate::editor::system_file::reveal_in_file_manager(&path)
-            .err()
-            .map(|error| error.to_string());
+        let generation = self.workspace.file_operation_generation.wrapping_add(1);
+        self.workspace.file_operation_generation = generation;
+        self.workspace.operation_error = None;
+        self.workspace.file_operation_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    crate::editor::system_file::reveal_in_file_manager(&path)
+                })
+                .await;
+            let _ = this.update(cx, |editor, cx| {
+                if editor.workspace.file_operation_generation != generation {
+                    return;
+                }
+                editor.workspace.file_operation_task = None;
+                editor.workspace.operation_error = result.err().map(|error| error.to_string());
+                // Shell 完成回调不应依赖下一次输入才能显示成功或失败。
+                cx.notify();
+                cx.refresh_windows();
+            });
+        }));
         cx.notify();
+        cx.refresh_windows();
     }
 
     pub(in crate::editor) fn on_workspace_copy_path_menu(
@@ -274,39 +305,23 @@ impl Editor {
         self.sync_workspace_file_tree(cx);
     }
 
+    /// 把删除规划及 symlink/边界检查放到后台，避免确认菜单在 UNC 路径上同步卡顿。
     pub(in crate::editor) fn on_workspace_delete_menu(
         &mut self,
         _: &ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.workspace.file_operation_task.is_some() {
+            return;
+        }
         let Some(ContextMenuState::Workspace { path, .. }) = self.context_menu.take() else {
             return;
         };
         self.context_menu_keyboard_item = None;
         self.context_menu_keyboard_submenu_item = None;
-        let Some(root) = self.workspace.root.as_ref() else {
+        let Some(root) = self.workspace.root.clone() else {
             return;
-        };
-        let planned = super::workspace_file_ops::plan_workspace_delete(root, &path);
-        let (plan, error) = match planned {
-            Ok(plan) => {
-                let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.workspace_path);
-                if has_dirty {
-                    (
-                        None,
-                        Some(
-                            cx.global::<I18nManager>()
-                                .strings()
-                                .workspace_delete_dirty_error
-                                .clone(),
-                        ),
-                    )
-                } else {
-                    (Some(WorkspacePendingPlan::Delete(plan)), None)
-                }
-            }
-            Err(error) => (None, Some(error.to_string())),
         };
         let input = cx.new(|cx| {
             let mut block = Block::with_record(cx, BlockRecord::paragraph(String::new()));
@@ -315,14 +330,61 @@ impl Editor {
         });
         self.workspace.operation_dialog = Some(WorkspaceOperationDialog {
             kind: WorkspaceOperationKind::Delete,
-            source: path,
+            source: path.clone(),
             input,
-            plan,
-            error,
-            running: false,
+            plan: None,
+            error: None,
+            running: true,
         });
         self.workspace.operation_error = None;
+        let generation = self.workspace.file_operation_generation.wrapping_add(1);
+        self.workspace.file_operation_generation = generation;
+        self.workspace.file_operation_task = Some(cx.spawn(async move |this, cx| {
+            // 规范化与 symlink 安全检查可能触达 UNC/慢盘，必须离开 GPUI 回调执行。
+            let planned = cx
+                .background_spawn(async move {
+                    super::workspace_file_ops::plan_workspace_delete(&root, &path)
+                })
+                .await;
+            let _ = this.update(cx, |editor, cx| {
+                if editor.workspace.file_operation_generation != generation {
+                    return;
+                }
+                editor.workspace.file_operation_task = None;
+                match planned {
+                    Ok(plan) => {
+                        let (_, has_dirty) =
+                            editor.workspace_tabs_affected_by_path(&plan.workspace_path);
+                        let Some(dialog) = editor.workspace.operation_dialog.as_mut() else {
+                            return;
+                        };
+                        if has_dirty {
+                            dialog.error = Some(
+                                cx.global::<I18nManager>()
+                                    .strings()
+                                    .workspace_delete_dirty_error
+                                    .clone(),
+                            );
+                        } else {
+                            dialog.plan = Some(WorkspacePendingPlan::Delete(plan));
+                        }
+                        dialog.running = false;
+                    }
+                    Err(error) => {
+                        let Some(dialog) = editor.workspace.operation_dialog.as_mut() else {
+                            return;
+                        };
+                        dialog.error = Some(error.to_string());
+                        dialog.running = false;
+                    }
+                }
+                // 规划结果必须在没有后续输入时也刷新确认按钮或错误提示。
+                cx.notify();
+                cx.refresh_windows();
+            });
+        }));
         cx.notify();
+        cx.refresh_windows();
     }
 
     pub(in crate::editor) fn on_workspace_move_menu(
@@ -385,7 +447,7 @@ impl Editor {
             block.set_source_raw_mode();
             block
         });
-        input.read(cx).focus_handle.focus(window);
+        self.configure_workspace_operation_input(&input, window, cx);
         self.workspace.operation_dialog = Some(WorkspaceOperationDialog {
             kind,
             source: path,
@@ -425,7 +487,7 @@ impl Editor {
             block.set_source_raw_mode();
             block
         });
-        input.read(cx).focus_handle.focus(window);
+        self.configure_workspace_operation_input(&input, window, cx);
         self.context_menu = None;
         self.workspace.operation_dialog = Some(WorkspaceOperationDialog {
             kind: WorkspaceOperationKind::Move,
@@ -438,16 +500,54 @@ impl Editor {
         cx.notify();
     }
 
+    /// 将操作输入接到宿主动作路由，保证一次键盘确认与按钮确认使用同一条
+    /// 规划/执行链，并让 Escape 取消后焦点回到工作区而不是丢到遮罩层。
+    fn configure_workspace_operation_input(
+        &mut self,
+        input: &Entity<Block>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = cx.entity().downgrade();
+        input.update(cx, move |input, _cx| {
+            input.set_host_submit_enabled(true);
+            input.set_host_action_handler(move |action, window, cx| {
+                let _ = editor.update(cx, |editor, cx| match action {
+                    crate::components::BlockHostAction::Submit(value) => {
+                        let has_plan = editor
+                            .workspace
+                            .operation_dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.plan.is_some());
+                        if has_plan {
+                            editor.on_apply_workspace_operation(&ClickEvent::default(), window, cx);
+                        } else {
+                            // Submit 已携带 Block 在当前更新租约内取得的权威文本；
+                            // 直接使用它可避免回读同一实体触发 GPUI double lease panic。
+                            editor.review_workspace_operation_value(value.as_ref(), cx);
+                        }
+                    }
+                    crate::components::BlockHostAction::DismissTransientUi => {
+                        editor.on_cancel_workspace_operation(&ClickEvent::default(), window, cx)
+                    }
+                    _ => {}
+                });
+            });
+            input.focus_handle.focus(window);
+        });
+    }
+
     pub(in crate::editor) fn on_cancel_workspace_operation(
         &mut self,
         _: &ClickEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.workspace.file_operation_generation =
             self.workspace.file_operation_generation.wrapping_add(1);
         self.workspace.file_operation_task = None;
         self.workspace.operation_dialog = None;
+        self.ensure_workspace_focus_handle(cx).focus(window);
         cx.notify();
     }
 
@@ -471,13 +571,23 @@ impl Editor {
         let Some(dialog) = self.workspace.operation_dialog.as_ref() else {
             return;
         };
+        let value = dialog.input.read(cx).display_text().to_string();
+        self.review_workspace_operation_value(&value, cx);
+    }
+
+    /// 按钮与 Block 的 Enter 提交共用同一规划入口；显式接收文本可让键盘路径
+    /// 在 Block 更新租约结束前安全调度文件操作，而不回读正在更新的输入实体。
+    fn review_workspace_operation_value(&mut self, value: &str, cx: &mut Context<Self>) {
+        let Some(dialog) = self.workspace.operation_dialog.as_ref() else {
+            return;
+        };
         if dialog.running || dialog.plan.is_some() {
             return;
         }
         let Some(root) = self.workspace.root.clone() else {
             return;
         };
-        let value = dialog.input.read(cx).display_text().trim().to_owned();
+        let value = value.trim().to_owned();
         if value.is_empty() {
             return;
         }
@@ -507,7 +617,11 @@ impl Editor {
             WorkspaceOperationKind::NewFile | WorkspaceOperationKind::NewFolder => PathBuf::new(),
             WorkspaceOperationKind::Delete => return,
         };
-        let creation_parent = if source.is_dir() {
+        let creation_parent = if self
+            .workspace
+            .snapshot_path_is_directory(&source)
+            .is_some_and(|is_directory| is_directory)
+        {
             source.clone()
         } else {
             source
@@ -515,6 +629,7 @@ impl Editor {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| root.clone())
         };
+        let current_file_path = self.file_path.clone();
         let generation = self.workspace.file_operation_generation.wrapping_add(1);
         self.workspace.file_operation_generation = generation;
         if let Some(dialog) = self.workspace.operation_dialog.as_mut() {
@@ -523,9 +638,16 @@ impl Editor {
         }
         self.workspace.file_operation_task =
             Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
-                let plan = cx
+                let (plan, current_path) = cx
                     .background_spawn(async move {
-                        match operation_kind {
+                        // 脏文档判断也需要规范化当前文件；把这次 canonicalize 与规划放在同一
+                        // worker 中，避免慢盘在 GPUI completion 回调再次阻塞窗口。
+                        let current_path = current_file_path.as_ref().map(|path| {
+                            dunce::canonicalize(path)
+                                .ok()
+                                .unwrap_or_else(|| path.clone())
+                        });
+                        let plan = match operation_kind {
                             WorkspaceOperationKind::Rename | WorkspaceOperationKind::Move => {
                                 super::workspace_file_ops::plan_workspace_move(
                                     &root,
@@ -555,7 +677,8 @@ impl Editor {
                             WorkspaceOperationKind::Delete => Err(anyhow::anyhow!(
                                 "delete plans are created before confirmation"
                             )),
-                        }
+                        };
+                        (plan, current_path)
                     })
                     .await;
                 let _ = this.update(cx, |editor, cx| {
@@ -563,16 +686,12 @@ impl Editor {
                         return;
                     }
                     editor.workspace.file_operation_task = None;
-                    let current_path = editor.file_path.as_ref().and_then(|path| {
-                        super::workspace_file_ops::canonicalize_workspace_path(path)
-                            .ok()
-                            .or_else(|| Some(path.clone()))
-                    });
                     let document_dirty = editor.is_document_dirty();
                     let Some(dialog) = editor.workspace.operation_dialog.as_mut() else {
                         return;
                     };
                     dialog.running = false;
+                    let mut create_plan_to_execute = None;
                     match plan {
                         Ok(plan) => {
                             let affects_dirty_document = document_dirty
@@ -590,6 +709,19 @@ impl Editor {
                                         .workspace_operation_dirty_error
                                         .clone(),
                                 );
+                            } else if matches!(
+                                operation_kind,
+                                WorkspaceOperationKind::NewFile | WorkspaceOperationKind::NewFolder
+                            ) {
+                                if let WorkspacePendingPlan::Create(create_plan) = plan {
+                                    dialog.error = None;
+                                    create_plan_to_execute = Some(create_plan);
+                                } else {
+                                    dialog.error = Some(
+                                        "workspace create operation returned an invalid plan"
+                                            .to_owned(),
+                                    );
+                                }
                             } else {
                                 dialog.plan = Some(plan);
                                 dialog.error = None;
@@ -597,7 +729,13 @@ impl Editor {
                         }
                         Err(error) => dialog.error = Some(error.to_string()),
                     }
+                    if let Some(create_plan) = create_plan_to_execute {
+                        // 新建不需要二次 Review/Apply；规划成功后沿用统一后台执行器，
+                        // 这样仍保留零字节创建、树增量更新和错误恢复语义。
+                        editor.execute_workspace_create_plan(create_plan, false, cx);
+                    }
                     cx.notify();
+                    cx.refresh_windows();
                 });
             }));
         cx.notify();
@@ -623,112 +761,6 @@ impl Editor {
                 self.execute_workspace_create_plan(plan, false, cx)
             }
             WorkspacePendingPlan::Delete(plan) => self.execute_workspace_delete_plan(plan, cx),
-        }
-    }
-
-    pub(super) fn execute_workspace_delete_plan(
-        &mut self,
-        plan: super::workspace_file_ops::WorkspaceDeletePlan,
-        cx: &mut Context<Self>,
-    ) {
-        if self.workspace.file_operation_task.is_some() {
-            return;
-        }
-        let (_, has_dirty) = self.workspace_tabs_affected_by_path(&plan.workspace_path);
-        if has_dirty {
-            if let Some(dialog) = self.workspace.operation_dialog.as_mut() {
-                dialog.error = Some(
-                    cx.global::<I18nManager>()
-                        .strings()
-                        .workspace_delete_dirty_error
-                        .clone(),
-                );
-            }
-            cx.notify();
-            return;
-        }
-        let generation = self.workspace.file_operation_generation.wrapping_add(1);
-        self.workspace.file_operation_generation = generation;
-        // 回收站操作可能受 Shell/磁盘影响持续数百毫秒；确认后先从本地树移除目标，
-        // 失败时再重新扫描恢复，避免用户误以为点击没有生效。
-        let tree_updated = self.workspace.remove_path(&plan.workspace_path);
-        self.workspace.operation_dialog = None;
-        if matches!(
-            self.workspace.selected.as_ref(),
-            Some(WorkspaceSelection::File(path)) if path.starts_with(&plan.workspace_path)
-        ) {
-            self.workspace.selected = None;
-        }
-        self.workspace.operation_error = None;
-        cx.notify();
-        let worker_plan = plan.clone();
-        self.workspace.file_operation_task =
-            Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
-                let result = cx
-                    .background_spawn(async move { worker_plan.execute() })
-                    .await;
-                let _ = this.update(cx, |editor, cx| {
-                    if editor.workspace.file_operation_generation != generation {
-                        return;
-                    }
-                    editor.workspace.file_operation_task = None;
-                    match result {
-                        Ok(()) => {
-                            let tabs_closed = editor
-                                .close_tabs_affected_by_deleted_path(&plan.workspace_path, cx);
-                            editor.workspace.operation_dialog = None;
-                            editor.workspace.operation_error = if tabs_closed {
-                                None
-                            } else {
-                                Some(
-                                    cx.global::<I18nManager>()
-                                        .strings()
-                                        .workspace_delete_completed_dirty_error
-                                        .clone(),
-                                )
-                            };
-                            editor.workspace.undo_file_operation = None;
-                            editor
-                                .workspace
-                                .pinned_empty_directories
-                                .retain(|path| !path.starts_with(&plan.workspace_path));
-                            if !tree_updated {
-                                editor.invalidate_workspace_file_tree();
-                            }
-                            editor.sync_workspace_after_document_path_change(cx);
-                        }
-                        Err(error) => {
-                            editor.workspace.operation_error = Some(error.to_string());
-                            editor.invalidate_workspace_file_tree();
-                            editor.sync_workspace_after_document_path_change(cx);
-                        }
-                    }
-                });
-            }));
-        cx.notify();
-    }
-
-    pub(in crate::editor) fn on_workspace_undo_file_operation(
-        &mut self,
-        _: &ClickEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.undo_workspace_file_operation(cx);
-    }
-
-    pub(in crate::editor) fn undo_workspace_file_operation(&mut self, cx: &mut Context<Self>) {
-        self.context_menu = None;
-        self.context_menu_keyboard_item = None;
-        self.context_menu_keyboard_submenu_item = None;
-        let Some(operation) = self.workspace.undo_file_operation.clone() else {
-            return;
-        };
-        match operation {
-            WorkspaceUndoOperation::Move(plan) => self.execute_workspace_move_plan(plan, false, cx),
-            WorkspaceUndoOperation::Create(plan) => {
-                self.execute_workspace_create_plan(plan, true, cx)
-            }
         }
     }
 }

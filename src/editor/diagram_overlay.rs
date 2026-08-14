@@ -6,6 +6,8 @@ use super::*;
 use crate::components::DismissTransientUi;
 use crate::i18n::I18nStrings;
 use crate::theme::Theme;
+use crate::theme::workbench::SurfaceKind;
+use crate::ui::visual_preferences::VisualPreferencesManager;
 
 const DIAGRAM_OVERLAY_MIN_SCALE: f32 = 0.01;
 const DIAGRAM_OVERLAY_MAX_SCALE: f32 = 100.0;
@@ -103,6 +105,9 @@ impl Editor {
         cx.notify();
     }
 
+    /// Keep the diagram canvas visually dominant while giving its blocking
+    /// surface the same modal scrim, elevation, and control geometry as other
+    /// large overlays.
     pub(super) fn render_diagram_overlay(
         &mut self,
         theme: &Theme,
@@ -163,6 +168,12 @@ impl Editor {
         let scale_key_editor = close_editor.clone();
         let zoom_editor = close_editor.clone();
         let wb = &theme.colors.workbench;
+        let visual_preferences = cx
+            .try_global::<VisualPreferencesManager>()
+            .map(VisualPreferencesManager::current)
+            .unwrap_or_default();
+        let panel_material = wb.material(SurfaceKind::GlassStrong, visual_preferences);
+        let d = &theme.dimensions;
         let scale_label = if state.manual_scale.is_some() {
             strings.large_document_text("diagram_fit_window")
         } else {
@@ -178,6 +189,7 @@ impl Editor {
                 .flex()
                 .items_center()
                 .justify_center()
+                .occlude()
                 .bg(wb.overlay_scrim)
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     let _ =
@@ -195,10 +207,11 @@ impl Editor {
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
-                        .rounded(px(theme.dimensions.dialog_radius))
-                        .bg(wb.elevated_surface)
-                        .border(px(theme.dimensions.dialog_border_width))
-                        .border_color(wb.border_subtle)
+                        .rounded(px(d.dialog_radius.clamp(22.0, 28.0)))
+                        .bg(panel_material.background)
+                        .border(px(d.dialog_border_width))
+                        .border_color(panel_material.border)
+                        .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div()
@@ -213,10 +226,10 @@ impl Editor {
                                         .tab_index(0)
                                         .track_focus(&state.scale_focus_handle)
                                         .px(px(10.0))
-                                        .h(px(30.0))
+                                        .h(px(d.dialog_button_height))
                                         .flex()
                                         .items_center()
-                                        .rounded(px(6.0))
+                                        .rounded(px((d.dialog_radius - 6.0).clamp(10.0, 12.0)))
                                         .cursor_pointer()
                                         .border(px(1.0))
                                         .border_color(wb.control_surface.opacity(0.0))
@@ -262,10 +275,10 @@ impl Editor {
                                         .tab_index(0)
                                         .track_focus(&state.close_focus_handle)
                                         .px(px(10.0))
-                                        .h(px(30.0))
+                                        .h(px(d.dialog_button_height))
                                         .flex()
                                         .items_center()
-                                        .rounded(px(6.0))
+                                        .rounded(px((d.dialog_radius - 6.0).clamp(10.0, 12.0)))
                                         .cursor_pointer()
                                         .border(px(1.0))
                                         .border_color(wb.control_surface.opacity(0.0))

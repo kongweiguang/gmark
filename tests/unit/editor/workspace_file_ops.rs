@@ -5,6 +5,8 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
+#[cfg(target_os = "windows")]
+use super::initialize_shell_com;
 use super::{
     WorkspaceCreateKind, markdown_destination_spans, plan_workspace_create, plan_workspace_delete,
     plan_workspace_move,
@@ -380,6 +382,55 @@ fn workspace_delete_plan_revalidates_and_delegates_the_exact_target() {
 
     assert_eq!(delegated, Some(expected));
     assert!(!target.exists());
+}
+
+#[test]
+fn workspace_delete_rejects_symlink_without_following_target() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = root.join("inside.md");
+    let link = root.join("link.md");
+    write(&target, "keep me");
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(&target, &link).is_ok();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(&target, &link).is_ok();
+    if !linked {
+        return;
+    }
+
+    assert!(plan_workspace_delete(root, &link).is_err());
+    assert!(target.exists());
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+/// 模拟 GPUI worker 已是 STA 的原崩溃条件，确保删除初始化把 apartment 冲突视为可继续状态。
+#[cfg(target_os = "windows")]
+#[test]
+#[allow(unsafe_code)]
+fn workspace_delete_accepts_an_existing_com_apartment() {
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+
+    std::thread::spawn(|| {
+        // SAFETY: The fresh test thread owns this successful COM initialization and balances it
+        // with `CoUninitialize` before returning.
+        let status = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        assert!(status.is_ok());
+
+        let guard = initialize_shell_com().unwrap();
+        assert!(!guard.must_uninitialize);
+        drop(guard);
+
+        // SAFETY: This releases the test-owned successful initialization on the same thread.
+        unsafe { CoUninitialize() };
+    })
+    .join()
+    .unwrap();
 }
 
 use std::collections::HashSet;

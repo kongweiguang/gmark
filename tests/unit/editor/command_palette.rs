@@ -366,8 +366,12 @@ async fn palette_indexes_real_editor_actions_and_renders_results(cx: &mut gpui::
         assert_eq!(icon.size, gpui::size(gpui::px(18.0), gpui::px(18.0)));
         assert!(input.left() >= dialog.left());
         assert!(input.right() <= dialog.right());
+        assert!(input.top() >= dialog.top());
+        assert!(input.bottom() <= dialog.bottom());
         assert!(close.left() >= dialog.left());
         assert!(close.right() <= dialog.right());
+        assert!(close.top() >= dialog.top());
+        assert!(close.bottom() <= dialog.bottom());
         assert!(icon.left() >= row.left());
         assert!(icon.right() <= label.left());
         assert!(label.right() <= shortcut.left());

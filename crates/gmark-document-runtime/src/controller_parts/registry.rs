@@ -41,6 +41,18 @@ impl RegistryInner {
         key: &DocumentRegistryKey,
         handle: &DocumentHandle,
     ) -> Result<bool, ControllerError> {
+        let _gate = handle.lock_lease_gate();
+        self.remove_if_unleased_locked(key, handle)
+    }
+
+    /// Remove a slot while the handle lifecycle gate is already held.
+    /// Release and registry-open both use this locked form to keep the lease
+    /// count and the registry map in one atomic lifecycle transition.
+    pub(super) fn remove_if_unleased_locked(
+        &self,
+        key: &DocumentRegistryKey,
+        handle: &DocumentHandle,
+    ) -> Result<bool, ControllerError> {
         if handle.lease_count() != 0 {
             return Ok(false);
         }
@@ -63,10 +75,25 @@ impl RegistryInner {
 }
 
 impl DocumentRegistry {
-    /// 在并发打开时只允许一个线程执行 create，其余线程等待同一槽位结果。
+    /// Production callers share one deadline so a missing opener cannot pin a registry slot
+    /// indefinitely while tests and specialized callers can still choose a shorter bound.
+    pub const DEFAULT_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// 默认给共享打开设置有限等待，避免 UI 或后台打开任务永久卡在失联的 owner 上。
     pub fn open_or_insert_leased(
         &self,
         key: DocumentRegistryKey,
+        create: impl FnOnce() -> Result<DocumentController, ControllerError>,
+    ) -> Result<(DocumentHandle, DocumentLease, RegistryOpen), ControllerError> {
+        self.open_or_insert_leased_with_timeout(key, Self::DEFAULT_OPEN_TIMEOUT, create)
+    }
+
+    /// Shared opening only permits one creator; bounded waiting makes a stalled creator observable
+    /// and gives every waiter the same terminal error instead of leaving an `Opening` slot forever.
+    pub fn open_or_insert_leased_with_timeout(
+        &self,
+        key: DocumentRegistryKey,
+        timeout: Duration,
         create: impl FnOnce() -> Result<DocumentController, ControllerError>,
     ) -> Result<(DocumentHandle, DocumentLease, RegistryOpen), ControllerError> {
         let mut create = Some(create);
@@ -101,17 +128,41 @@ impl DocumentRegistry {
                     Ok(controller) => {
                         let handle = DocumentHandle::new(controller);
                         let lease = handle.lease();
-                        handle.attach_registry(Arc::downgrade(&self.inner), key.clone())?;
                         let mut state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
-                        *state = RegistrySlotState::Ready(handle.clone());
-                        slot.ready.notify_all();
-                        Ok((handle, lease, RegistryOpen::Inserted))
+                        match &*state {
+                            RegistrySlotState::Opening => {
+                                if let Err(error) =
+                                    handle.attach_registry(Arc::downgrade(&self.inner), key.clone())
+                                {
+                                    *state = RegistrySlotState::Failed(error.clone());
+                                    slot.ready.notify_all();
+                                    return Err(error);
+                                }
+                                *state = RegistrySlotState::Ready(handle.clone());
+                                slot.ready.notify_all();
+                                Ok((handle, lease, RegistryOpen::Inserted))
+                            }
+                            RegistrySlotState::Failed(error) => Err(error.clone()),
+                            RegistrySlotState::Ready(_) | RegistrySlotState::Reserved(_) => {
+                                Err(ControllerError::open_failed(
+                                    "registry opening slot changed before publication",
+                                ))
+                            }
+                        }
                     }
                     Err(error) => {
                         let mut state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
-                        *state = RegistrySlotState::Failed(error.clone());
-                        slot.ready.notify_all();
-                        Err(error)
+                        match &*state {
+                            RegistrySlotState::Opening => {
+                                *state = RegistrySlotState::Failed(error.clone());
+                                slot.ready.notify_all();
+                                Err(error)
+                            }
+                            RegistrySlotState::Failed(existing) => Err(existing.clone()),
+                            RegistrySlotState::Ready(_) | RegistrySlotState::Reserved(_) => {
+                                Err(error)
+                            }
+                        }
                     }
                 };
             }
@@ -121,7 +172,10 @@ impl DocumentRegistry {
                 RegistrySlotState::Ready(handle) => {
                     let handle = handle.clone();
                     drop(state);
-                    return Ok((handle.clone(), handle.lease(), RegistryOpen::Existing));
+                    if let Some(lease) = self.lease_ready_handle(&key, &slot, &handle)? {
+                        return Ok((handle, lease, RegistryOpen::Existing));
+                    }
+                    continue;
                 }
                 RegistrySlotState::Reserved(_) => {
                     return Err(ControllerError::KeyReserved(key.clone()));
@@ -144,17 +198,46 @@ impl DocumentRegistry {
                     continue;
                 }
                 RegistrySlotState::Opening => {
+                    let started = std::time::Instant::now();
                     while matches!(&*state, RegistrySlotState::Opening) {
-                        state = slot
+                        let remaining = timeout.saturating_sub(started.elapsed());
+                        if remaining.is_zero() {
+                            let error = ControllerError::OpenTimedOut {
+                                key: key.clone(),
+                                timeout_ms: timeout.as_millis().min(u64::MAX as u128) as u64,
+                            };
+                            *state = RegistrySlotState::Failed(error.clone());
+                            slot.ready.notify_all();
+                            drop(state);
+                            self.remove_slot_if_matches(&key, &slot)?;
+                            return Err(error);
+                        }
+                        let (next_state, wait_result) = slot
                             .ready
-                            .wait(state)
+                            .wait_timeout(state, remaining)
                             .map_err(|_| ControllerError::Poisoned)?;
+                        state = next_state;
+                        if wait_result.timed_out() && matches!(&*state, RegistrySlotState::Opening)
+                        {
+                            let error = ControllerError::OpenTimedOut {
+                                key: key.clone(),
+                                timeout_ms: timeout.as_millis().min(u64::MAX as u128) as u64,
+                            };
+                            *state = RegistrySlotState::Failed(error.clone());
+                            slot.ready.notify_all();
+                            drop(state);
+                            self.remove_slot_if_matches(&key, &slot)?;
+                            return Err(error);
+                        }
                     }
                     match &*state {
                         RegistrySlotState::Ready(handle) => {
                             let handle = handle.clone();
                             drop(state);
-                            return Ok((handle.clone(), handle.lease(), RegistryOpen::Existing));
+                            if let Some(lease) = self.lease_ready_handle(&key, &slot, &handle)? {
+                                return Ok((handle, lease, RegistryOpen::Existing));
+                            }
+                            continue;
                         }
                         RegistrySlotState::Failed(error) => return Err(error.clone()),
                         RegistrySlotState::Reserved(_) => {
@@ -165,6 +248,56 @@ impl DocumentRegistry {
                 }
             }
         }
+    }
+
+    /// Removing only the exact failed slot lets a timed-out owner finish without deleting a newer
+    /// opening attempt that reused the same document key.
+    fn remove_slot_if_matches(
+        &self,
+        key: &DocumentRegistryKey,
+        slot: &Arc<RegistrySlot>,
+    ) -> Result<(), ControllerError> {
+        let mut documents = self
+            .inner
+            .documents
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?;
+        if documents
+            .get(key)
+            .is_some_and(|registered| Arc::ptr_eq(registered, slot))
+        {
+            documents.remove(key);
+        }
+        Ok(())
+    }
+
+    /// Acquire a Ready-slot lease while holding the handle gate before taking
+    /// the registry map.  This lock order matches last-lease removal and closes
+    /// the lookup-to-lease race that could otherwise create two Controllers.
+    fn lease_ready_handle(
+        &self,
+        key: &DocumentRegistryKey,
+        slot: &Arc<RegistrySlot>,
+        handle: &DocumentHandle,
+    ) -> Result<Option<DocumentLease>, ControllerError> {
+        let _gate = handle.lock_lease_gate();
+        let documents = self
+            .inner
+            .documents
+            .lock()
+            .map_err(|_| ControllerError::Poisoned)?;
+        let Some(current) = documents.get(key) else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(current, slot) {
+            return Ok(None);
+        }
+        let state = slot.state.lock().map_err(|_| ControllerError::Poisoned)?;
+        if matches!(&*state, RegistrySlotState::Ready(registered) if Arc::ptr_eq(&registered.0, &handle.0))
+        {
+            return Ok(Some(handle.lease_locked()));
+        }
+        Ok(None)
     }
 
     /// 保留兼容入口；新调用方应持有显式租约以表达视图生命周期。

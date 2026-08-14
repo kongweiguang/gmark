@@ -127,24 +127,95 @@ impl Editor {
         source: PathBuf,
         cx: &mut Context<Self>,
     ) {
+        let Some(fingerprint) = self.current_dropped_resource_target(&block, cx) else {
+            return;
+        };
         let behavior = crate::preferences::read_app_preferences()
             .map(|preferences| preferences.resource_insert_behavior())
             .unwrap_or(crate::preferences::ImagePasteBehavior::None);
         let document_path = self.file_path.clone();
-        let (markdown, materialized) = match crate::resource_io::resource_markdown_for_path(
-            "",
-            &source,
-            document_path.as_deref(),
-            behavior,
-            None,
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                self.show_image_paste_error(error, cx);
-                return;
+        let parse_document_path = document_path.clone();
+        let expected_fingerprint = fingerprint.clone();
+        let error_block = block.clone();
+        let weak_editor = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    Self::materialize_resource_with_limits(
+                        "",
+                        &source,
+                        document_path.as_deref(),
+                        behavior,
+                        None,
+                    )
+                })
+                .await;
+            match result {
+                Err(error) => {
+                    let _ = weak_editor.update(cx, |editor, cx| {
+                        if editor
+                            .current_dropped_resource_target(&error_block, cx)
+                            .is_some_and(|current| {
+                                crate::editor::file_drop::resource_drop_target_is_current(
+                                    &expected_fingerprint,
+                                    &current,
+                                )
+                            })
+                        {
+                            editor.show_image_paste_error(error, cx);
+                        }
+                    });
+                }
+                Ok((markdown, materialized)) => {
+                    // 在 update 前持有 guard，实体消失或 gate 失败时自动回收副本。
+                    let mut cleanup =
+                        crate::editor::file_drop::ResourceCleanupGuard::new(materialized);
+                    let _ = weak_editor.update(cx, move |editor, cx| {
+                        let Some(current) = editor.current_dropped_resource_target(&block, cx)
+                        else {
+                            return;
+                        };
+                        if !crate::editor::file_drop::resource_drop_target_is_current(
+                            &fingerprint,
+                            &current,
+                        ) {
+                            return;
+                        }
+                        editor.commit_prompted_resource_insert(
+                            block,
+                            parent,
+                            index,
+                            original_kind,
+                            &cleaned_title,
+                            cursor,
+                            query_only,
+                            parse_document_path,
+                            markdown,
+                            &mut cleanup,
+                            cx,
+                        );
+                    });
+                }
             }
-        };
+        })
+        .detach();
+    }
 
+    /// 只在原始资源目标仍有效时建立结构事务；失败分支让 guard 回收本次副本。
+    fn commit_prompted_resource_insert(
+        &mut self,
+        block: Entity<super::Block>,
+        parent: Option<Entity<super::Block>>,
+        index: usize,
+        original_kind: BlockKind,
+        cleaned_title: &InlineTextTree,
+        cursor: usize,
+        query_only: bool,
+        document_path: Option<PathBuf>,
+        markdown: String,
+        cleanup: &mut crate::editor::file_drop::ResourceCleanupGuard,
+        cx: &mut Context<Self>,
+    ) {
         self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
         let focus_id = if query_only {
             let inserted = if markdown.starts_with("![") {
@@ -153,7 +224,6 @@ impl Editor {
                 let base_dir = document_path.as_deref().and_then(std::path::Path::parent);
                 let Some(resource) = crate::components::ResourceRecord::parse(&markdown, base_dir)
                 else {
-                    materialized.cleanup_if_created();
                     self.finalize_pending_undo_capture(cx);
                     return;
                 };
@@ -175,6 +245,7 @@ impl Editor {
             Self::set_block_title_and_kind(&block, original_kind, result.tree, next_cursor, cx);
             block.entity_id()
         };
+        cleanup.disarm();
         self.rebuild_image_runtimes(cx);
         self.mark_dirty(cx);
         self.finalize_pending_undo_capture(cx);

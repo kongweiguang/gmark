@@ -4,6 +4,16 @@
 
 use super::*;
 
+#[path = "open_parts.rs"]
+mod open_parts;
+
+use open_parts::{
+    FILE_OPEN_DEADLINE, OpenCancellation, PreparedFileOpen, install_prepared_file_open,
+    prepare_file_open,
+};
+
+use futures::future::{Either, select};
+
 // 原因：所有窗口统一生成标题，保证不同打开入口对同一路径使用一致的用户可见名称。
 pub(super) fn window_title(file_path: Option<&Path>) -> SharedString {
     if let Some(path) = file_path {
@@ -51,54 +61,6 @@ pub(crate) fn open_decoded_editor_window(
     file_path: Option<PathBuf>,
 ) -> anyhow::Result<WindowHandle<Editor>> {
     open_decoded_editor_window_with_bounds(cx, opened, file_path, None)
-}
-
-// 原因：大文档窗口必须先通过文档服务取得共享 lease，避免重复读取正文或丢失单飞约束。
-fn open_large_editor_window(
-    cx: &mut App,
-    path: PathBuf,
-    probe: gmark_paged_document::OpenProbe,
-    loading: gmark_document_core::LoadingPolicy,
-    restored_bounds: Option<WindowBounds>,
-) -> anyhow::Result<WindowHandle<Editor>> {
-    let service = app_document_service(cx);
-    let result = if probe.strategy == gmark_paged_document::OpenStrategy::Paged {
-        service.open_paged(
-            &path,
-            probe.clone(),
-            loading,
-            |normalized, probe, _policy| {
-                let source =
-                    gmark_paged_document::FileSource::open(normalized).map_err(|error| {
-                        anyhow::anyhow!("failed to open '{}': {error}", normalized.display())
-                    })?;
-                gmark_paged_document::prepare_utf8_source(source, probe.encoding.clone())
-                    .map_err(|error| anyhow::anyhow!("failed to prepare source: {error}"))
-            },
-        )
-    } else {
-        service.open_document_host(
-            &path,
-            probe.clone(),
-            loading,
-            |normalized, probe, _policy| {
-                let source =
-                    gmark_paged_document::FileSource::open(normalized).map_err(|error| {
-                        anyhow::anyhow!("failed to open '{}': {error}", normalized.display())
-                    })?;
-                gmark_paged_document::prepare_utf8_source(source, probe.encoding.clone())
-                    .map_err(|error| anyhow::anyhow!("failed to prepare source: {error}"))
-            },
-        )
-    };
-    let shared = match result {
-        Ok(shared) => shared,
-        Err(error) => {
-            service.clear_probe(&path, loading);
-            return Err(anyhow::anyhow!("failed to open shared document: {error}"));
-        }
-    };
-    open_shared_document_host_window(cx, shared, path, restored_bounds)
 }
 
 // 原因：把服务 lease 交给 Editor 生命周期持有，保证窗口关闭前文档运行时不会被提前释放。
@@ -308,21 +270,37 @@ fn open_image_preview_window(
 
 /// Opens an unfinished recovery session directly in the editor surface.
 // 原因：恢复文档通过共享服务注册后再建窗口，避免恢复内容脱离运行时所有权。
-pub(crate) fn open_recovered_editor_window(
-    cx: &mut App,
+pub(crate) struct PreparedRecoveredDocument {
+    pub(crate) recovered: crate::recovery::RecoveredDocument,
+    pub(crate) shared: SharedResidentOpen,
+}
+
+/// 在后台把恢复文本转换为共享 resident controller，保证恢复窗口首帧只
+/// 接收已准备好的 lease，不会在 GPUI 线程解析 source-format 或触碰 journal。
+pub(crate) fn prepare_recovered_document(
+    service: DocumentService,
     recovered: crate::recovery::RecoveredDocument,
-) -> anyhow::Result<WindowHandle<Editor>> {
+) -> anyhow::Result<PreparedRecoveredDocument> {
     let document_id = recovery_document_id(&recovered.document_id)?;
-    let recovered_path = recovered.file_path.clone();
     let source = ResidentMarkdownSource::from_recovered(
         recovered.source.as_str(),
-        recovered_path.clone(),
+        recovered.file_path.clone(),
         recovered.source_format.clone(),
     )
     .map_err(|error| anyhow::anyhow!("failed to prepare recovered Markdown: {error}"))?;
-    let shared = app_document_service(cx)
+    let shared = service
         .open_recovery(document_id, source)
         .map_err(|error| anyhow::anyhow!("failed to register recovered Markdown: {error}"))?;
+    Ok(PreparedRecoveredDocument { recovered, shared })
+}
+
+/// 仅在 UI 线程创建恢复窗口；共享 controller 已由后台阶段完成构造。
+// 原因：GPUI 的窗口和 Editor entity 具有线程亲和性，不能从文件 I/O worker 直接创建。
+fn open_prepared_recovered_editor_window(
+    cx: &mut App,
+    prepared: PreparedRecoveredDocument,
+) -> anyhow::Result<WindowHandle<Editor>> {
+    let PreparedRecoveredDocument { recovered, shared } = prepared;
     let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
     let title = window_title(recovered.file_path.as_deref());
     let handle = cx
@@ -333,12 +311,11 @@ pub(crate) fn open_recovered_editor_window(
                     move |cx| match Editor::from_shared_recovery(cx, shared, recovered) {
                         Ok(editor) => editor,
                         Err(error) => {
-                            let reason = error.to_string();
                             let mut editor =
                                 Editor::from_markdown(cx, String::new(), fallback_path.clone());
                             editor.install_initial_file_open_failure(
                                 fallback_path.unwrap_or_default(),
-                                reason,
+                                error.to_string(),
                                 cx,
                             );
                             editor
@@ -359,6 +336,46 @@ pub(crate) fn open_recovered_editor_window(
         eprintln!("failed to initialize recovered editor window: {error}");
     }
     Ok(handle)
+}
+
+/// 消费后台准备的恢复文档并增量追加其余标签，避免恢复阶段重复打开正文。
+// 原因：首个恢复文档负责建立窗口，其余文档只需保留快照，激活时再沿用既有 lazy tab 语义。
+pub(crate) fn open_prepared_recovered_editor_tabs_window(
+    cx: &mut App,
+    mut prepared: Vec<PreparedRecoveredDocument>,
+) -> Option<WindowHandle<Editor>> {
+    if prepared.is_empty() {
+        return None;
+    }
+    let first = prepared.remove(0);
+    let additional = prepared
+        .into_iter()
+        .map(|prepared| prepared.recovered)
+        .collect::<Vec<_>>();
+    let handle = match open_prepared_recovered_editor_window(cx, first) {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("failed to open recovered editor: {error}");
+            return None;
+        }
+    };
+    if !additional.is_empty() {
+        handle
+            .update(cx, |editor, window, cx| {
+                editor.append_recovered_tabs(additional, cx);
+                window.set_window_edited(true);
+            })
+            .unwrap_or_else(|error| eprintln!("failed to append recovered tabs: {error}"));
+    }
+    Some(handle)
+}
+
+pub(crate) fn open_recovered_editor_window(
+    cx: &mut App,
+    recovered: crate::recovery::RecoveredDocument,
+) -> anyhow::Result<WindowHandle<Editor>> {
+    let prepared = prepare_recovered_document(app_document_service(cx), recovered)?;
+    open_prepared_recovered_editor_window(cx, prepared)
 }
 
 // 原因：恢复记录的字符串标识必须在窗口入口统一解析，避免不同恢复分支接受不同格式。
@@ -398,11 +415,18 @@ pub(crate) fn open_recovered_editor_tabs_window(
     Some(handle)
 }
 
-// 原因：大文件恢复先检查 journal 和 probe，再交给分页 Editor，避免不完整恢复进入普通文本路径。
-pub(crate) fn open_paged_recovery_window(
-    cx: &mut App,
+pub(crate) struct PreparedPagedRecovery {
+    pub(crate) path: PathBuf,
+    probe: gmark_paged_document::OpenProbe,
+    source: gmark_paged_document::FileSource,
     journal_path: PathBuf,
-) -> anyhow::Result<(WindowHandle<Editor>, PathBuf)> {
+}
+
+/// 在后台检查大文件 recovery journal 并打开共享 source，避免恢复窗口首帧
+/// 在 GPUI 线程访问 journal、metadata 或慢盘正文。
+pub(crate) fn prepare_paged_recovery(
+    journal_path: PathBuf,
+) -> anyhow::Result<PreparedPagedRecovery> {
     let base = gmark_paged_document::inspect_paged_recovery_base(&journal_path)
         .map_err(|error| anyhow::anyhow!("failed to inspect large recovery: {error}"))?;
     let path = base.path;
@@ -420,6 +444,26 @@ pub(crate) fn open_paged_recovery_window(
             path.display()
         )
     })?;
+    Ok(PreparedPagedRecovery {
+        path,
+        probe,
+        source,
+        journal_path,
+    })
+}
+
+/// 仅在 UI 线程消费后台准备结果并创建分页恢复窗口。
+// 原因：窗口和 Editor entity 需要 GPUI 线程，而所有输入资源都已在 worker 固定下来。
+pub(crate) fn open_prepared_paged_recovery_window(
+    cx: &mut App,
+    prepared: PreparedPagedRecovery,
+) -> anyhow::Result<(WindowHandle<Editor>, PathBuf)> {
+    let PreparedPagedRecovery {
+        path,
+        probe,
+        source,
+        journal_path,
+    } = prepared;
     let bounds = Bounds::centered(None, size(px(1080.), px(720.)), cx);
     let title = window_title(Some(&path));
     let restored_path = path.clone();
@@ -441,6 +485,15 @@ pub(crate) fn open_paged_recovery_window(
         })
         .map_err(|error| anyhow::anyhow!("failed to initialize large recovery window: {error}"))?;
     Ok((handle, restored_path))
+}
+
+// 原因：保留手动恢复入口的同步返回契约；启动恢复改用 prepare/open_prepared 两阶段。
+pub(crate) fn open_paged_recovery_window(
+    cx: &mut App,
+    journal_path: PathBuf,
+) -> anyhow::Result<(WindowHandle<Editor>, PathBuf)> {
+    let prepared = prepare_paged_recovery(journal_path)?;
+    open_prepared_paged_recovery_window(cx, prepared)
 }
 
 // 原因：普通文件入口集中转发策略选择，保持菜单和启动调用方共用行为。
@@ -490,87 +543,57 @@ fn open_file_in_new_window_with_policy(
     path: &Path,
     policy: Option<gmark_document_core::LoadingPolicy>,
 ) -> anyhow::Result<()> {
-    let loading = policy.unwrap_or_else(default_loading_policy);
-
-    // Images and known binary containers retain their view-only/error-page
-    // behavior.  They never enter the process document registry.
-    if crate::document_io::is_image_path(path)
-        || crate::document_io::is_known_unsupported_document(path)
-    {
-        let opened = match crate::document_io::open_document_with_policy(path, loading) {
-            Ok(opened) => opened,
-            Err(error) => {
-                open_file_failure_window(cx, path.to_path_buf(), error.to_string())?;
-                record_recent_file_and_refresh(path, cx);
-                return Ok(());
+    // 原因：慢盘、UNC 和 registry 单飞等待必须脱离 GPUI 主线程；任务被
+    // 取消或超时后不再回写窗口，避免迟到结果覆盖下一代用户请求。
+    let first_frame = open_editor_window(cx, String::new(), None)?;
+    let service = app_document_service(cx);
+    let path = path.to_path_buf();
+    let cancellation = OpenCancellation::default();
+    cx.spawn(async move |cx| {
+        let worker_path = path.clone();
+        let worker_cancellation = cancellation.clone();
+        let operation = cx.background_spawn(async move {
+            let loading = policy.unwrap_or_else(default_loading_policy);
+            prepare_file_open(service, worker_path, loading, worker_cancellation)
+        });
+        let result = match select(
+            operation,
+            cx.background_executor().timer(FILE_OPEN_DEADLINE),
+        )
+        .await
+        {
+            Either::Left((result, _timer)) => result,
+            Either::Right((_elapsed, _operation)) => {
+                cancellation.cancel();
+                Err(anyhow::anyhow!(
+                    "timed out opening '{}'; the request was cancelled",
+                    path.display()
+                ))
             }
         };
-        if matches!(opened, crate::document_io::OpenedDocument::Image) {
-            open_image_preview_window(cx, path.to_path_buf(), None)?;
-        }
-        record_recent_file_and_refresh(path, cx);
-        return Ok(());
-    }
-
-    // Probe/classification is also single-flight.  Only the Opening owner of
-    // the service's registry slot performs source preparation and body IO.
-    let service = app_document_service(cx);
-    let probe = match service.probe_file(path, loading, |normalized, policy| {
-        crate::document_io::probe_document_with_policy(normalized, policy)
-    }) {
-        Ok(probe) => probe,
-        Err(error) => {
-            open_file_failure_window(cx, path.to_path_buf(), error.to_string())?;
-            record_recent_file_and_refresh(path, cx);
-            return Ok(());
-        }
-    };
-
-    if crate::document_io::is_markdown_path(path)
-        && probe.strategy == gmark_paged_document::OpenStrategy::Resident
-    {
-        let limits = loading.effective_limits();
-        match service.open_resident_file(path, loading, |normalized, _policy| {
-            crate::document_io::read_resident_text_from_probe(normalized, &probe, limits)
-                .map(|opened| ResidentMarkdownSource::from_opened(normalized, opened))
-        }) {
-            Ok(shared) => {
-                open_shared_resident_editor_window(cx, shared, Some(path.to_path_buf()), None)?;
+        let _ = cx.update(move |cx| {
+            let (replacement_installed, opened_successfully) = match result {
+                Ok(prepared) => match install_prepared_file_open(cx, prepared) {
+                    Ok(()) => (true, true),
+                    Err(error) => (
+                        open_file_failure_window(cx, path.clone(), error.to_string()).is_ok(),
+                        false,
+                    ),
+                },
+                Err(error) => (
+                    open_file_failure_window(cx, path.clone(), error.to_string()).is_ok(),
+                    false,
+                ),
+            };
+            if replacement_installed {
+                let _ = first_frame.update(cx, |_editor, window, _cx| window.remove_window());
             }
-            Err(error) => {
-                service.clear_probe(path, loading);
-                open_file_failure_window(cx, path.to_path_buf(), error.to_string())?;
+            if opened_successfully {
+                crate::app_menu::record_recent_file_and_refresh(&path, cx);
             }
-        }
-    } else if crate::document_io::is_svg_path(path)
-        && probe.strategy == gmark_paged_document::OpenStrategy::Resident
-    {
-        // SVG keeps its source-backed preview semantics.  It is deliberately
-        // outside the shared text-host migration until the preview renderer
-        // can consume a DocumentHost without changing the existing surface.
-        match crate::document_io::read_resident_text_from_probe(
-            path,
-            &probe,
-            loading.effective_limits(),
-        ) {
-            Ok(opened) => {
-                let handle = open_decoded_editor_window(cx, opened, Some(path.to_path_buf()))?;
-                let _ = handle.update(cx, |editor, _window, cx| {
-                    editor.set_view_mode(crate::editor::ViewMode::Preview, cx);
-                });
-            }
-            Err(error) => {
-                service.clear_probe(path, loading);
-                open_file_failure_window(cx, path.to_path_buf(), error.to_string())?;
-            }
-        }
-    } else if let Err(error) =
-        open_large_editor_window(cx, path.to_path_buf(), probe, loading, None)
-    {
-        service.clear_probe(path, loading);
-        open_file_failure_window(cx, path.to_path_buf(), error.to_string())?;
-    }
-    record_recent_file_and_refresh(path, cx);
+        });
+    })
+    .detach();
     Ok(())
 }
 // 原因：分离标签复用标准编辑器外壳，保持独立窗口的 dirty 和关闭守卫语义。

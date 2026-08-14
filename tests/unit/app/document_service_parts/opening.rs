@@ -414,6 +414,155 @@ fn paged_host_open_failure_is_shared_then_retryable() -> TestResult {
     Ok(())
 }
 
+// 原因：超时后必须切换到新代次，旧 owner 的迟到 probe 结果不能污染重试。
+#[test]
+fn probe_waiter_timeout_does_not_run_a_second_loader() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let path = write_fixture(root.path())?;
+    let service = Arc::new(DocumentService::new());
+    let loader_count = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let owner_service = service.clone();
+    let owner_path = path.clone();
+    let owner_count = loader_count.clone();
+    let owner = thread::spawn(move || {
+        owner_service.probe_file_with_deadline(
+            &owner_path,
+            LoadingPolicy::default(),
+            std::time::Duration::from_secs(5),
+            |normalized, policy| {
+                owner_count.fetch_add(1, Ordering::SeqCst);
+                started_tx
+                    .send(())
+                    .map_err(|error| test_error(error.to_string()))?;
+                release_rx
+                    .recv()
+                    .map_err(|error| test_error(error.to_string()))?;
+                crate::document_io::probe_document_with_policy(normalized, policy)
+                    .map_err(|error| test_error(error.to_string()))
+            },
+        )
+    });
+    started_rx
+        .recv()
+        .map_err(|error| test_error(error.to_string()))?;
+
+    let waiter_started = std::time::Instant::now();
+    let waiter = service.probe_file_with_deadline(
+        &path,
+        LoadingPolicy::default(),
+        std::time::Duration::from_millis(20),
+        |_normalized,
+         _policy|
+         -> Result<gmark_paged_document::OpenProbe, Box<dyn Error + Send + Sync>> {
+            Err(test_error("waiter must subscribe to the owner"))
+        },
+    );
+    assert!(waiter_started.elapsed() < std::time::Duration::from_secs(1));
+    assert!(matches!(
+        waiter,
+        Err(DocumentServiceError::OpenFailed(message)) if message.contains("timed out")
+    ));
+
+    let retry = service.probe_file_with_deadline(
+        &path,
+        LoadingPolicy::default(),
+        std::time::Duration::from_secs(1),
+        |normalized, policy| {
+            loader_count.fetch_add(1, Ordering::SeqCst);
+            crate::document_io::probe_document_with_policy(normalized, policy)
+                .map_err(|error| test_error(error.to_string()))
+        },
+    )?;
+    assert_eq!(retry.strategy, OpenStrategy::Resident);
+
+    release_tx
+        .send(())
+        .map_err(|error| test_error(error.to_string()))?;
+    owner
+        .join()
+        .map_err(|_| test_error("probe owner panicked"))??;
+    assert_eq!(loader_count.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+// 原因：owner 失败需要广播同一错误并清理槽位，使后续同路径打开可以重试。
+#[test]
+fn probe_owner_failure_is_broadcast_and_next_generation_can_retry() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let path = write_fixture(root.path())?;
+    let service = Arc::new(DocumentService::new());
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let owner_service = service.clone();
+    let owner_path = path.clone();
+    let owner = thread::spawn(move || {
+        owner_service.probe_file_with_deadline(
+            &owner_path,
+            LoadingPolicy::default(),
+            std::time::Duration::from_secs(1),
+            |_normalized, _policy| {
+                started_tx
+                    .send(())
+                    .map_err(|error| test_error(error.to_string()))?;
+                release_rx
+                    .recv()
+                    .map_err(|error| test_error(error.to_string()))?;
+                Err::<gmark_paged_document::OpenProbe, Box<dyn Error + Send + Sync>>(test_error(
+                    "probe owner failed",
+                ))
+            },
+        )
+    });
+    started_rx
+        .recv()
+        .map_err(|error| test_error(error.to_string()))?;
+    let waiter_service = service.clone();
+    let waiter_path = path.clone();
+    let waiter = thread::spawn(move || {
+        waiter_service.probe_file_with_deadline(
+            &waiter_path,
+            LoadingPolicy::default(),
+            std::time::Duration::from_secs(1),
+            |_normalized, _policy| {
+                Err::<gmark_paged_document::OpenProbe, Box<dyn Error + Send + Sync>>(test_error(
+                    "waiter must not load",
+                ))
+            },
+        )
+    });
+    thread::sleep(std::time::Duration::from_millis(100));
+    release_tx
+        .send(())
+        .map_err(|error| test_error(error.to_string()))?;
+    let owner = owner
+        .join()
+        .map_err(|_| test_error("probe owner panicked"))?;
+    let owner_error = owner
+        .err()
+        .ok_or_else(|| test_error("probe owner unexpectedly succeeded"))?;
+    let waiter_error = waiter
+        .join()
+        .map_err(|_| test_error("probe waiter panicked"))?
+        .err()
+        .ok_or_else(|| test_error("probe waiter unexpectedly succeeded"))?;
+    assert_eq!(owner_error.to_string(), waiter_error.to_string());
+    assert!(owner_error.to_string().contains("probe owner failed"));
+
+    let retry = service.probe_file_with_deadline(
+        &path,
+        LoadingPolicy::default(),
+        std::time::Duration::from_secs(1),
+        |normalized, policy| {
+            crate::document_io::probe_document_with_policy(normalized, policy)
+                .map_err(|error| test_error(error.to_string()))
+        },
+    )?;
+    assert_eq!(retry.strategy, OpenStrategy::Resident);
+    Ok(())
+}
+
 #[test]
 fn untitled_and_recovery_uuid_keys_preserve_identity() -> TestResult {
     let service = DocumentService::new();

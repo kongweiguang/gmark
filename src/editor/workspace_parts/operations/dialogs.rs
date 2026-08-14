@@ -61,10 +61,18 @@ impl Editor {
                 ),
             })
         };
-        let primary_label = if dialog.plan.is_some() {
-            strings.workspace_apply_operation.clone()
-        } else {
-            strings.workspace_review_operation.clone()
+        let primary_label = match dialog.kind {
+            WorkspaceOperationKind::NewFile => strings.workspace_new_file.clone(),
+            WorkspaceOperationKind::NewFolder => strings.workspace_new_folder.clone(),
+            WorkspaceOperationKind::Rename
+            | WorkspaceOperationKind::Move
+            | WorkspaceOperationKind::Delete => {
+                if dialog.plan.is_some() {
+                    strings.workspace_apply_operation.clone()
+                } else {
+                    strings.workspace_review_operation.clone()
+                }
+            }
         };
         let primary_handler = if dialog.plan.is_some() {
             Self::on_apply_workspace_operation
@@ -167,6 +175,7 @@ impl Editor {
         )
     }
 
+    /// 删除确认复用标准正文和操作区，避免自定义 flex 内容再次引入底部空白。
     fn render_workspace_delete_dialog_overlay(
         &self,
         theme: &Theme,
@@ -220,15 +229,7 @@ impl Editor {
                             cx.stop_propagation()
                         })
                         .child(
-                            div()
-                                .id("workspace-delete-dialog-content")
-                                .debug_selector(|| "workspace-delete-dialog-content".to_owned())
-                                .w_full()
-                                .flex_none()
-                                .flex()
-                                .flex_col()
-                                .gap(px(d.dialog_gap))
-                                .pb(px(2.0))
+                            dialog_content("workspace-delete-dialog-content", theme)
                                 .child(dialog_title_with_icon(
                                     "workspace-delete-title",
                                     strings.workspace_delete_title.clone(),
@@ -271,7 +272,7 @@ impl Editor {
                                 })),
                         )
                         .child(
-                            dialog_actions(theme)
+                            compact_dialog_actions(theme)
                                 .id("workspace-delete-actions")
                                 .debug_selector(|| "workspace-delete-actions".to_owned())
                                 .child(

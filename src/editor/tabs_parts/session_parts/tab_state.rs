@@ -11,6 +11,8 @@ impl Editor {
         self.tabs.remove_session_after_window_close = false;
     }
 
+    /// Invalidates older session writers before removing explicit-close state,
+    /// so a queued save cannot recreate the session after removal.
     pub(in crate::editor) fn remove_workspace_session_for_explicit_close(
         &mut self,
         cx: &mut Context<Self>,
@@ -28,16 +30,22 @@ impl Editor {
             let id = self.tabs.session_id;
             let generation = self.tabs.session_generation.wrapping_add(1);
             self.tabs.session_generation = generation;
-            SESSION_WRITE_GENERATIONS
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .expect("workspace session generation lock poisoned")
-                .insert(id, generation);
+            if let Err(error) = SESSION_WRITE_GENERATIONS
+                .get_or_init(SessionWriteGenerationRegistry::default)
+                .set(id, generation)
+            {
+                eprintln!("failed to record workspace session generation before removal: {error}");
+                return;
+            }
             cx.background_spawn(async move {
-                let _guard = SESSION_WRITE_LOCK
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("workspace session write lock poisoned"))?;
-                crate::config::workspace_session::remove_workspace_session(id)
+                super::persistence::run_current_session_write(
+                    &SESSION_WRITE_LOCK,
+                    SESSION_WRITE_GENERATIONS.get_or_init(SessionWriteGenerationRegistry::default),
+                    id,
+                    generation,
+                    || crate::config::workspace_session::remove_workspace_session(id),
+                )
+                .map(|_| ())
             })
             .detach();
         }

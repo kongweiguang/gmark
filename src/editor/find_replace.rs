@@ -19,6 +19,8 @@ use crate::theme::{Theme, workbench::SurfaceKind};
 
 const FIND_DEBOUNCE: Duration = Duration::from_millis(40);
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
+const MAX_FIND_QUERY_BYTES: usize = 4 * 1024;
+const MAX_REPLACE_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FIND_MATCHES: usize = 20_000;
 const FIND_CASE_ICON: &str = "icon/ui/case-sensitive.svg";
 const FIND_WORD_ICON: &str = "icon/ui/whole-word.svg";
@@ -26,6 +28,16 @@ const FIND_REGEX_ICON: &str = "icon/ui/regex.svg";
 const CHEVRON_UP_ICON: &str = "icon/ui/chevron-up.svg";
 const CHEVRON_DOWN_ICON: &str = "icon/ui/chevron-down.svg";
 const CLOSE_ICON: &str = "icon/ui/close.svg";
+
+/// 后台查找/替换结果只有同时匹配 revision 与 generation 才能进入 UI 事务。
+pub(super) fn find_replace_result_is_current(
+    expected_revision: Revision,
+    expected_generation: u64,
+    current_revision: Revision,
+    current_generation: u64,
+) -> bool {
+    expected_revision == current_revision && expected_generation == current_generation
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct FindOptions {
@@ -47,6 +59,7 @@ pub(super) struct FindPanelState {
     pub(super) revision: Revision,
     generation: u64,
     task: Option<Task<()>>,
+    replace_task: Option<Task<()>>,
     tooltip_hovered: Option<&'static str>,
     pub(super) tooltip_visible: Option<&'static str>,
     tooltip_task: Option<Task<()>>,
@@ -88,6 +101,126 @@ pub(super) struct FindResult {
     pub(super) match_metadata: Vec<FindMatchMetadata>,
     pub(super) error: Option<String>,
     pub(super) truncated: bool,
+}
+
+struct ReplaceAllPlan {
+    edits: Vec<TextEdit>,
+    selection: Range<usize>,
+}
+
+/// 在后台构造完整的最终源码，先验证最终字节上限和所有范围，再交给主线程以单个
+/// revision gate 提交；这样主线程只处理一个全源码 edit，超限或异常也不会留下半组替换。
+pub(super) fn build_replace_all_plan(
+    source: &str,
+    query: &str,
+    replacement_template: &str,
+    options: FindOptions,
+    matches: &[Range<usize>],
+    metadata: &[FindMatchMetadata],
+) -> Result<ReplaceAllPlan, String> {
+    if query.len() > MAX_FIND_QUERY_BYTES {
+        return Err(format!(
+            "查找内容超过 {} KiB 安全限制",
+            MAX_FIND_QUERY_BYTES / 1024
+        ));
+    }
+    if replacement_template.len() > MAX_REPLACE_OUTPUT_BYTES {
+        return Err("替换结果超过 64 MiB 安全限制".to_owned());
+    }
+    if source.len() > MAX_REPLACE_OUTPUT_BYTES {
+        return Err("替换结果超过 64 MiB 安全限制".to_owned());
+    }
+    let regex = compile_find_regex(query, options).map_err(|error| error.to_string())?;
+    let mut replacements = Vec::with_capacity(matches.len());
+    let mut output_len = source.len();
+    let mut previous_end = 0;
+
+    for (index, range) in matches.iter().enumerate() {
+        let Some(metadata) = metadata.get(index) else {
+            return Err("查找结果元数据不完整，替换已取消".to_owned());
+        };
+        if metadata.replaceability != gmark_markdown::Replaceability::Direct {
+            continue;
+        }
+        if metadata.source.as_ref() != Some(range) {
+            return Err("查找结果与源码范围不一致，替换已取消".to_owned());
+        }
+        if range.start > range.end
+            || range.end > source.len()
+            || range.start < previous_end
+            || !source.is_char_boundary(range.start)
+            || !source.is_char_boundary(range.end)
+        {
+            return Err("查找结果范围无效，替换已取消".to_owned());
+        }
+        let Some(replacement) = replacement_for_range(
+            &regex,
+            source,
+            range.clone(),
+            replacement_template,
+            options.regex,
+        ) else {
+            return Err("替换模板与查找结果不匹配，替换已取消".to_owned());
+        };
+        if replacement.len() > MAX_REPLACE_OUTPUT_BYTES {
+            return Err("替换结果超过 64 MiB 安全限制".to_owned());
+        }
+        output_len = checked_replace_output_len(output_len, range, replacement.len())?;
+        previous_end = range.end;
+        replacements.push((range.clone(), replacement));
+    }
+
+    if replacements.is_empty() {
+        return Ok(ReplaceAllPlan {
+            edits: Vec::new(),
+            selection: 0..0,
+        });
+    }
+
+    let mut final_source = String::with_capacity(output_len);
+    let mut source_cursor = 0;
+    let mut first_selection = None;
+    for (range, replacement) in replacements {
+        final_source.push_str(&source[source_cursor..range.start]);
+        let selection_start = final_source.len();
+        let selection_end = selection_start
+            .checked_add(replacement.len())
+            .ok_or_else(|| "替换后的光标范围溢出，替换已取消".to_owned())?;
+        final_source.push_str(&replacement);
+        if first_selection.is_none() {
+            first_selection = Some(selection_start..selection_end);
+        }
+        source_cursor = range.end;
+    }
+    final_source.push_str(&source[source_cursor..]);
+    if final_source.len() != output_len {
+        return Err("替换结果长度校验失败，替换已取消".to_owned());
+    }
+
+    Ok(ReplaceAllPlan {
+        edits: vec![TextEdit::new(0..source.len(), final_source)],
+        selection: first_selection.unwrap_or(0..0),
+    })
+}
+
+/// 用 checked 算术计算一组替换后的文档长度，避免极端范围把安全上限检查绕成整数溢出。
+fn checked_replace_output_len(
+    source_len: usize,
+    range: &Range<usize>,
+    replacement_len: usize,
+) -> Result<usize, String> {
+    let removed = range
+        .end
+        .checked_sub(range.start)
+        .ok_or_else(|| "替换范围长度溢出，替换已取消".to_owned())?;
+    let output_len = source_len
+        .checked_sub(removed)
+        .and_then(|length| length.checked_add(replacement_len))
+        .ok_or_else(|| "替换结果长度溢出，替换已取消".to_owned())?;
+    if output_len > MAX_REPLACE_OUTPUT_BYTES {
+        return Err("替换结果超过 64 MiB 安全限制".to_owned());
+    }
+    Ok(output_len)
 }
 
 /// Rendered find metadata kept parallel to the source ranges used by the
@@ -226,6 +359,7 @@ impl Editor {
             revision: source.revision(),
             generation: 0,
             task: None,
+            replace_task: None,
             tooltip_hovered: None,
             tooltip_visible: None,
             tooltip_task: None,
@@ -283,6 +417,8 @@ impl Editor {
         }
     }
 
+    /// 先在 UI 线程拒绝超长查询并用 revision/generation 标记后台搜索，避免极端输入
+    /// 把正则扫描和过期结果带回编辑器主线程。
     pub(super) fn schedule_find(&mut self, cx: &mut Context<Self>) {
         let anchor = self.capture_source_selection_snapshot(cx).range().end;
         let Some(state) = self.find_panel.as_mut() else {
@@ -290,9 +426,24 @@ impl Editor {
         };
         state.generation = state.generation.wrapping_add(1);
         state.task = None;
+        // A query change invalidates an in-flight replacement plan as well; dropping
+        // that task prevents a background result from committing against new input.
+        state.replace_task = None;
         state.error = None;
         let generation = state.generation;
-        let query = state.query.read(cx).display_text().to_owned();
+        let query = state.query.read(cx).shared_display_text();
+        if query.len() > MAX_FIND_QUERY_BYTES {
+            state.matches.clear();
+            state.match_metadata.clear();
+            state.selected = 0;
+            state.truncated = false;
+            state.error = Some(format!(
+                "查找内容超过 {} KiB 安全限制",
+                MAX_FIND_QUERY_BYTES / 1024
+            ));
+            cx.notify();
+            return;
+        }
         if query.is_empty() {
             state.matches.clear();
             state.match_metadata.clear();
@@ -313,7 +464,7 @@ impl Editor {
                 .background_spawn(async move {
                     find_matches_for_view(
                         &snapshot.text(),
-                        &query,
+                        query.as_ref(),
                         options,
                         snapshot.revision(),
                         rendered,
@@ -411,6 +562,8 @@ pub(super) fn find_matches(
     find_matches_for_view(source, query, options, revision, false)
 }
 
+/// 在后台查询前复用统一的字节上限和 20,000 条匹配门禁，让渲染视图与源码视图
+/// 对同一输入返回一致的可恢复错误，而不是继续构造无界结果。
 pub(super) fn find_matches_for_view(
     source: &str,
     query: &str,
@@ -418,6 +571,18 @@ pub(super) fn find_matches_for_view(
     revision: Revision,
     rendered: bool,
 ) -> FindResult {
+    if query.len() > MAX_FIND_QUERY_BYTES {
+        return FindResult {
+            revision,
+            matches: Vec::new(),
+            match_metadata: Vec::new(),
+            error: Some(format!(
+                "查找内容超过 {} KiB 安全限制",
+                MAX_FIND_QUERY_BYTES / 1024
+            )),
+            truncated: false,
+        };
+    }
     if rendered {
         let document = parse_markdown(source);
         let projection = document.visible_text_projection();
@@ -544,3 +709,7 @@ pub(super) fn replacement_for_range(
     captures.expand(template, &mut replacement);
     Some(replacement)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/editor/find_replace_limits.rs"]
+mod tests;

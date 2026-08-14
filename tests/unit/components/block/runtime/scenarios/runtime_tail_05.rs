@@ -2,6 +2,7 @@
 
 use crate::components::UndoCaptureKind;
 use gpui::{KeyDownEvent, Keystroke};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn math_key_event(key: &str) -> KeyDownEvent {
     KeyDownEvent {
@@ -56,6 +57,45 @@ async fn block_math_blur_ends_the_session_and_preserves_live_source(cx: &mut Tes
             assert_eq!(block.record.raw_fallback.as_deref(), Some("$$\n+1x^2\n$$"));
         });
     });
+}
+
+/// Ensures render-driven blur synchronization stays quiet without an active session while
+/// preserving one invalidation for the real transition out of structured formula editing.
+#[gpui::test]
+async fn block_math_focus_sync_is_idempotent_without_an_active_session(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::math("$$\nx^2\n$$")));
+    let notifications = Arc::new(AtomicUsize::new(0));
+    let observed_notifications = notifications.clone();
+    let _subscription = cx.update(|cx| {
+        cx.observe(&block, move |_, _| {
+            observed_notifications.fetch_add(1, Ordering::SeqCst);
+        })
+    });
+    let visual = cx.add_empty_window();
+
+    visual.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            block.sync_math_edit_focus(false, window, block_cx);
+            block.sync_math_edit_focus(false, window, block_cx);
+        });
+    });
+    assert_eq!(notifications.load(Ordering::SeqCst), 0);
+
+    visual.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            block.sync_math_edit_focus(true, window, block_cx);
+            assert!(block.math_edit_session.is_some());
+            block.sync_math_edit_focus(false, window, block_cx);
+        });
+    });
+    assert_eq!(notifications.load(Ordering::SeqCst), 1);
+
+    visual.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            block.sync_math_edit_focus(false, window, block_cx);
+        });
+    });
+    assert_eq!(notifications.load(Ordering::SeqCst), 1);
 }
 
 #[gpui::test]

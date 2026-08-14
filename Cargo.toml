@@ -2,7 +2,7 @@
 
 [package]
 name = "gmark"
-version = "0.2.2"
+version = "0.2.3-rc.1"
 edition = "2024"
 rust-version = "1.95"
 authors = ["kongweiguang"]
@@ -220,7 +220,7 @@ tree-sitter-toml = { package = "adot-tree-sitter-toml", version = "0.1", optiona
 uds_windows = "=1.2.1"
 fs4 = { version = "=0.13.1", default-features = false, features = ["sync"] }
 accesskit_windows = "=0.34.0"
-windows = { version = "=0.62.0", features = ["UI_ViewManagement", "Win32_Foundation", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "=0.62.0", features = ["UI_ViewManagement", "Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = "=0.26.3"

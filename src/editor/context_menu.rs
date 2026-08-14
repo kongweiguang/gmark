@@ -9,7 +9,7 @@ use gpui::*;
 use super::{
     Editor, TableAxisSelection, ViewMode,
     render::{
-        DialogButtonKind, DialogTitleIcon, clamped_floating_panel_origin,
+        DialogButtonKind, DialogTitleIcon, clamped_floating_panel_origin, compact_dialog_actions,
         compact_menu_panel_height, dialog_actions, dialog_body, dialog_button, dialog_panel,
         dialog_title_with_icon, floating_submenu_x, menu_icon_slot, modal_overlay,
     },

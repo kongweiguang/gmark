@@ -423,16 +423,32 @@ impl DocumentHost {
         cx.notify();
     }
 
+    /// Apply a completed CSV/TSV transformation once and hand its immutable
+    /// result to the serial worker instead of writing recovery under UI state.
     fn install_delimited_transformation(&mut self, replacement: String, cx: &mut Context<Self>) {
         self.active_edit = None;
         self.structured_cell_edit = None;
-        let Some(document) = self.document.as_ref() else {
+        let Some(document) = self.document.clone() else {
             return;
         };
-        if let Err(error) = document.replace_range(0..document.len(), replacement) {
+        let base_revision = document.revision();
+        let old_len = document.len();
+        if let Err(error) = document.replace_range(0..old_len, replacement.as_str()) {
             self.set_structure_error(error, cx);
             return;
         }
+        self.enqueue_recovery_transaction(
+            &document,
+            base_revision,
+            0..old_len,
+            &replacement,
+            Some(SourceSelection::collapsed(
+                replacement.len() as u64,
+                SourceAffinity::After,
+            )),
+            recovery_view_id(self.view_mode),
+            cx,
+        );
         self.tail_enabled = false;
         let preserve_live_table = matches!(
             self.view_mode,

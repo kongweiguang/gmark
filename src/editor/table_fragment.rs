@@ -8,7 +8,24 @@ use crate::i18n::I18nStrings;
 use crate::theme::{Theme, workbench::SurfaceKind};
 use crate::ui::visual_preferences::VisualPreferencesManager;
 
+const MAX_TABLE_CELLS: usize = 10_000;
+
+/// 用 checked 行列乘加验证合并后的实际表格规模，避免确认时扩展出超限表格。
+fn checked_table_cell_count(body_rows: usize, columns: usize) -> Option<usize> {
+    body_rows
+        .max(1)
+        .checked_add(1)
+        .and_then(|rows| rows.checked_mul(columns.max(1)))
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/editor/table_fragment_limits.rs"]
+mod tests;
+
 impl Editor {
+    /// Keeps the merge suggestion attached to the document edge as a lightweight action bar;
+    /// matching action heights and restrained radii make confirmation predictable without
+    /// interrupting the paste flow with a modal dialog.
     pub(super) fn render_table_fragment_merge_prompt(
         &self,
         theme: &Theme,
@@ -46,7 +63,7 @@ impl Editor {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(6.0))
+                    .rounded(px(8.0))
                     .bg(palette.accent)
                     .text_color(palette.text_inverse)
                     .hover(|this| this.bg(palette.accent_hover))
@@ -102,7 +119,7 @@ impl Editor {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.0))
+                        .rounded(px(8.0))
                         .border(px(theme.dimensions.dialog_border_width))
                         .border_color(material.border)
                         .bg(palette.control_surface)
@@ -146,9 +163,25 @@ impl Editor {
                 let Some(table_data) = block.record.table.as_ref() else {
                     return;
                 };
+                let Some(max_body_rows) = table_data.rows.len().checked_add(lines.len()) else {
+                    return;
+                };
+                if checked_table_cell_count(max_body_rows, table_data.column_count())
+                    .is_none_or(|cells| cells > MAX_TABLE_CELLS)
+                {
+                    return;
+                }
                 let Some(rows) = parse_table_fragment_rows(lines, table_data.column_count()) else {
                     return;
                 };
+                let Some(body_rows) = table_data.rows.len().checked_add(rows.len()) else {
+                    return;
+                };
+                if checked_table_cell_count(body_rows, table_data.column_count())
+                    .is_none_or(|cells| cells > MAX_TABLE_CELLS)
+                {
+                    return;
+                }
                 targets.push(TableFragmentMergeTarget {
                     table_id: table.entity_id(),
                     direction,
@@ -262,6 +295,19 @@ impl Editor {
                 .any(|row| row.len() != table.column_count())
         {
             self.dismiss_table_fragment_merge(cx);
+            return;
+        }
+
+        let Some(body_rows) = table.rows.len().checked_add(target.rows.len()) else {
+            self.dismiss_table_fragment_merge(cx);
+            self.show_table_limit_notice(cx);
+            return;
+        };
+        if checked_table_cell_count(body_rows, table.column_count())
+            .is_none_or(|cells| cells > MAX_TABLE_CELLS)
+        {
+            self.dismiss_table_fragment_merge(cx);
+            self.show_table_limit_notice(cx);
             return;
         }
 

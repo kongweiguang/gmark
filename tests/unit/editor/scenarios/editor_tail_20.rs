@@ -46,11 +46,18 @@ async fn formula_source_and_visual_surfaces_receive_real_delete_shortcuts(cx: &m
     let handle_bounds = visual
         .debug_bounds("math-palette-drag-handle")
         .expect("formula palette handle should render");
+    let visual_bounds = visual
+        .debug_bounds("math-visual-editor-surface")
+        .expect("formula visual surface should render");
     assert!(source_bounds.left() >= palette_bounds.left());
     assert!(source_bounds.right() <= palette_bounds.right());
     assert!(source_bounds.top() >= handle_bounds.bottom());
     assert!(source_bounds.bottom() <= palette_bounds.bottom());
-    assert!(visual.debug_bounds("math-visual-editor-surface").is_some());
+    assert!(
+        palette_bounds.bottom() <= visual_bounds.top()
+            || palette_bounds.top() >= visual_bounds.bottom(),
+        "formula palette should stay outside the expression surface: palette={palette_bounds:?}, visual={visual_bounds:?}"
+    );
 
     let block = editor.read_with(visual, |editor, _cx| {
         editor.document.visible_blocks()[0].entity.clone()
@@ -296,4 +303,52 @@ async fn structured_reparse_preserves_the_formula_palette_anchor(cx: &mut TestAp
             assert!(block.math_edit_session.is_some());
         });
     });
+}
+
+/// Exercises the real paste path so the merge suggestion exposes stable selectors and keeps
+/// both merge and cancel controls inside one compact, equally tall action row.
+#[gpui::test]
+async fn table_fragment_merge_prompt_keeps_actions_aligned(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n";
+    let (editor, visual) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, source.to_owned(), None));
+    let paragraph = editor.read_with(visual, |editor, _cx| {
+        editor.document.visible_blocks().last().unwrap().entity.clone()
+    });
+
+    editor.update(visual, |editor, cx| {
+        editor.on_block_event(
+            paragraph,
+            &BlockEvent::RequestPasteMultiline {
+                leading: InlineTextTree::plain(String::new()),
+                lines: vec!["| 3 | 4 |".to_owned()],
+                trailing: InlineTextTree::plain(String::new()),
+                split_physical_lines: false,
+            },
+            cx,
+        );
+        assert!(editor.table_fragment_merge.is_some());
+    });
+    redraw(visual);
+
+    let prompt = visual
+        .debug_bounds("table-fragment-merge-prompt")
+        .expect("table fragment merge prompt should render");
+    let merge = visual
+        .debug_bounds("table-fragment-merge-0")
+        .expect("merge action should expose a stable selector");
+    let cancel = visual
+        .debug_bounds("table-fragment-merge-cancel")
+        .expect("cancel action should expose a stable selector");
+    for (name, action) in [("merge", merge), ("cancel", cancel)] {
+        assert!(action.left() >= prompt.left(), "{name} escaped prompt left");
+        assert!(action.right() <= prompt.right(), "{name} escaped prompt right");
+        assert!(action.top() >= prompt.top(), "{name} escaped prompt top");
+        assert!(action.bottom() <= prompt.bottom(), "{name} escaped prompt bottom");
+    }
+    assert_eq!(merge.size.height, cancel.size.height);
+    assert!(f32::from(merge.size.height) >= 30.0);
+
+    editor.update(visual, |editor, cx| editor.dismiss_table_fragment_merge(cx));
 }

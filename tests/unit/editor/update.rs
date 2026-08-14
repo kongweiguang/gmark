@@ -3,6 +3,7 @@
 use super::{
     UpdateLabels, format_bytes, manual_update_url, update_action_descriptors, update_button_slots,
 };
+use crate::theme::Theme;
 use crate::updater::UpdateState;
 
 #[test]
@@ -12,9 +13,11 @@ fn update_progress_formats_byte_counts_without_losing_units() {
     assert_eq!(format_bytes(3 * 1024 * 1024), "3.0 MiB");
 }
 
+/// 启动恢复和安装准备期间没有可执行按钮，避免焦点进入状态机明确拒绝的动作。
 #[test]
 fn update_panel_exposes_stable_keyboard_focus_slots() {
     assert_eq!(update_button_slots(&UpdateState::Idle), (false, false));
+    assert_eq!(update_button_slots(&UpdateState::Restoring), (false, false));
     assert_eq!(
         update_button_slots(&UpdateState::UpToDate {
             current_version: "1.0.0".to_owned(),
@@ -38,6 +41,20 @@ fn update_panel_exposes_stable_keyboard_focus_slots() {
         }),
         (true, true)
     );
+}
+
+/// Keeps the updater's primary actions comfortably targetable while preserving a transient
+/// footprint instead of silently turning the status card into a modal dialog.
+#[test]
+fn update_panel_controls_keep_compact_hit_area() {
+    assert!((30.0..=32.0).contains(&super::UPDATE_PANEL_BUTTON_HEIGHT));
+    assert!((8.0..=10.0).contains(&super::UPDATE_PANEL_BUTTON_RADIUS));
+
+    let radius = Theme::default_theme()
+        .dimensions
+        .dialog_radius
+        .clamp(14.0, 18.0);
+    assert!((14.0..=18.0).contains(&radius));
 }
 
 /// Ensures a terminal helper failure retains an actionable browser target even
@@ -66,6 +83,7 @@ fn terminal_failure_accessibility_actions_are_copy_then_manual_download() {
     };
     let labels = UpdateLabels {
         title: "",
+        restoring: "",
         checking: "",
         up_to_date: "",
         downloading: "",
@@ -74,6 +92,8 @@ fn terminal_failure_accessibility_actions_are_copy_then_manual_download() {
         verifying_detail: "",
         ready: "",
         ready_detail: "",
+        staging_install: "",
+        staging_install_detail: "",
         failed: "",
         updated: "",
         download: "Download",

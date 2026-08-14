@@ -108,6 +108,9 @@ impl DocumentHost {
         view.view_back_history = VecDeque::from_iter(presentation.back_history.clone());
         view.view_forward_history = VecDeque::from_iter(presentation.forward_history.clone());
         view.document = Some(shared);
+        // Shared production opens must attach recovery to the Controller
+        // lifetime before a detached/split pane can receive its first edit.
+        view.start_shared_recovery(cx);
         view.restore_presentation(presentation.current, cx);
         if let Some(document) = view.document.as_ref() {
             let _ = document.set_source_selection(view.tab_view_state.source.selection);
@@ -188,6 +191,9 @@ impl DocumentHost {
                 view.view_forward_history =
                     VecDeque::from_iter(presentation.forward_history.clone());
                 view.document = Some(document);
+                // Reattached views reuse the handle-anchored worker; this call
+                // only starts setup when the shared document has no journal.
+                view.start_shared_recovery(cx);
                 view.restore_presentation(presentation.current, cx);
                 view.index = view.document.as_ref().and_then(SharedDocument::line_index);
                 view.provisional_source = None;

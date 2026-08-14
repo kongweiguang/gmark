@@ -295,6 +295,7 @@ pub(in crate::editor) fn dialog_body(label: String, theme: &Theme) -> Div {
         .child(label)
 }
 
+/// 操作区通过固有高度同时保留按钮上下留白，避免 GPUI 自动高度吞掉底部空间。
 pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
     let c = &theme.colors;
     let d = &theme.dimensions;
@@ -302,7 +303,7 @@ pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
     div()
         .w_full()
         .flex_none()
-        // 操作行显式保留按钮高度，避免 GPUI 自动高度把横向定高子项挤出面板底边。
+        // 显式给出完整首行高度，避免 GPUI 自动高度挤压横向定高按钮。
         .min_h(px(d.dialog_button_height
             + top_padding * 2.0
             + d.dialog_border_width))
@@ -316,6 +317,15 @@ pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
         .border_color(c.workbench.border_subtle)
 }
 
+/// 短固定正文不会像滚动正文一样压缩面板底部 padding，因此只让操作区预留顶部留白。
+pub(in crate::editor) fn compact_dialog_actions(theme: &Theme) -> Div {
+    let d = &theme.dimensions;
+    dialog_actions(theme).min_h(px(d.dialog_button_height
+        + d.dialog_padding
+        + d.dialog_border_width))
+}
+
+/// 统一按钮的命中高度和层级颜色，让不同模态业务共享可预测的操作几何。
 pub(in crate::editor) fn dialog_button(
     id: &'static str,
     label: String,
@@ -354,7 +364,7 @@ pub(in crate::editor) fn dialog_button(
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px((d.dialog_radius - 4.0).max(0.0)))
+        .rounded(px((d.dialog_radius - 6.0).clamp(10.0, 12.0)))
         .border(px(if bordered { d.dialog_border_width } else { 0.0 }))
         .border_color(c.workbench.border_subtle)
         .bg(background)

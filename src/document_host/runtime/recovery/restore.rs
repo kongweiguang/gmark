@@ -133,8 +133,10 @@ impl DocumentHost {
                         view.install_document_session(document);
                         view.provisional_source = None;
                         view.invalidate_source_rows();
-                        view.coordinator.recovery_journal =
-                            Some(DocumentRecoveryJournal::Paged(recovered.journal));
+                        view.install_recovery_journal(
+                            DocumentRecoveryJournal::Paged(recovered.journal),
+                            cx,
+                        );
                         view.coordinator.recovery_error = (recovered.read_status
                             == gmark_paged_document::PagedRecoveryReadStatus::TruncatedTail)
                             .then(|| strings.large_document_text("recovered_tail").into());

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use csv::{ByteRecord, Position, ReaderBuilder};
 
-use super::model::DelimitedIndexOptions;
+use super::model::{DelimitedIndexOptions, MAX_DELIMITED_RECORD_BYTES};
 use crate::{FileSource, PagedDocumentError};
 
 #[derive(Clone, Debug)]
@@ -73,6 +73,25 @@ impl DelimitedSource {
             message: format!("{} ({})", error, self.display_path().display()),
         }
     }
+
+    /// Reject a logical CSV/TSV record before callers materialize fields or copy its replacement.
+    pub(super) fn ensure_record_size(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<(), PagedDocumentError> {
+        if end.saturating_sub(start) <= MAX_DELIMITED_RECORD_BYTES {
+            return Ok(());
+        }
+        Err(PagedDocumentError::InvalidDelimited {
+            offset: start,
+            message: format!(
+                "physical delimited record exceeds {} MiB ({})",
+                MAX_DELIMITED_RECORD_BYTES / (1024 * 1024),
+                self.display_path().display()
+            ),
+        })
+    }
 }
 
 pub(super) enum DelimitedReader {
@@ -116,6 +135,25 @@ pub(super) fn csv_error(source: &FileSource, error: csv::Error) -> PagedDocument
         offset,
         message: format!("{} ({})", error, source.path().display()),
     }
+}
+
+/// Keep direct file readers under the same physical-record bound as snapshot readers.
+pub(super) fn ensure_file_record_size(
+    source: &FileSource,
+    start: u64,
+    end: u64,
+) -> Result<(), PagedDocumentError> {
+    if end.saturating_sub(start) <= MAX_DELIMITED_RECORD_BYTES {
+        return Ok(());
+    }
+    Err(PagedDocumentError::InvalidDelimited {
+        offset: start,
+        message: format!(
+            "physical delimited record exceeds {} MiB ({})",
+            MAX_DELIMITED_RECORD_BYTES / (1024 * 1024),
+            source.path().display()
+        ),
+    })
 }
 
 pub(super) fn decode_fields(record: &ByteRecord) -> Vec<String> {

@@ -5,6 +5,7 @@ use crate::theme::workbench::SurfaceKind;
 use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
+    /// 扫描模型只读，启动必须发生在显式动作中；焦点句柄仍需稳定复用以保留键盘焦点。
     pub(in crate::editor) fn render_workspace_panel(
         &mut self,
         theme: &Theme,
@@ -17,10 +18,8 @@ impl Editor {
             return None;
         }
 
-        self.sync_workspace_models(cx);
-        if self.workspace.active_tab == WorkspaceTab::Search {
-            self.ensure_workspace_search_input(cx);
-        }
+        // Focus handles are view resources rather than scan state; keeping them stable prevents
+        // a repaint after a resize click from dropping keyboard focus.
         let focus_handle = self.ensure_workspace_focus_handle(cx);
         let editor = cx.entity().downgrade();
         let resize_editor = editor.clone();
@@ -51,6 +50,33 @@ impl Editor {
             WorkspaceTab::Search => self.render_workspace_search(theme, strings, &editor, cx),
         };
 
+        let files_root = (self.workspace.active_tab == WorkspaceTab::Files)
+            .then(|| self.workspace.root.clone())
+            .flatten();
+        let mut panel_scroll = div()
+            .id("workspace-panel-scroll")
+            .track_scroll(&self.workspace.panel_scroll)
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .bg(content_material.background)
+            .px(px(8.0))
+            .py(px(10.0))
+            .child(body);
+        if let Some(root) = files_root {
+            // 空白处也必须拥有与树根相同的操作入口；树行自身会停止冒泡，
+            // 因此只由这一层接住没有命中节点的右键并打开 root 菜单。
+            let context_editor = editor.clone();
+            panel_scroll =
+                panel_scroll.on_mouse_down(MouseButton::Right, move |event, _window, cx| {
+                    let root = root.clone();
+                    let _ = context_editor.update(cx, |editor, cx| {
+                        editor.open_workspace_context_menu(event.position, root, cx);
+                    });
+                    cx.stop_propagation();
+                });
+        }
+
         Some(
             div()
                 .id("workspace-panel")
@@ -68,18 +94,7 @@ impl Editor {
                 // Files and Search no longer live in a permanent top chrome;
                 // the panel body starts at the top edge and the status bar owns
                 // the two navigation actions, matching Zed's workbench.
-                .child(
-                    div()
-                        .id("workspace-panel-scroll")
-                        .track_scroll(&self.workspace.panel_scroll)
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .bg(content_material.background)
-                        .px(px(8.0))
-                        .py(px(10.0))
-                        .child(body),
-                )
+                .child(panel_scroll)
                 .children(resizable.then(|| {
                     let focus_handle = resize_focus_handle
                         .clone()

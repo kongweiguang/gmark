@@ -20,7 +20,7 @@ pub use backend::{
 };
 pub use delimited::{
     DelimitedEdit, DelimitedFilterOptions, DelimitedIndex, DelimitedIndexOptions, DelimitedRecord,
-    apply_delimited_column_edit, serialize_delimited_record,
+    MAX_DELIMITED_RECORD_BYTES, apply_delimited_column_edit, serialize_delimited_record,
 };
 pub use encoding::{EncodedSavePlan, PreparedUtf8Source, prepare_utf8_source};
 pub use gmark_document_core::DocumentSnapshot;

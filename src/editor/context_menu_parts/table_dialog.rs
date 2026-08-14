@@ -5,6 +5,7 @@ use crate::theme::workbench::SurfaceKind;
 use crate::ui::visual_preferences::VisualPreferencesManager;
 
 impl Editor {
+    /// 表格插入保持业务步进控件，但把正文和操作区交给标准弹框几何，避免窄窗自定义高度裁掉按钮。
     pub(in crate::editor) fn render_table_insert_dialog_overlay(
         &self,
         theme: &Theme,
@@ -21,24 +22,6 @@ impl Editor {
         let d = &theme.dimensions;
         let t = &theme.typography;
         let s = cx.global::<I18nManager>().strings().clone();
-        let panel_padding_y = d.table_insert_stepper_gap + 4.0;
-        let dialog_min_height = (
-            // GPUI 的自动高度不会稳定计入横向操作行中的定高按钮，因此由组成 token
-            // 明确给出单行文案下的固有高度；较长本地化文案仍可继续撑高面板。
-            panel_padding_y * 2.0
-                + 22.0
-                + t.dialog_body_size * t.text_line_height
-                + d.table_insert_stepper_button_size * 2.0
-                + d.table_insert_stepper_gap * 3.0
-                + d.table_insert_stepper_gap * 0.5
-                + d.dialog_button_height
-                + panel_padding_y
-                // GPUI 的横向定高按钮不完整参与父级固有高度；除面板底部 padding 外，
-                // 还要补足紧凑操作行和设备像素取整预算，避免 2× Runner 裁掉按钮。
-                + d.table_insert_stepper_gap * 4.0
-                + d.dialog_border_width * 6.0
-        )
-        .ceil();
 
         let stepper =
             |id_prefix: &'static str,
@@ -150,51 +133,40 @@ impl Editor {
                                 d.dialog_width.min(d.table_insert_dialog_width),
                                 theme,
                             )
-                            .min_h(px(dialog_min_height))
-                            // 紧凑弹窗在低高度窗口中仍需为操作按钮保留完整底部内边距。
-                            .py(px(panel_padding_y))
-                            .gap(px(d.table_insert_stepper_gap * 0.5))
                             .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                                 cx.stop_propagation()
                             })
                             .child(
-                                // 短表单必须参与弹窗固有高度计算；共享滚动容器的 flex 布局会裁掉末行。
-                                div()
-                                    .id("table-insert-dialog-content")
-                                    .debug_selector(|| "table-insert-dialog-content".to_owned())
-                                    .w_full()
-                                    .flex_none()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(d.table_insert_stepper_gap))
-                                    .child(dialog_title_with_icon(
-                                        "table-insert-title",
-                                        s.table_insert_title.clone(),
-                                        DialogTitleIcon::Table,
-                                        theme,
-                                    ))
-                                    .child(dialog_body(s.table_insert_description.clone(), theme))
-                                    .child(stepper(
-                                        "table-body-rows",
-                                        s.table_insert_body_rows.clone(),
-                                        dialog.body_rows,
-                                        Self::on_table_rows_decrement,
-                                        Self::on_table_rows_increment,
-                                    ))
-                                    .child(stepper(
-                                        "table-columns",
-                                        s.table_insert_columns.clone(),
-                                        dialog.columns,
-                                        Self::on_table_columns_decrement,
-                                        Self::on_table_columns_increment,
-                                    )),
+                                crate::editor::render::dialog_content(
+                                    "table-insert-dialog-content",
+                                    theme,
+                                )
+                                .child(dialog_title_with_icon(
+                                    "table-insert-title",
+                                    s.table_insert_title.clone(),
+                                    DialogTitleIcon::Table,
+                                    theme,
+                                ))
+                                .child(dialog_body(s.table_insert_description.clone(), theme))
+                                .child(stepper(
+                                    "table-body-rows",
+                                    s.table_insert_body_rows.clone(),
+                                    dialog.body_rows,
+                                    Self::on_table_rows_decrement,
+                                    Self::on_table_rows_increment,
+                                ))
+                                .child(stepper(
+                                    "table-columns",
+                                    s.table_insert_columns.clone(),
+                                    dialog.columns,
+                                    Self::on_table_columns_decrement,
+                                    Self::on_table_columns_increment,
+                                )),
                             )
                             .child(
-                                dialog_actions(theme)
+                                compact_dialog_actions(theme)
                                     .id("table-insert-dialog-actions")
                                     .debug_selector(|| "table-insert-dialog-actions".to_owned())
-                                    .min_h(px(d.dialog_button_height + panel_padding_y))
-                                    .pt(px(panel_padding_y))
                                     .child(
                                         dialog_button(
                                             "cancel-table-insert-dialog",

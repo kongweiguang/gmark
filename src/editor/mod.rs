@@ -258,11 +258,18 @@ pub struct Editor {
     /// tab index so a dirty pane tab can be prompted without activating or
     /// mutating another pane first.
     pane_close_target: Option<(panes::PaneId, panes::TabId)>,
-    /// Completion bridge installed on a pane canvas while Save and Close is
-    /// running.  `1` means the save completed cleanly, `2` means it was
-    /// cancelled or failed; `0` is still pending.  The bridge is shared with
-    /// the child Editor because save work completes on that entity.
-    pane_close_save_signal: Option<Arc<std::sync::atomic::AtomicU8>>,
+    /// Monotonic request generation invalidates a cancelled or superseded
+    /// pane close before any late save callback can reach the workspace.
+    pane_close_generation: u64,
+    /// One-shot completion bridge shared with the child Editor or DocumentHost
+    /// that owns the save operation.
+    pane_close_save_signal: Option<Arc<Mutex<Option<futures::channel::oneshot::Sender<u8>>>>>,
+    /// The Markdown child keeps a clone of the one-shot bridge; retain its
+    /// entity so cancellation can clear that clone before a late save result.
+    pane_close_save_markdown_editor: Option<Entity<Editor>>,
+    /// The host event subscription must outlive the asynchronous save task and
+    /// be dropped immediately when the request is cancelled or settled.
+    pane_close_save_subscription: Option<Subscription>,
     pane_close_save_task: Option<Task<()>>,
     pane_canvas_entities: Rc<
         RefCell<

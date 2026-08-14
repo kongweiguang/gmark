@@ -3,8 +3,11 @@
 //! Transactional workspace rename and move planning.
 
 use std::fs;
-use std::io::{self, Write as _};
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt as _;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag};
@@ -114,7 +117,6 @@ pub(super) fn plan_workspace_create(
         initial_bytes: Vec::new(),
     })
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct WorkspaceDeletePlan {
     pub(super) root: PathBuf,
@@ -124,15 +126,16 @@ pub(super) struct WorkspaceDeletePlan {
 }
 
 impl WorkspaceDeletePlan {
+    /// 通过可返回错误的系统回收站适配器执行删除，避免平台库 panic 终止后台任务。
     pub(super) fn execute(&self) -> Result<()> {
-        self.execute_with(|path| trash::delete(path).map_err(Into::into))
+        self.execute_with(move_path_to_trash)
     }
 
     fn execute_with(&self, delete: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
         let root = dunce::canonicalize(&self.root).with_context(|| {
             format!("failed to resolve workspace root '{}'", self.root.display())
         })?;
-        let path = dunce::canonicalize(&self.path).with_context(|| {
+        let path = canonicalize_parent_preserving_leaf(&self.path).with_context(|| {
             format!(
                 "failed to resolve deletion target '{}'",
                 self.path.display()
@@ -150,13 +153,119 @@ impl WorkspaceDeletePlan {
         delete(&path).with_context(|| format!("failed to move '{}' to the trash", path.display()))
     }
 }
+/// 只规范化删除目标的父目录，保留最后一个组件以便 `symlink_metadata` 检查链接自身。
+///
+/// 完整 `canonicalize` 会跟随最后一级符号链接；删除规划若先做这一步，就可能把链接目标
+/// 当成普通文件并交给回收站。只有父目录需要解析来验证工作区边界，最后一级必须保持原身份。
+fn canonicalize_parent_preserving_leaf(path: &Path) -> Result<PathBuf> {
+    let Some(file_name) = path.file_name() else {
+        return dunce::canonicalize(path)
+            .with_context(|| format!("failed to resolve deletion target '{}'", path.display()));
+    };
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = dunce::canonicalize(parent)
+        .with_context(|| format!("failed to resolve deletion parent '{}'", parent.display()))?;
+    Ok(parent.join(file_name))
+}
+
+#[cfg(target_os = "windows")]
+struct ComInitializationGuard {
+    must_uninitialize: bool,
+}
+
+#[cfg(target_os = "windows")]
+// reason: the Drop implementation must pair successful COM initialization; remove when the Shell adapter owns apartment cleanup.
+#[allow(unsafe_code)]
+impl Drop for ComInitializationGuard {
+    fn drop(&mut self) {
+        if self.must_uninitialize {
+            // SAFETY: This guard is dropped on the same background thread that
+            // successfully initialized COM, so the paired release is balanced.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+}
+
+/// 接受后台线程既有的 COM apartment，避免回收站实现因模式冲突 panic 并终止 Release 进程。
+#[cfg(target_os = "windows")]
+// reason: Windows COM initialization has no safe wrapper for RPC_E_CHANGED_MODE; remove when windows-rs exposes one.
+#[allow(unsafe_code)]
+fn initialize_shell_com() -> Result<ComInitializationGuard> {
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+
+    // SAFETY: Null reserved pointer and a documented COINIT flag satisfy the API contract.
+    let status = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if status.is_ok() {
+        return Ok(ComInitializationGuard {
+            must_uninitialize: true,
+        });
+    }
+    if status == RPC_E_CHANGED_MODE {
+        return Ok(ComInitializationGuard {
+            must_uninitialize: false,
+        });
+    }
+    Err(windows::core::Error::from_hresult(status).into())
+}
+
+/// 直接使用可返回错误的 Windows Shell API，避免 `trash` 内部 unwrap/panic 绕过应用错误处理。
+#[cfg(target_os = "windows")]
+// reason: IFileOperation is the only non-panicking recycle-bin path here; remove when the platform adapter guarantees Result-based deletion.
+#[allow(unsafe_code)]
+fn move_path_to_trash(path: &Path) -> Result<()> {
+    use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
+    use windows::Win32::UI::Shell::{
+        FOF_ALLOWUNDO, FOF_NO_UI, FOF_WANTNUKEWARNING, FileOperation, IFileOperation, IShellItem,
+        SHCreateItemFromParsingName,
+    };
+    use windows::core::PCWSTR;
+
+    let _com = initialize_shell_com().context("failed to initialize Windows Shell COM")?;
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    // SAFETY: COM is initialized for this thread, the class/interface IDs are supplied by
+    // windows-rs, and `wide_path` remains alive and NUL-terminated for all Shell calls.
+    unsafe {
+        let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)
+            .context("failed to create Windows file operation")?;
+        operation
+            .SetOperationFlags(FOF_NO_UI | FOF_ALLOWUNDO | FOF_WANTNUKEWARNING)
+            .context("failed to configure Windows recycle operation")?;
+        let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide_path.as_ptr()), None)
+            .context("failed to resolve recycle target")?;
+        operation
+            .DeleteItem(&item, None)
+            .context("failed to queue recycle target")?;
+        operation
+            .PerformOperations()
+            .context("Windows recycle operation failed")?;
+        if operation
+            .GetAnyOperationsAborted()
+            .context("failed to read Windows recycle result")?
+            .as_bool()
+        {
+            bail!("Windows recycle operation was cancelled");
+        }
+    }
+    Ok(())
+}
+
+/// 非 Windows 平台继续复用已验证的系统废纸篓适配器，保持原有跨平台语义。
+#[cfg(not(target_os = "windows"))]
+fn move_path_to_trash(path: &Path) -> Result<()> {
+    trash::delete(path).map_err(Into::into)
+}
 
 pub(super) fn plan_workspace_delete(root: &Path, path: &Path) -> Result<WorkspaceDeletePlan> {
     let workspace_path = path.to_path_buf();
     let root = dunce::canonicalize(root)
         .with_context(|| format!("failed to resolve workspace root '{}'", root.display()))?;
-    let path = dunce::canonicalize(path)
-        .with_context(|| format!("failed to resolve deletion target '{}'", path.display()))?;
+    let path = canonicalize_parent_preserving_leaf(path)?;
     ensure_within_root(&root, &path, "deletion target")?;
     if path == root {
         bail!("the workspace root cannot be deleted");
@@ -371,10 +480,6 @@ pub(super) fn map_moved_path(path: &Path, source: &Path, destination: &Path) -> 
     path.strip_prefix(source)
         .map(|suffix| destination.join(suffix))
         .unwrap_or_else(|_| path.to_path_buf())
-}
-
-pub(super) fn canonicalize_workspace_path(path: &Path) -> io::Result<PathBuf> {
-    dunce::canonicalize(path)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -55,6 +55,8 @@ pub(super) enum ProbeSlotState {
     Opening,
     Ready(OpenProbe),
     Failed(String),
+    /// The owner may still finish, but no later generation may reuse its result.
+    Abandoned,
 }
 
 pub(super) struct ProbeSlot {

@@ -2,7 +2,52 @@
 
 use super::*;
 
+const MAX_PASTE_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+
+/// 用 checked 减加估算替换选区后的粘贴结果，防止异常范围或长度绕过 64 MiB 门禁。
+fn checked_paste_output_len(
+    source_len: usize,
+    selected_range: &std::ops::Range<usize>,
+    text_len: usize,
+) -> Option<usize> {
+    if selected_range.end > source_len {
+        return None;
+    }
+    let selected_len = selected_range.end.checked_sub(selected_range.start)?;
+    source_len.checked_sub(selected_len)?.checked_add(text_len)
+}
+
 impl Block {
+    /// 在触发资源识别、换行拆分或源码事务前拒绝超出上限的粘贴，避免大剪贴板内容
+    /// 先复制多份再阻塞 GPUI；弹窗让拒绝原因对用户可见且不会改变当前选择。
+    fn show_paste_limit_error(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let strings = cx.global::<crate::i18n::I18nManager>().strings().clone();
+        let buttons = [strings.info_dialog_ok.as_str()];
+        let _ = window.prompt(
+            PromptLevel::Critical,
+            &strings.image_paste_failed_title,
+            Some("粘贴内容超过 64 MiB 安全限制"),
+            &buttons,
+            cx,
+        );
+    }
+
+    /// 用 checked 算术估算当前块替换选区后的大小，使粘贴上限同时约束输入和结果。
+    fn paste_output_exceeds_limit(&self, text: &str) -> bool {
+        checked_paste_output_len(self.display_text().len(), &self.selected_range, text.len())
+            .is_none_or(|output| output > MAX_PASTE_OUTPUT_BYTES)
+    }
+
+    /// 在复制图片进入资源物化前检查原始字节，避免解码和编码阶段放大超限剪贴板。
+    fn clipboard_image_exceeds_limit(item: &ClipboardItem) -> bool {
+        item.entries().iter().any(|entry| {
+            matches!(
+                entry,
+                ClipboardEntry::Image(image) if image.bytes().len() > MAX_PASTE_OUTPUT_BYTES
+            )
+        })
+    }
+
     pub(crate) fn on_delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         if self.kind() == BlockKind::MermaidBlock
             && self.mermaid_view_mode() == MermaidViewMode::Preview
@@ -474,12 +519,17 @@ impl Block {
         }
     }
 
+    /// 在识别图片路径或派发结构化粘贴前先验证最终块大小，避免超限输入触发多份中间拷贝。
     pub(crate) fn on_paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if self.kind().is_separator() && !self.uses_raw_text_editing() {
             return;
         }
 
         if let Some(item) = cx.read_from_clipboard() {
+            if Self::clipboard_image_exceeds_limit(&item) {
+                self.show_paste_limit_error(window, cx);
+                return;
+            }
             if let Some(source) = Self::pasted_image_source_from_clipboard(&item) {
                 let (leading, trailing) = self.paste_resource_split();
                 cx.emit(BlockEvent::RequestPasteImage {
@@ -493,6 +543,10 @@ impl Block {
             let Some(text) = item.text() else {
                 return;
             };
+            if self.paste_output_exceeds_limit(&text) {
+                self.show_paste_limit_error(window, cx);
+                return;
+            }
             if let Some(source) = Self::pasted_image_source_from_text(&text) {
                 let (leading, trailing) = self.paste_resource_split();
                 cx.emit(BlockEvent::RequestPasteImage {
@@ -507,6 +561,7 @@ impl Block {
         }
     }
 
+    /// 纯文本入口复用同一结果上限，保证绕过富文本识别也不会部分写入超大内容。
     pub(crate) fn on_paste_as_plain_text(
         &mut self,
         _: &PasteAsPlainText,
@@ -519,10 +574,19 @@ impl Block {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
+        if self.paste_output_exceeds_limit(&text) {
+            self.show_paste_limit_error(window, cx);
+            return;
+        }
         self.paste_text(text, window, cx);
     }
 
+    /// 所有内部粘贴调用再次校验结果长度，防止未来新增调用方绕过剪贴板入口门禁。
     fn paste_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.paste_output_exceeds_limit(&text) {
+            self.show_paste_limit_error(window, cx);
+            return;
+        }
         // Only rendered rich-text blocks apply paste correction. Raw/code
         // contexts preserve bytes, and table cells flatten newlines so the
         // surrounding table structure is not accidentally split.
@@ -652,3 +716,7 @@ impl Block {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/editor/paste_limits.rs"]
+mod tests;

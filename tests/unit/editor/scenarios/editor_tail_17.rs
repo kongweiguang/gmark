@@ -175,6 +175,26 @@ async fn mermaid_overlay_is_read_only_and_escape_restores_block_focus(cx: &mut T
     });
     assert!(visual.debug_bounds("diagram-overlay-scale").is_some());
     assert!(visual.debug_bounds("diagram-overlay-close").is_some());
+    let panel = visual
+        .debug_bounds("diagram-overlay-panel")
+        .expect("diagram overlay panel");
+    let scale = visual
+        .debug_bounds("diagram-overlay-scale")
+        .expect("diagram scale control");
+    let close = visual
+        .debug_bounds("diagram-overlay-close")
+        .expect("diagram close control");
+    let button_height = crate::theme::Theme::default_theme()
+        .dimensions
+        .dialog_button_height;
+    assert_eq!(f32::from(scale.size.height), button_height);
+    assert_eq!(f32::from(close.size.height), button_height);
+    assert!(scale.left() >= panel.left());
+    assert!(scale.right() <= panel.right());
+    assert!(close.left() >= panel.left());
+    assert!(close.right() <= panel.right());
+    assert!(scale.top() >= panel.top());
+    assert!(close.bottom() <= panel.bottom());
     editor.update_in(visual, |editor, window, _cx| {
         editor
             .diagram_overlay

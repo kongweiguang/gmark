@@ -9,6 +9,8 @@ use super::*;
 pub(crate) enum UpdateState {
     #[default]
     Idle,
+    /// The cache is inspected off the UI thread so a large package cannot delay startup.
+    Restoring,
     Checking {
         origin: CheckOrigin,
     },
@@ -32,6 +34,16 @@ pub(crate) enum UpdateState {
         release: UpdateRelease,
     },
     Ready {
+        release: UpdateRelease,
+        artifact_path: PathBuf,
+    },
+    /// Velopack is importing the verified package into its own cache off the UI thread.
+    StagingInstall {
+        release: UpdateRelease,
+        artifact_path: PathBuf,
+    },
+    /// The package is locally staged; only the ordinary quit approval may hand it off.
+    Staged {
         release: UpdateRelease,
         artifact_path: PathBuf,
     },
@@ -63,11 +75,15 @@ impl UpdateState {
             | Self::Downloading { release, .. }
             | Self::Paused { release, .. }
             | Self::Verifying { release }
-            | Self::Ready { release, .. } => Some(release),
+            | Self::Ready { release, .. }
+            | Self::StagingInstall { release, .. }
+            | Self::Staged { release, .. } => Some(release),
             Self::Failed { release, .. } => release.as_ref(),
-            Self::Idle | Self::Checking { .. } | Self::UpToDate { .. } | Self::Succeeded { .. } => {
-                None
-            }
+            Self::Idle
+            | Self::Restoring
+            | Self::Checking { .. }
+            | Self::UpToDate { .. }
+            | Self::Succeeded { .. } => None,
         }
     }
 
@@ -76,7 +92,12 @@ impl UpdateState {
         match command {
             UpdateCommand::Check => !matches!(
                 self,
-                Self::Checking { .. } | Self::Downloading { .. } | Self::Verifying { .. }
+                Self::Restoring
+                    | Self::Checking { .. }
+                    | Self::Downloading { .. }
+                    | Self::Verifying { .. }
+                    | Self::StagingInstall { .. }
+                    | Self::Staged { .. }
             ),
             UpdateCommand::Download => matches!(self, Self::Available(_)),
             UpdateCommand::Pause => matches!(self, Self::Downloading { .. }),
@@ -88,10 +109,16 @@ impl UpdateState {
                     ..
                 }
             ),
-            UpdateCommand::InstallAndRestart => matches!(self, Self::Ready { .. }),
-            UpdateCommand::Dismiss => {
-                !matches!(self, Self::Downloading { .. } | Self::Verifying { .. })
+            UpdateCommand::InstallAndRestart => {
+                matches!(self, Self::Ready { .. } | Self::Staged { .. })
             }
+            UpdateCommand::Dismiss => !matches!(
+                self,
+                Self::Restoring
+                    | Self::Downloading { .. }
+                    | Self::Verifying { .. }
+                    | Self::StagingInstall { .. }
+            ),
         }
     }
 }

@@ -266,12 +266,24 @@ impl Editor {
             .into_any_element()
     }
 
+    /// 根据终态快照渲染文件树，确保失败与进行中状态不需要在渲染期间修补模型。
     pub(super) fn render_workspace_files_tree(
         &self,
         theme: &Theme,
         strings: &I18nStrings,
         editor: &WeakEntity<Editor>,
     ) -> AnyElement {
+        if let WorkspaceScanState::Failed { error, .. } = &self.workspace.file_scan_state {
+            return self.render_workspace_empty_state(
+                "workspace-files-error",
+                FILES_TAB_ICON,
+                &strings.workspace_scan_failed_title,
+                error,
+                None,
+                theme,
+            );
+        }
+
         if self.workspace.root.is_none() {
             return self.render_workspace_empty_state(
                 "workspace-files-empty",
@@ -283,19 +295,11 @@ impl Editor {
             );
         }
 
-        if let Some(error) = self.workspace.file_error.as_ref() {
-            return self.render_workspace_empty_state(
-                "workspace-files-error",
-                FILES_TAB_ICON,
-                &strings.workspace_scan_failed_title,
-                error,
-                None,
-                theme,
-            );
-        }
-
         let Some(root) = self.workspace.file_tree.as_ref() else {
-            if self.workspace.file_scanning {
+            if matches!(
+                self.workspace.file_scan_state,
+                WorkspaceScanState::Scanning { .. }
+            ) {
                 return self.render_workspace_empty_state(
                     "workspace-files-scanning",
                     FILES_TAB_ICON,

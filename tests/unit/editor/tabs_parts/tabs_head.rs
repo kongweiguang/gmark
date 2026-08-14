@@ -325,11 +325,14 @@ async fn clean_close_and_reopen_restores_document(cx: &mut gpui::TestAppContext)
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
-            assert_eq!(editor.tabs.records.len(), 2);
-            assert_eq!(editor.tabs.active, 1);
-            assert_eq!(editor.source_document.text(), "updated");
-            assert!(editor.tabs.closed.is_empty());
         });
+    });
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, _| {
+        assert_eq!(editor.tabs.records.len(), 2);
+        assert_eq!(editor.tabs.active, 1);
+        assert_eq!(editor.source_document.text(), "updated");
+        assert!(editor.tabs.closed.is_empty());
     });
 }
 
@@ -396,9 +399,12 @@ async fn recovery_closed_tab_reopens_from_journal_without_body_cache(
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
-            assert_eq!(editor.source_document.text(), "journal body");
-            assert!(editor.tabs.closed.is_empty());
         });
+    });
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, _| {
+        assert_eq!(editor.source_document.text(), "journal body");
+        assert!(editor.tabs.closed.is_empty());
     });
 }
 
@@ -415,9 +421,104 @@ async fn untitled_closed_tab_without_recovery_fails_closed(cx: &mut gpui::TestAp
     visual.update(|window, cx| {
         editor.update(cx, |editor, cx| {
             editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
-            assert_eq!(editor.source_document.text(), "");
-            assert!(editor.tabs.closed.is_empty());
         });
+    });
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, _| {
+        assert_eq!(editor.source_document.text(), "");
+        assert!(editor.tabs.closed.is_empty());
+    });
+}
+
+#[gpui::test]
+async fn reopen_preparation_keeps_editor_heartbeat_responsive(cx: &mut gpui::TestAppContext) {
+    init_test_app(cx);
+    super::set_reopen_test_delay_ms(500);
+    let (editor, visual) = cx.add_window_view(|_window, cx| {
+        super::Editor::from_markdown(cx, "first".to_owned(), Some(PathBuf::from("first.md")))
+    });
+    editor.update(visual, |editor, cx| {
+        add_inactive_tab(editor, "second", "second.md");
+        editor.request_close_tab_index(0, cx);
+        assert_eq!(editor.tabs.closed.len(), 1);
+    });
+
+    let started = std::time::Instant::now();
+    visual.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
+            assert!(editor.tabs.reopen_task.is_some());
+            assert!(started.elapsed() < Duration::from_millis(200));
+            editor.set_document_dirty_for_test(true);
+        });
+    });
+    assert!(editor.read_with(visual, |editor, _| editor.document_dirty));
+
+    visual.run_until_parked();
+    super::set_reopen_test_delay_ms(0);
+}
+
+#[gpui::test]
+async fn late_reopen_result_is_rejected_after_switching_tabs(cx: &mut gpui::TestAppContext) {
+    init_test_app(cx);
+    super::set_reopen_test_delay_ms(120);
+    let (editor, visual) = cx.add_window_view(|_window, cx| {
+        super::Editor::from_markdown(cx, "first".to_owned(), Some(PathBuf::from("first.md")))
+    });
+    editor.update(visual, |editor, cx| {
+        add_inactive_tab(editor, "second", "second.md");
+        editor.request_close_tab_index(0, cx);
+        add_inactive_tab(editor, "third", "third.md");
+        assert_eq!(editor.source_document.text(), "second");
+    });
+
+    visual.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
+            assert!(editor.switch_to_tab_index(1, cx));
+            assert_eq!(editor.source_document.text(), "third");
+        });
+    });
+    visual.run_until_parked();
+    super::set_reopen_test_delay_ms(0);
+
+    editor.read_with(visual, |editor, _| {
+        assert_eq!(editor.tabs.records.len(), 2);
+        assert_eq!(editor.tabs.active, 1);
+        assert_eq!(editor.source_document.text(), "third");
+        assert_eq!(editor.tabs.closed.len(), 1);
+        assert!(editor.tabs.reopen_task.is_none());
+    });
+}
+
+#[gpui::test]
+async fn failed_reopen_restores_closed_history_and_keeps_ui_available(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test_app(cx);
+    let tempdir = tempfile::tempdir().expect("reopen failure fixture");
+    let path = tempdir.path().join("gone.md");
+    std::fs::write(&path, "closed").expect("write reopen failure fixture");
+    let (editor, visual) = cx.add_window_view(|_window, cx| {
+        super::Editor::from_markdown(cx, "closed".to_owned(), Some(path.clone()))
+    });
+    editor.update(visual, |editor, cx| {
+        editor.request_close_tab_index(0, cx);
+        assert_eq!(editor.tabs.closed.len(), 1);
+    });
+    std::fs::remove_file(&path).expect("remove reopen failure fixture");
+
+    visual.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.on_reopen_closed_tab_action(&crate::components::ReopenClosedTab, window, cx);
+        });
+    });
+    visual.run_until_parked();
+
+    editor.read_with(visual, |editor, _| {
+        assert_eq!(editor.source_document.text(), "");
+        assert_eq!(editor.tabs.closed.len(), 1);
+        assert!(editor.tabs.reopen_task.is_none());
     });
 }
 

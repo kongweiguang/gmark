@@ -10,7 +10,7 @@ impl Block {
     pub(super) fn render_html_block(
         &mut self,
         focused_base: Stateful<Div>,
-        text_size: f32,
+        _text_size: f32,
         _is_placeholder: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -36,7 +36,7 @@ impl Block {
                 .debug_selector(|| "rendered-html-surface".to_owned())
                 .w_full()
                 .min_w(px(0.0))
-                .text_size(px(text_size))
+                .text_size(px(_text_size))
                 .text_color(c.text_default)
                 .line_height(rems(theme.typography.text_line_height))
                 .child(self.render_html_document(&html, theme, cx));

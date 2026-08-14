@@ -95,6 +95,9 @@ async fn json_graph_edit_writes_back_to_source_without_leaving_preview(cx: &mut 
         "the node details action must open graph editing"
     );
     assert!(visual.debug_bounds("json-graph-edit-panel").is_some());
+    let panel = visual
+        .debug_bounds("json-graph-edit-panel")
+        .expect("JSON graph edit panel");
     let input = large_view.read_with(visual, |view, _cx| view.json_graph_edit_input_for_test());
     input.update(visual, |block, cx| {
         let len = block.display_text().len();
@@ -104,6 +107,13 @@ async fn json_graph_edit_writes_back_to_source_without_leaving_preview(cx: &mut 
     let save = visual
         .debug_bounds("json-graph-edit-save")
         .expect("graph edit save button");
+    let button_height = crate::theme::Theme::default_theme()
+        .dimensions
+        .dialog_button_height;
+    assert_eq!(f32::from(save.size.height), button_height);
+    assert!(save.left() >= panel.left());
+    assert!(save.right() <= panel.right());
+    assert!(save.bottom() <= panel.bottom());
     visual.simulate_click(save.center(), Modifiers::default());
     visual.executor().advance_clock(Duration::from_millis(300));
     visual.run_until_parked();

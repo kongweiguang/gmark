@@ -10,6 +10,25 @@ fn automatic_check_is_due_without_a_success_marker() {
 }
 
 #[test]
+/// Keep cache restoration out of construction so a large stale package cannot block the first UI frame.
+fn startup_defers_cache_restore_to_the_background_worker() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("v9.9.9")).unwrap();
+    std::fs::write(
+        root.path().join("v9.9.9").join("artifact.ready"),
+        vec![0_u8; 1024 * 1024],
+    )
+    .unwrap();
+
+    // The constructor must publish immediately even when a stale cache contains a large file;
+    // the background restore is the only place allowed to inspect and hash that payload.
+    let service = UpdateService::new(root.path().to_path_buf(), true);
+    assert!(matches!(service.state, UpdateState::Restoring));
+    assert!(!service.state.accepts(UpdateCommand::Check));
+    assert!(!service.state.accepts(UpdateCommand::Dismiss));
+}
+
+#[test]
 fn updater_root_creation_does_not_follow_a_file_component() {
     let root = tempfile::tempdir().unwrap();
     let blocked = root.path().join("blocked");
@@ -122,6 +141,137 @@ fn busy_states_cannot_be_dismissed_or_restarted() {
             release: release.clone(),
         }
         .accepts(UpdateCommand::Dismiss)
+    );
+}
+
+#[test]
+/// Keep local staging, retry, and the second quit approval as distinct command boundaries.
+fn staging_states_define_repeat_click_and_quit_boundaries() {
+    let release = release_fixture();
+    let staging = UpdateState::StagingInstall {
+        release: release.clone(),
+        artifact_path: PathBuf::from("artifact.ready"),
+    };
+    assert!(!staging.accepts(UpdateCommand::InstallAndRestart));
+    assert!(!staging.accepts(UpdateCommand::Dismiss));
+
+    let staged = UpdateState::Staged {
+        release: release.clone(),
+        artifact_path: PathBuf::from("artifact.ready"),
+    };
+    // A repeated click reuses the completed local staging and only starts a fresh quit request.
+    assert!(staged.accepts(UpdateCommand::InstallAndRestart));
+    assert!(staged.accepts(UpdateCommand::Dismiss));
+    assert!(!staged.accepts(UpdateCommand::Check));
+
+    let failed = UpdateState::Failed {
+        release: Some(release),
+        message: "staging failed".to_owned(),
+        retryable: true,
+    };
+    assert!(failed.accepts(UpdateCommand::Retry));
+}
+
+#[gpui::test]
+/// A Velopack staging error must stay inside the updater panel and leave a retryable release.
+async fn staging_failure_does_not_start_quit_or_lose_the_release(cx: &mut gpui::TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let artifact = root.path().join("artifact.ready");
+    std::fs::write(&artifact, b"invalid platform fixture").unwrap();
+    let entity = cx.new(|_| UpdateService::new(root.path().to_path_buf(), true));
+    entity.update(cx, |service, cx| {
+        service.state = UpdateState::Ready {
+            release: release_fixture(),
+            artifact_path: artifact.clone(),
+        };
+        service.stage_install(cx);
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        cx.run_until_parked();
+        if cx.update(|cx| entity.read(cx).state.accepts(UpdateCommand::Retry)) {
+            break;
+        }
+        // Velopack staging runs on an OS thread, so a parked GPUI executor does
+        // not mean that worker received a timeslice during a parallel test run.
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    entity.read_with(cx, |service, _cx| {
+        assert!(matches!(
+            &service.state,
+            UpdateState::Failed {
+                release: Some(_),
+                retryable: true,
+                ..
+            }
+        ));
+    });
+    assert_eq!(
+        cx.update(|cx| crate::app_menu::QuitCoordinator::phase(cx)),
+        crate::app_menu::QuitPhase::Idle
+    );
+}
+
+#[gpui::test]
+/// Cancelling an in-flight copy must invalidate its generation and preserve the verified source.
+async fn cancelling_staging_restores_ready_for_retry(cx: &mut gpui::TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let artifact = root.path().join("artifact.ready");
+    let entity = cx.new(|_| UpdateService::new(root.path().to_path_buf(), true));
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    entity.update(cx, |service, cx| {
+        let release = release_fixture();
+        service.state = UpdateState::StagingInstall {
+            release: release.clone(),
+            artifact_path: artifact.clone(),
+        };
+        service.staging_cancel = Some(cancel.clone());
+        service.cancel_staging(cx);
+    });
+
+    entity.read_with(cx, |service, _cx| {
+        assert!(matches!(service.state, UpdateState::Ready { .. }));
+        assert_eq!(
+            service
+                .ready_source
+                .as_ref()
+                .map(|(release, _)| release.version.as_str()),
+            Some("1.1.0")
+        );
+    });
+    assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+    assert!(!entity.update(cx, |service, cx| {
+        service.handoff_install_after_quit_approval(cx)
+    }));
+}
+
+#[gpui::test]
+/// A repeated click on a staged package may only create the fresh ordinary quit request.
+async fn repeated_staged_click_requests_quit_without_re_staging(cx: &mut gpui::TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let entity = cx.new(|_| UpdateService::new(root.path().to_path_buf(), true));
+    entity.update(cx, |service, cx| {
+        service.state = UpdateState::Staged {
+            release: release_fixture(),
+            artifact_path: root.path().join("artifact.ready"),
+        };
+        let generation = service.generation;
+        service.stage_install(cx);
+        assert_eq!(
+            crate::app_menu::QuitCoordinator::phase(cx),
+            crate::app_menu::QuitPhase::Scheduled
+        );
+        assert_eq!(service.generation, generation);
+        assert!(service.worker.is_none());
+    });
+
+    // The fixture deliberately omits real staged Velopack metadata, so the deferred handoff
+    // aborts safely after proving the click reached the ordinary quit coordinator.
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| crate::app_menu::QuitCoordinator::phase(cx)),
+        crate::app_menu::QuitPhase::Idle
     );
 }
 

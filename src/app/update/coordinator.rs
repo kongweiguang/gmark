@@ -53,6 +53,10 @@ impl UpdateCoordinator {
         });
         cx.set_global(Self(service.clone()));
 
+        // The first frame must not hash or clean the update cache; restoration starts only after
+        // the entity is published so its result can wake all existing windows safely.
+        service.update(cx, |service, cx| service.start_restore(cx));
+
         if let Some(transaction_dir) = relaunched_transaction {
             let result_service = service.clone();
             cx.spawn(async move |cx: &mut AsyncApp| {
@@ -108,6 +112,7 @@ impl UpdateCoordinator {
 
     pub(crate) fn accessibility_status(cx: &App) -> Option<String> {
         match Self::try_state(cx)? {
+            UpdateState::Restoring => Some("Restoring software update".to_owned()),
             UpdateState::Downloading {
                 downloaded, total, ..
             } if total > 0 => Some(format!(
@@ -115,6 +120,9 @@ impl UpdateCoordinator {
                 downloaded.saturating_mul(100) / total
             )),
             UpdateState::Verifying { .. } => Some("Verifying software update".to_owned()),
+            UpdateState::StagingInstall { .. } => {
+                Some("Preparing software update for restart".to_owned())
+            }
             _ => None,
         }
     }
@@ -178,8 +186,8 @@ impl UpdateCoordinator {
         entity.update(cx, |service, _cx| service.auto_check_enabled = enabled);
     }
 
-    /// Delegates approval to the normal quit flow so dirty windows can veto
-    /// without creating a helper transaction or consuming the ready artifact.
+    /// Starts local staging first; the normal quit flow is requested only after Velopack has
+    /// imported the package so dirty windows can veto before any external updater is launched.
     pub(crate) fn install_and_restart(cx: &mut App) {
         let Some(entity) = cx
             .try_global::<Self>()
@@ -192,15 +200,12 @@ impl UpdateCoordinator {
         }) {
             return;
         }
-        // The quit coordinator performs the normal multi-window save/discard
-        // flow first; only its approved handoff callback may create a plan.
-        let _ = crate::app_menu::request_update_quit_application(cx);
+        // Staging is local and asynchronous; only its completion starts the ordinary quit flow.
+        entity.update(cx, |service, cx| service.stage_install(cx));
     }
 
-    /// Commits the V2 helper handoff after the quit coordinator has approved
-    /// every editor window.  Keeping this narrow adapter here lets the quit
-    /// lifecycle remain independent from the update service implementation;
-    /// the service still owns plan validation and helper startup.
+    /// Commits the Velopack wait handoff after the quit coordinator has approved every editor
+    /// window; keeping this adapter narrow prevents the quit lifecycle from owning updater state.
     pub(crate) fn handoff_install_after_quit_approval(cx: &mut App) -> bool {
         let Some(entity) = cx
             .try_global::<Self>()
@@ -208,12 +213,19 @@ impl UpdateCoordinator {
         else {
             return false;
         };
-        entity.update(cx, |service, cx| service.prepare_install(cx))
+        entity.update(cx, |service, cx| {
+            service.handoff_install_after_quit_approval(cx)
+        })
     }
 
-    /// 保留旧编辑器回调的兼容入口；退出意图本身由 QuitCoordinator 撤销，
-    /// 因而这里不再维护或取消 updater 镜像事务。
+    /// 取消仍在后台进行的本地 staging；已 Staged 的包保留，供下一次退出审批重试。
     pub(crate) fn cancel_pending_install(cx: &mut App) {
-        let _ = cx;
+        let Some(entity) = cx
+            .try_global::<Self>()
+            .map(|coordinator| coordinator.0.clone())
+        else {
+            return;
+        };
+        entity.update(cx, |service, cx| service.cancel_staging(cx));
     }
 }

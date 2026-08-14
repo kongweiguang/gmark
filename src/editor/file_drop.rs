@@ -8,10 +8,217 @@ use anyhow::Result;
 use gpui::*;
 
 use super::{DocumentKind, Editor, ViewMode};
-use crate::components::{BlockEvent, PastedImageSource};
 use crate::i18n::I18nManager;
+use crate::preferences::ResourceInsertBehavior;
+
+#[path = "file_drop_parts/materialize.rs"]
+mod materialize;
+#[path = "file_drop_parts/target.rs"]
+mod target;
+
+use materialize::{
+    DroppedPathKind, MAX_RESOURCE_BYTES, MAX_RESOURCE_NAME_ATTEMPTS,
+    bounded_resource_candidate_path, checked_resource_input_size, checked_resource_output_size,
+    classify_dropped_paths, copy_resource_without_overwrite,
+};
+pub(in crate::editor) use materialize::{
+    ResourceCleanupGuard, ResourceDropTarget, resource_drop_target_is_current,
+    resource_materialization_is_current, resource_materialization_is_current_for_tab,
+    resource_materialization_is_missing,
+};
+use target::DroppedResourceTarget;
 
 impl Editor {
+    /// 拖放入口先捕获块拆分和文档 gate，再让后台完成 materialize，防止等待文件系统时
+    /// 改动已落后的选择；完成回调只在同一 tab、block、selection、revision/epoch 下提交。
+    fn insert_dropped_resource(
+        &mut self,
+        path: PathBuf,
+        target: DroppedResourceTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let DroppedResourceTarget {
+            block,
+            leading,
+            trailing,
+            document_path,
+            behavior,
+            fingerprint,
+        } = target;
+        let weak_editor = cx.entity().downgrade();
+        let expected_fingerprint = fingerprint.clone();
+        let error_block = block.clone();
+
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    Self::materialize_resource_with_limits(
+                        "",
+                        &path,
+                        document_path.as_deref(),
+                        behavior,
+                        None,
+                    )
+                })
+                .await;
+            match result {
+                Err(error) => {
+                    let _ = weak_editor.update(cx, |editor, cx| {
+                        if editor
+                            .current_dropped_resource_target(&error_block, cx)
+                            .is_some_and(|current| {
+                                resource_drop_target_is_current(&expected_fingerprint, &current)
+                            })
+                        {
+                            editor.show_image_paste_error(error, cx);
+                        }
+                    });
+                }
+                Ok((markdown, materialized)) => {
+                    // 先把 guard 放进 closure 的捕获环境；WeakEntity 未执行回调时，closure
+                    // 仍会被销毁并回收新副本，避免实体消失留下孤立文件。
+                    let mut cleanup = ResourceCleanupGuard::new(materialized);
+                    let update_result = weak_editor.update(cx, move |editor, cx| {
+                        let Some(current) = editor.current_dropped_resource_target(&block, cx)
+                        else {
+                            return;
+                        };
+                        if !resource_drop_target_is_current(&fingerprint, &current) {
+                            return;
+                        }
+                        editor.commit_dropped_resource(
+                            block,
+                            &fingerprint,
+                            &leading,
+                            markdown,
+                            &mut cleanup,
+                            &trailing,
+                            cx,
+                        );
+                    });
+                    let _ = update_result;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 在 gate 通过后复用现有图片块插入语义；任何未提交分支只清理由本任务创建的副本。
+    fn commit_dropped_resource(
+        &mut self,
+        block: Entity<super::Block>,
+        fingerprint: &ResourceDropTarget,
+        leading: &crate::components::InlineTextTree,
+        markdown: String,
+        cleanup: &mut ResourceCleanupGuard,
+        trailing: &crate::components::InlineTextTree,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(current) = self.current_dropped_resource_target(&block, cx) else {
+            return;
+        };
+        if !resource_drop_target_is_current(fingerprint, &current) {
+            return;
+        }
+        if self.replace_cross_block_selection_with_text(
+            &markdown,
+            None,
+            false,
+            crate::components::UndoCaptureKind::NonCoalescible,
+            cx,
+        ) {
+            cleanup.disarm();
+            return;
+        }
+        let Some(block) = self.focusable_entity_by_id(block.entity_id()) else {
+            return;
+        };
+        self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+        let can_insert_image_block = self.view_mode == ViewMode::Rendered
+            && block.read(cx).kind() == crate::components::BlockKind::Paragraph
+            && self.table_cell_binding(block.entity_id()).is_none()
+            && !block.read(cx).uses_raw_text_editing();
+        if can_insert_image_block {
+            let Some(location) = self.document.find_block_location(block.entity_id()) else {
+                self.finalize_pending_undo_capture(cx);
+                return;
+            };
+            if leading.visible_len() == 0 {
+                Self::set_block_title_and_kind(
+                    &block,
+                    crate::components::BlockKind::Paragraph,
+                    crate::components::InlineTextTree::plain(markdown.clone()),
+                    markdown.len(),
+                    cx,
+                );
+                if trailing.visible_len() != 0 {
+                    let trailing_block = Self::new_block(
+                        cx,
+                        crate::components::BlockRecord::new(
+                            crate::components::BlockKind::Paragraph,
+                            trailing.clone(),
+                        ),
+                    );
+                    self.document.insert_blocks_at(
+                        location.parent,
+                        location.index + 1,
+                        vec![trailing_block],
+                        cx,
+                    );
+                }
+                self.focus_block(block.entity_id());
+                self.rebuild_image_runtimes(cx);
+            } else {
+                Self::set_block_title_and_kind(
+                    &block,
+                    crate::components::BlockKind::Paragraph,
+                    leading.clone(),
+                    leading.visible_len(),
+                    cx,
+                );
+                let image_block =
+                    Self::new_block(cx, crate::components::BlockRecord::paragraph(markdown));
+                let mut inserted = vec![image_block.clone()];
+                if trailing.visible_len() != 0 {
+                    inserted.push(Self::new_block(
+                        cx,
+                        crate::components::BlockRecord::new(
+                            crate::components::BlockKind::Paragraph,
+                            trailing.clone(),
+                        ),
+                    ));
+                }
+                self.document
+                    .insert_blocks_at(location.parent, location.index + 1, inserted, cx);
+                self.focus_block(image_block.entity_id());
+                self.rebuild_image_runtimes(cx);
+            }
+        } else {
+            let (kind, title, cursor) = block.read_with(cx, |block, _cx| {
+                let mut title = leading.clone();
+                let inserted = if block.uses_raw_text_editing() || block.kind().is_code_block() {
+                    crate::components::InlineTextTree::plain(markdown.clone())
+                } else {
+                    crate::components::InlineTextTree::from_markdown(&markdown)
+                };
+                title.append_tree(inserted);
+                let cursor = title.visible_len();
+                title.append_tree(trailing.clone());
+                (block.kind(), title, cursor)
+            });
+            Self::set_block_title_and_kind(&block, kind, title, cursor, cx);
+            if let Some(binding) = self.table_cell_binding(block.entity_id()) {
+                self.sync_table_record_from_runtime(&binding.table_block, cx);
+            }
+            self.focus_block(block.entity_id());
+            self.rebuild_image_runtimes(cx);
+        }
+        cleanup.disarm();
+        self.mark_dirty(cx);
+        self.finalize_pending_undo_capture(cx);
+        cx.notify();
+    }
+
     pub(super) fn first_dropped_openable_path(paths: &[PathBuf]) -> Option<PathBuf> {
         paths
             .iter()
@@ -29,17 +236,46 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = Self::first_dropped_openable_path(paths.paths()) else {
-            if let Some(resource_path) = paths.paths().iter().find(|path| path.is_file()).cloned() {
-                self.insert_dropped_resource(resource_path, window, cx);
-                return;
-            }
-            let strings = cx.global::<I18nManager>().strings().clone();
-            self.show_drop_open_failed_prompt(strings.drop_no_markdown_file_message, window, cx);
-            return;
-        };
-
-        self.open_dropped_markdown_in_tab(path, cx);
+        let paths = paths.paths().to_vec();
+        let target = self.capture_dropped_resource_target(window, cx);
+        let window_handle = window.window_handle();
+        let weak_editor = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let kind = cx
+                .background_spawn(async move { classify_dropped_paths(&paths) })
+                .await;
+            let _ = cx.update_window(
+                window_handle,
+                move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                    let _ = weak_editor.update(cx, |editor, cx| match kind {
+                        DroppedPathKind::Open(path) => {
+                            editor.open_dropped_markdown_in_tab(path, cx)
+                        }
+                        DroppedPathKind::Resource(path) => {
+                            if let Some(target) = target {
+                                editor.insert_dropped_resource(path, target, cx)
+                            } else {
+                                let strings = cx.global::<I18nManager>().strings().clone();
+                                editor.show_drop_open_failed_prompt(
+                                    strings.drop_no_markdown_file_message,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                        DroppedPathKind::Invalid => {
+                            let strings = cx.global::<I18nManager>().strings().clone();
+                            editor.show_drop_open_failed_prompt(
+                                strings.drop_no_markdown_file_message,
+                                window,
+                                cx,
+                            );
+                        }
+                    });
+                },
+            );
+        })
+        .detach();
     }
 
     /// 文件拖放与工作区导航共享同一套打开策略：已打开的路径切换到原 Tab，
@@ -50,34 +286,6 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.open_path_in_tab(path, cx);
-    }
-
-    /// Routes non-Markdown file drops through the same block event used by
-    /// clipboard insertion. This keeps selection, structural insertion and
-    /// undo behavior identical across drag-and-drop and paste.
-    fn insert_dropped_resource(
-        &mut self,
-        path: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(block) = self
-            .focused_edit_target(window, cx)
-            .or_else(|| self.current_edit_target_from_state(cx))
-        else {
-            let strings = cx.global::<I18nManager>().strings().clone();
-            self.show_drop_open_failed_prompt(strings.drop_no_markdown_file_message, window, cx);
-            return;
-        };
-
-        block.update(cx, move |block, cx| {
-            let (leading, trailing) = block.paste_resource_split();
-            cx.emit(BlockEvent::RequestPasteImage {
-                leading,
-                source: PastedImageSource::LocalResource(path),
-                trailing,
-            });
-        });
     }
 
     #[cfg(test)]
@@ -583,3 +791,7 @@ impl Editor {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/editor/resource_materialize_limits.rs"]
+mod tests;

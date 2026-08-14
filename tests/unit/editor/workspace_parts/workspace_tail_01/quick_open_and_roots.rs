@@ -20,6 +20,8 @@
                 editor.workspace.root = Some(root.clone());
                 editor.workspace.explicit_root = Some(root.clone());
                 editor.workspace.file_tree = Some(tree.clone());
+                editor.workspace.quick_open_paths =
+                    vec![current.clone(), root.join("nested/target.md")];
                 editor.on_quick_open_action(&crate::components::QuickOpen, window, cx);
                 let input = editor.workspace.quick_open.as_ref().unwrap().input.clone();
                 input.update(cx, |input, cx| {
@@ -78,8 +80,12 @@
         );
         assert!(input.left() >= dialog.left());
         assert!(input.right() <= dialog.right());
+        assert!(input.top() >= dialog.top());
+        assert!(input.bottom() <= dialog.bottom());
         assert!(close.left() >= dialog.left());
         assert!(close.right() <= dialog.right());
+        assert!(close.top() >= dialog.top());
+        assert!(close.bottom() <= dialog.bottom());
         visual.update(|window, _cx| assert_eq!(window.scale_factor(), 2.0));
         editor.update(visual, |editor, _cx| {
             let state = editor.workspace.quick_open.as_ref().unwrap();
@@ -135,8 +141,15 @@
 
         editor.update(visual, |editor, cx| {
             editor.set_explicit_workspace_root(workspace_root.clone(), cx);
+            assert!(editor.workspace.file_scan_task.is_some());
+            assert!(matches!(
+                editor.workspace.file_scan_state,
+                super::WorkspaceScanState::Scanning { .. }
+            ));
         });
+        visual.update(|window, cx| window.draw(cx).clear());
         visual.run_until_parked();
+        visual.update(|window, cx| window.draw(cx).clear());
         editor.update(visual, |editor, cx| {
             assert_eq!(editor.workspace.root.as_ref(), Some(&canonical_workspace));
             assert_eq!(
@@ -164,6 +177,10 @@
                 generation_before_switch
             );
             assert!(!editor.workspace.file_scanning);
+            assert!(matches!(
+                editor.workspace.file_scan_state,
+                super::WorkspaceScanState::Ready { .. }
+            ));
         });
 
         let _ = fs::remove_dir_all(base);

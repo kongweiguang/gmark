@@ -5,17 +5,18 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Duration;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use gpui::*;
 
 use super::{
     Block, BlockKind, BlockRecord, ContextMenuState, DocumentKind, Editor, UndoSelectionSnapshot,
     ViewMode,
     render::{
-        DialogButtonKind, DialogTitleIcon, dialog_actions, dialog_button, dialog_content,
-        dialog_panel, dialog_title_with_icon, modal_overlay,
+        DialogButtonKind, DialogTitleIcon, compact_dialog_actions, dialog_actions, dialog_button,
+        dialog_content, dialog_panel, dialog_title_with_icon, modal_overlay,
     },
     workspace_file_ops,
 };
@@ -59,6 +60,10 @@ const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 const QUICK_OPEN_MAX_RESULTS: usize = 100;
 const SEARCH_MAX_RESULTS: usize = 500;
 const SEARCH_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+/// Bound the amount of work a user-selected folder can cause before it reaches the UI.
+const WORKSPACE_SCAN_MAX_ENTRIES: usize = 20_000;
+/// Keep tree construction and keyboard traversal bounded even for pathological paths.
+const WORKSPACE_SCAN_MAX_DEPTH: usize = 64;
 
 fn workspace_status_row(
     id: &'static str,
@@ -148,6 +153,29 @@ struct QuickOpenState {
     running: bool,
     generation: u64,
     task: Option<Task<()>>,
+}
+
+/// 描述文件树扫描的可观察生命周期，避免渲染层用多个易失字段猜测后台任务状态。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum WorkspaceScanState {
+    #[default]
+    Idle,
+    Scanning {
+        generation: u64,
+    },
+    Ready {
+        generation: u64,
+    },
+    Failed {
+        generation: u64,
+        error: String,
+    },
+}
+
+struct WorkspaceScanResult {
+    root: PathBuf,
+    tree: WorkspaceTreeNode,
+    quick_open_paths: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,6 +299,10 @@ pub(super) struct WorkspaceState {
     file_scan_task: Option<Task<()>>,
     file_scan_generation: u64,
     file_scanning: bool,
+    file_scan_state: WorkspaceScanState,
+    file_scan_requested_root: Option<PathBuf>,
+    file_scan_cancel: Option<Arc<AtomicBool>>,
+    quick_open_paths: Vec<PathBuf>,
     outline_tree: Vec<WorkspaceTreeNode>,
     outline_source: Option<String>,
     outline_revision: Option<(u64, gmark_document::Revision)>,
@@ -333,26 +365,24 @@ mod input;
 mod navigation;
 #[path = "workspace_parts/operations.rs"]
 mod operations;
+#[path = "workspace/scanning.rs"]
+mod scanning;
 #[path = "workspace_parts/search_view.rs"]
 mod search_view;
 #[path = "workspace_parts/tooltip.rs"]
 mod tooltip;
 
+#[cfg(test)]
+use scanning::{collect_markdown_paths, scan_workspace_dir};
+use scanning::{
+    insert_workspace_directory, insert_workspace_file, remove_workspace_path, scan_workspace,
+    sort_workspace_tree, stable_node_hash,
+};
+
 use tooltip::render_workspace_tooltip;
 
 pub(super) fn is_markdown_file(path: &Path) -> bool {
     crate::document_io::is_markdown_path(path)
-}
-
-fn collect_markdown_paths(node: &WorkspaceTreeNode, paths: &mut Vec<PathBuf>) {
-    if let WorkspaceTreeKind::File(path) = &node.kind
-        && is_markdown_file(path)
-    {
-        paths.push(path.clone());
-    }
-    for child in &node.children {
-        collect_markdown_paths(child, paths);
-    }
 }
 
 fn rank_quick_open_paths(root: &Path, paths: Vec<PathBuf>, query: &str) -> Vec<QuickOpenMatch> {
@@ -436,26 +466,37 @@ pub(super) fn subsequence_score(candidate: &str, query: &str) -> Option<i64> {
 }
 
 impl WorkspaceState {
-    /// 返回文件树最近一次扫描的 Markdown 快照；补全不得在每次按键时重新遍历磁盘。
+    /// 返回扫描阶段生成的 Markdown 快照；补全不得在每次按键时重新遍历文件树。
     pub(super) fn markdown_snapshot(&self) -> Option<(PathBuf, Vec<PathBuf>)> {
-        fn collect(node: &WorkspaceTreeNode, paths: &mut Vec<PathBuf>) {
-            if let WorkspaceTreeKind::File(path) = &node.kind
-                && is_markdown_file(path)
-            {
-                paths.push(path.clone());
-            }
-            for child in &node.children {
-                collect(child, paths);
+        let root = self.root.clone()?;
+        self.file_tree.as_ref()?;
+        Some((root, self.quick_open_paths.clone()))
+    }
+
+    /// 从后台扫描交付的树快照判断路径类型，避免菜单渲染在 UNC/慢盘上同步查询元数据。
+    pub(super) fn snapshot_path_is_directory(&self, target: &Path) -> Option<bool> {
+        fn find_kind(node: &WorkspaceTreeNode, target: &Path) -> Option<bool> {
+            match &node.kind {
+                WorkspaceTreeKind::Directory(path) if path == target => Some(true),
+                WorkspaceTreeKind::File(path) if path == target => Some(false),
+                _ => node
+                    .children
+                    .iter()
+                    .find_map(|child| find_kind(child, target)),
             }
         }
 
-        let root = self.root.clone()?;
-        let tree = self.file_tree.as_ref()?;
-        let mut paths = Vec::new();
-        collect(tree, &mut paths);
-        Some((root, paths))
+        self.file_tree
+            .as_ref()
+            .and_then(|tree| find_kind(tree, target))
     }
 
+    /// 只接受已完成快照中的文件，未知路径保持不可打开，避免渲染回调触发磁盘 IO。
+    pub(super) fn snapshot_path_is_file(&self, target: &Path) -> bool {
+        matches!(self.snapshot_path_is_directory(target), Some(false))
+    }
+
+    /// 增量同步新建路径，避免小型文件操作为了 Quick Open 再次触发整棵目录扫描。
     pub(super) fn insert_created_path(
         &mut self,
         root: &Path,
@@ -470,30 +511,46 @@ impl WorkspaceState {
         };
         match kind {
             super::workspace_file_ops::WorkspaceCreateKind::File => {
-                insert_workspace_file(tree, root, path)
+                insert_workspace_file(tree, root, path);
+                if is_markdown_file(path)
+                    && !self
+                        .quick_open_paths
+                        .iter()
+                        .any(|candidate| candidate == path)
+                {
+                    self.quick_open_paths.push(path.to_path_buf());
+                }
             }
             super::workspace_file_ops::WorkspaceCreateKind::Directory => {
-                insert_workspace_directory(tree, root, path)
+                insert_workspace_directory(tree, root, path);
             }
         }
         sort_workspace_tree(tree);
         true
     }
 
+    /// 从树和 Markdown 平面索引同时移除路径，保持后续导航不读到已删除文件。
     pub(super) fn remove_path(&mut self, path: &Path) -> bool {
         let Some(tree) = self.file_tree.as_mut() else {
             return false;
         };
-        remove_workspace_path(tree, path, &self.pinned_empty_directories)
+        let removed = remove_workspace_path(tree, path, &self.pinned_empty_directories);
+        if removed {
+            self.quick_open_paths
+                .retain(|candidate| !candidate.starts_with(path));
+        }
+        removed
     }
 
     #[cfg(test)]
+    // Tests install a deterministic snapshot so link completion does not touch the filesystem.
     pub(super) fn install_markdown_snapshot_for_test(
         &mut self,
         root: PathBuf,
         paths: Vec<PathBuf>,
     ) {
         self.root = Some(root.clone());
+        self.quick_open_paths = paths.clone();
         self.file_tree = Some(WorkspaceTreeNode {
             id: root.to_string_lossy().to_string(),
             label: root
@@ -611,163 +668,7 @@ fn truncate_search_preview(line: &str) -> String {
     }
 }
 
-fn scan_workspace_dir(path: &Path) -> Result<WorkspaceTreeNode> {
-    fs::read_dir(path).with_context(|| format!("failed to read '{}'", path.display()))?;
-    let mut root = WorkspaceTreeNode {
-        id: file_node_id(path),
-        label: file_label(path),
-        kind: WorkspaceTreeKind::Directory(path.to_path_buf()),
-        children: Vec::new(),
-    };
-    let walker = ignore::WalkBuilder::new(path)
-        .hidden(false)
-        .follow_links(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .require_git(false)
-        .build();
-    for entry in walker.filter_map(|entry| entry.ok()) {
-        if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
-        insert_workspace_file(&mut root, path, entry.path());
-    }
-    sort_workspace_tree(&mut root);
-    Ok(root)
-}
-
-fn insert_workspace_file(root: &mut WorkspaceTreeNode, base: &Path, file: &Path) {
-    let Some(parent) = file.parent() else {
-        return;
-    };
-    let Ok(relative_parent) = parent.strip_prefix(base) else {
-        return;
-    };
-    let mut current = root;
-    let mut directory_path = base.to_path_buf();
-    for component in relative_parent.components() {
-        directory_path.push(component.as_os_str());
-        let index = current
-            .children
-            .iter()
-            .position(|node| {
-                matches!(&node.kind, WorkspaceTreeKind::Directory(path) if path == &directory_path)
-            })
-            .unwrap_or_else(|| {
-                current.children.push(WorkspaceTreeNode {
-                    id: file_node_id(&directory_path),
-                    label: file_label(&directory_path),
-                    kind: WorkspaceTreeKind::Directory(directory_path.clone()),
-                    children: Vec::new(),
-                });
-                current.children.len() - 1
-            });
-        current = &mut current.children[index];
-    }
-    if !current
-        .children
-        .iter()
-        .any(|node| matches!(&node.kind, WorkspaceTreeKind::File(path) if path == file))
-    {
-        current.children.push(WorkspaceTreeNode {
-            id: file_node_id(file),
-            label: file_label(file),
-            kind: WorkspaceTreeKind::File(file.to_path_buf()),
-            children: Vec::new(),
-        });
-    }
-}
-
-fn insert_workspace_directory(root: &mut WorkspaceTreeNode, base: &Path, directory: &Path) {
-    let Ok(relative) = directory.strip_prefix(base) else {
-        return;
-    };
-    let mut current = root;
-    let mut directory_path = base.to_path_buf();
-    for component in relative.components() {
-        directory_path.push(component.as_os_str());
-        let index = current
-            .children
-            .iter()
-            .position(|node| {
-                matches!(&node.kind, WorkspaceTreeKind::Directory(path) if path == &directory_path)
-            })
-            .unwrap_or_else(|| {
-                current.children.push(WorkspaceTreeNode {
-                    id: file_node_id(&directory_path),
-                    label: file_label(&directory_path),
-                    kind: WorkspaceTreeKind::Directory(directory_path.clone()),
-                    children: Vec::new(),
-                });
-                current.children.len() - 1
-            });
-        current = &mut current.children[index];
-    }
-}
-
-fn sort_workspace_tree(node: &mut WorkspaceTreeNode) {
-    node.children.sort_by(|left, right| {
-        let left_dir = matches!(left.kind, WorkspaceTreeKind::Directory(_));
-        let right_dir = matches!(right.kind, WorkspaceTreeKind::Directory(_));
-        right_dir
-            .cmp(&left_dir)
-            .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
-    });
-    for child in &mut node.children {
-        sort_workspace_tree(child);
-    }
-}
-
-fn remove_workspace_path(
-    node: &mut WorkspaceTreeNode,
-    target: &Path,
-    pinned_empty_directories: &HashSet<PathBuf>,
-) -> bool {
-    let mut removed = false;
-    node.children.retain_mut(|child| {
-        let child_path = match &child.kind {
-            WorkspaceTreeKind::Directory(path) | WorkspaceTreeKind::File(path) => {
-                Some(path.clone())
-            }
-            WorkspaceTreeKind::Heading { .. } => None,
-        };
-        if child_path.as_deref() == Some(target) {
-            removed = true;
-            return false;
-        }
-        if matches!(child.kind, WorkspaceTreeKind::Directory(_)) {
-            removed |= remove_workspace_path(child, target, pinned_empty_directories);
-            if child.children.is_empty()
-                && child_path
-                    .as_ref()
-                    .is_some_and(|path| !pinned_empty_directories.contains(path))
-            {
-                return false;
-            }
-        }
-        true
-    });
-    removed
-}
-
-fn file_label(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
-}
-
-fn file_node_id(path: &Path) -> String {
-    format!("file:{}", path.to_string_lossy())
-}
-
-fn stable_node_hash(id: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut hasher);
-    hasher.finish()
-}
-
+/// 在后台一次性建立规范化树和 Quick Open 平面索引，避免 UI 线程接触目录 IO 或递归排序。
 #[path = "workspace/layout_outline.rs"]
 mod layout_outline;
 use layout_outline::{build_outline_tree, collect_visible_keyboard_nodes, prune_outline_state};

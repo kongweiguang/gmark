@@ -29,8 +29,9 @@ pub use preferences_storage::{
     read_app_preferences_with_dirs, save_app_preferences, save_app_preferences_with_dirs,
 };
 pub use recent_files::{
-    RECENT_FILES_LIMIT, read_recent_files, read_recent_files_with_dirs, record_recent_file,
-    record_recent_file_with_dirs, remove_recent_file, remove_recent_file_with_dirs,
+    RECENT_FILES_LIMIT, RECENT_FILES_MAX_BYTES, read_recent_files, read_recent_files_with_dirs,
+    record_recent_file, record_recent_file_with_dirs, remove_recent_file,
+    remove_recent_file_with_dirs,
 };
 pub use workspace_session::{
     SessionAnchor, SessionSelection, WORKSPACE_SESSION_VERSION, WorkspaceSession,

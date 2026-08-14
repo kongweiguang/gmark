@@ -177,6 +177,76 @@ fn opening_failure_is_shared_with_waiters_and_key_can_retry() {
     drop(lease);
 }
 
+/// Prove a bounded waiter broadcasts one timeout and prevents a late owner from resurrecting it.
+#[test]
+fn opening_timeout_broadcasts_to_waiters_and_stale_owner_cannot_publish() {
+    let registry = Arc::new(DocumentRegistry::default());
+    let identity = session().file_identity.clone();
+    let key = DocumentRegistryKey::for_file(&identity);
+    let (started_sender, started_receiver) = mpsc::sync_channel(0);
+    let (release_sender, release_receiver) = mpsc::sync_channel(0);
+    let owner_registry = registry.clone();
+    let owner_key = key.clone();
+    let owner = thread::spawn(move || {
+        owner_registry.open_or_insert_leased_with_timeout(owner_key, Duration::from_secs(2), || {
+            started_sender
+                .send(())
+                .unwrap_or_else(|error| panic!("signal timeout owner: {error}"));
+            if release_receiver.recv().is_err() {
+                return Err(ControllerError::open_failed("timeout owner was cancelled"));
+            }
+            Ok(DocumentController::new(DocumentId::new(), session()))
+        })
+    });
+    started_receiver
+        .recv()
+        .unwrap_or_else(|error| panic!("wait timeout owner: {error}"));
+
+    let waiters_ready = Arc::new(Barrier::new(4));
+    let mut waiters = Vec::new();
+    for _ in 0..3 {
+        let waiter_registry = registry.clone();
+        let waiter_key = key.clone();
+        let waiter_ready = waiters_ready.clone();
+        waiters.push(thread::spawn(move || {
+            waiter_ready.wait();
+            waiter_registry.open_or_insert_leased_with_timeout(
+                waiter_key,
+                Duration::from_millis(250),
+                || {
+                    Err(ControllerError::open_failed(
+                        "unexpected timeout waiter owner",
+                    ))
+                },
+            )
+        }));
+    }
+    waiters_ready.wait();
+
+    for waiter in waiters {
+        let result = waiter
+            .join()
+            .unwrap_or_else(|_| panic!("timeout waiter panicked"));
+        assert!(matches!(result, Err(ControllerError::OpenTimedOut { .. })));
+    }
+
+    release_sender
+        .send(())
+        .unwrap_or_else(|error| panic!("release timeout owner: {error}"));
+    let owner = owner
+        .join()
+        .unwrap_or_else(|_| panic!("timeout owner panicked"));
+    assert!(matches!(owner, Err(ControllerError::OpenTimedOut { .. })));
+
+    let (_, lease, state) = registry
+        .open_or_insert_leased(key, || {
+            Ok(DocumentController::new(DocumentId::new(), session()))
+        })
+        .unwrap_or_else(|error| panic!("retry after timeout: {error}"));
+    assert_eq!(state, RegistryOpen::Inserted);
+    drop(lease);
+}
+
 #[test]
 fn snapshot_subscription_starts_after_snapshot_sequence_without_a_gap() {
     let controller = DocumentController::new(DocumentId::new(), session());

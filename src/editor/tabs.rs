@@ -7,6 +7,8 @@ use std::mem;
 use std::path::{Path, PathBuf};
 #[cfg(not(test))]
 use std::sync::OnceLock;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(not(test))]
 use std::time::Duration;
@@ -46,6 +48,15 @@ const TAB_TOOL_BUTTON_SIZE: f32 = 28.0;
 const TAB_TOOL_GROUP_PADDING: f32 = 4.0;
 const TAB_MIN_WIDTH: f32 = 96.0;
 const TAB_MAX_WIDTH: f32 = 220.0;
+
+#[cfg(test)]
+static REOPEN_TEST_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+pub(super) fn set_reopen_test_delay_ms(delay_ms: u64) {
+    // 原因：测试需要稳定制造慢 I/O 窗口，才能确定验证重开任务不会占用 GPUI Context。
+    REOPEN_TEST_DELAY_MS.store(delay_ms, Ordering::Release);
+}
 
 /// Clears a semantic color without introducing a palette-independent brand
 /// value. Transparent geometry is used only for hit areas and integrated
@@ -107,8 +118,45 @@ pub(super) fn terminal_inactive_tab_separator(
         .bg(color)
         .debug_selector(move || selector.clone())
 }
+/// Tracks the newest snapshot generation before a writer acquires the disk lock.
+///
+/// The separate registry lets a writer re-check freshness after waiting for the
+/// serialized write lock, so a stale task cannot overwrite a newer snapshot.
+#[derive(Default)]
+pub(super) struct SessionWriteGenerationRegistry {
+    generations: Mutex<HashMap<uuid::Uuid, u64>>,
+}
+
+impl SessionWriteGenerationRegistry {
+    /// Records a generation before starting I/O so already queued writers can
+    /// observe that their captured snapshot is no longer authoritative.
+    pub(super) fn set(&self, session_id: uuid::Uuid, generation: u64) -> anyhow::Result<()> {
+        self.generations
+            .lock()
+            .map_err(|_| anyhow::anyhow!("workspace session generation lock poisoned"))?
+            .insert(session_id, generation);
+        Ok(())
+    }
+
+    /// Checks freshness only after the caller owns the write lock, preserving
+    /// the ordering that prevents an older waiter from writing after a newer one.
+    pub(super) fn is_current(
+        &self,
+        session_id: uuid::Uuid,
+        generation: u64,
+    ) -> anyhow::Result<bool> {
+        Ok(self
+            .generations
+            .lock()
+            .map_err(|_| anyhow::anyhow!("workspace session generation lock poisoned"))?
+            .get(&session_id)
+            .copied()
+            == Some(generation))
+    }
+}
+
 #[cfg(not(test))]
-static SESSION_WRITE_GENERATIONS: OnceLock<Mutex<HashMap<uuid::Uuid, u64>>> = OnceLock::new();
+static SESSION_WRITE_GENERATIONS: OnceLock<SessionWriteGenerationRegistry> = OnceLock::new();
 #[cfg(not(test))]
 static SESSION_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -541,6 +589,12 @@ pub(super) struct TabState {
     pub(super) active: usize,
     open_generation: u64,
     open_task: Option<Task<()>>,
+    /// 独立于普通路径打开的重开代次，避免两类后台结果互相取消或覆盖。
+    reopen_generation: u64,
+    /// 后台重开任务只回传准备结果，GPUI Entity 仍由完成回调创建。
+    reopen_task: Option<Task<()>>,
+    /// 保留被弹出的历史项，失败、取消或身份失配时按原顺序恢复。
+    reopen_pending: Option<(usize, ClosedTabSnapshot)>,
     closed: Vec<ClosedTabSnapshot>,
     show_close_dialog: bool,
     close_after_save: bool,
@@ -595,6 +649,9 @@ impl TabState {
             active: 0,
             open_generation: 0,
             open_task: None,
+            reopen_generation: 0,
+            reopen_task: None,
+            reopen_pending: None,
             closed: Vec::new(),
             show_close_dialog: false,
             close_after_save: false,

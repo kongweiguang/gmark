@@ -22,7 +22,7 @@ impl DocumentHost {
 
     #[cfg(test)]
     pub(crate) fn has_recovery_journal_for_test(&self) -> bool {
-        self.coordinator.recovery_journal.is_some()
+        self.coordinator.recovery_journal.is_some() || self.coordinator.recovery_worker.is_some()
     }
 
     #[cfg(test)]

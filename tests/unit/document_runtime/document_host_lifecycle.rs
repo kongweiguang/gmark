@@ -14,6 +14,72 @@ fn source_font_uses_a_real_direct_write_family_on_windows() {
     assert_eq!(source_monospace_font_family(), "monospace");
 }
 
+/// Keep the probe/edit race on the external test surface so production indexing has no inline test module.
+#[gpui::test]
+async fn empty_probe_growth_falls_back_to_background_reprobe(cx: &mut gpui::TestAppContext) {
+    let temp = tempfile::tempdir().expect("empty probe race tempdir");
+    let path = temp.path().join("grown-after-probe.txt");
+    fs::write(&path, []).expect("empty probe race fixture");
+    let source = FileSource::open(&path).expect("empty probe race source");
+    let stale_probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
+            .expect("empty probe race probe");
+    fs::write(&path, "grown after probe\n").expect("grow after probe");
+
+    let view = cx.new(|cx| DocumentHost::new(path, stale_probe, source, cx));
+    cx.run_until_parked();
+
+    view.update(cx, |view, _cx| {
+        assert_eq!(view.probe.len, "grown after probe\n".len() as u64);
+        assert_eq!(view.source_text_for_test(), "grown after probe\n");
+        assert!(view.document.is_some());
+        assert!(view.error.is_none());
+    });
+}
+
+/// Keep the exact UTF-8 paste boundary stable so callers cannot reject valid 64 MiB input.
+#[test]
+fn source_paste_limit_accepts_the_64_mib_boundary() {
+    let limit = gmark_paged_document::MAX_SYSTEM_CLIPBOARD_BYTES as usize;
+    assert!(!DocumentHost::source_paste_exceeds_limit(
+        &"x".repeat(limit)
+    ));
+    assert!(DocumentHost::source_paste_exceeds_limit(
+        &"x".repeat(limit + 1)
+    ));
+}
+
+/// Verify an oversized source paste reports an error before the shared document transaction.
+#[gpui::test]
+async fn source_paste_over_limit_does_not_mutate_the_document(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        crate::i18n::I18nManager::init(cx);
+        crate::theme::ThemeManager::init(cx);
+        crate::components::init(cx);
+    });
+    let (host, visual) = cx.add_window_view(|_window, cx| {
+        DocumentHost::new_untitled(
+            PathBuf::from("Untitled-paste-limit.txt"),
+            DocumentFormat::PlainText,
+            "before",
+            cx,
+        )
+    });
+    let over_limit = "x".repeat((gmark_paged_document::MAX_SYSTEM_CLIPBOARD_BYTES + 1) as usize);
+    visual.write_to_clipboard(gpui::ClipboardItem::new_string(over_limit));
+    visual.update(|window, cx| {
+        host.update(cx, |view, cx| {
+            view.select_source_range_for_test(0..6, false);
+            view.paste_for_test(window, cx);
+        });
+    });
+
+    host.read_with(visual, |view, _cx| {
+        assert_eq!(view.source_text_for_test(), "before");
+        assert!(view.error.is_some());
+    });
+}
+
 #[gpui::test]
 async fn untitled_json_and_csv_install_resident_format_capabilities(cx: &mut gpui::TestAppContext) {
     let json = cx.new(|cx| {
@@ -64,6 +130,130 @@ async fn untitled_json_and_csv_install_resident_format_capabilities(cx: &mut gpu
             DocumentSidebarTarget::Column { column: 0 }
         ));
     });
+}
+
+#[gpui::test]
+async fn empty_file_mount_is_editable_before_any_viewport_worker_turn(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        crate::i18n::I18nManager::init(cx);
+        crate::theme::ThemeManager::init(cx);
+        crate::components::init(cx);
+    });
+    let temp = tempfile::tempdir().expect("empty file first-edit tempdir");
+    let path = temp.path().join("first-edit.txt");
+    fs::write(&path, []).expect("empty first-edit fixture");
+    let source = FileSource::open(&path).expect("empty first-edit source");
+    let probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
+            .expect("empty first-edit probe");
+    let path_for_view = path.clone();
+    let (host, visual) =
+        cx.add_window_view(move |_window, cx| DocumentHost::new(path_for_view, probe, source, cx));
+    let recovery_dir = temp.path().join("recovery");
+    fs::create_dir_all(&recovery_dir).expect("empty first-edit recovery dir");
+    let recovery_source = FileSource::open(&path).expect("empty first-edit recovery source");
+    let mut journal_path = None;
+    let mut pending_journal = None;
+
+    visual.update(|window, cx| {
+        host.update(cx, |host, cx| {
+            assert!(
+                host.document.is_some(),
+                "empty file must have a session at mount"
+            );
+            assert!(host.provisional_source.is_none());
+            assert!(host.external_monitor_owned);
+            assert!(!host.external_monitor_paused_for_test());
+            assert_eq!(host.line_count(), 1);
+            assert_eq!(host.displayed_screen_lines.visible, 0..1);
+            assert!(host.displayed_screen_lines.row(0).is_some());
+            // 生产构建会启用恢复日志；测试显式补齐它，锁定首次输入不得在
+            // `with_session` 内再次读取 Controller revision 而自锁。
+            let document = host.document.as_ref().expect("empty document").clone();
+            let journal = document
+                .with_session(|session| {
+                    DocumentRecoveryJournal::create(
+                        &recovery_dir,
+                        &recovery_source,
+                        host.probe.encoding.clone(),
+                        session,
+                    )
+                })
+                .expect("empty first-edit recovery controller")
+                .expect("empty first-edit recovery journal");
+            journal_path = Some(journal.path().to_path_buf());
+            // Hold the already-created journal outside the host to model the
+            // production background callback arriving after the first edit.
+            pending_journal = Some(journal);
+            host.coordinator.recovery_enabled = true;
+            host.begin_line_edit_for_test(0, window, cx);
+            let (_, row) = host
+                .active_edit_for_test()
+                .expect("empty Source row must accept the first edit");
+            row.update(cx, |block, cx| {
+                block.replace_text_in_visible_range(0..0, "hello", None, false, cx);
+            });
+        });
+    });
+    visual.run_until_parked();
+    host.read_with(visual, |host, _cx| {
+        assert!(
+            host.coordinator.pending_recovery_record.is_some(),
+            "the first edit must survive until journal installation"
+        );
+    });
+    let journal = pending_journal
+        .take()
+        .expect("journal callback fixture must remain pending");
+    visual.update(|_window, cx| {
+        host.update(cx, |host, cx| {
+            host.install_recovery_journal(journal, cx);
+        });
+    });
+    visual.run_until_parked();
+    visual
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(1_100));
+    visual.run_until_parked();
+
+    host.read_with(visual, |host, _cx| {
+        assert_eq!(host.source_text_for_test(), "hello");
+        assert!(host.is_dirty());
+        assert_eq!(host.pending_external_change_for_test(), None);
+    });
+    assert_eq!(
+        fs::read(&path).expect("read untouched empty file"),
+        Vec::<u8>::new()
+    );
+    let journal_path = journal_path.expect("empty first-edit journal path");
+    let recovered = gmark_document_runtime::replay_resident_recovery_journal(&journal_path)
+        .expect("background recovery must produce a replayable journal");
+    assert_eq!(recovered.source, "hello");
+}
+
+#[gpui::test]
+async fn empty_json_and_csv_hosts_do_not_inherit_untitled_templates(cx: &mut gpui::TestAppContext) {
+    for (name, expected_format) in [
+        ("empty.json", DocumentFormat::Json),
+        ("empty.csv", DocumentFormat::Delimited { delimiter: b',' }),
+    ] {
+        let temp = tempfile::tempdir().expect("empty format tempdir");
+        let path = temp.path().join(name);
+        fs::write(&path, []).expect("empty format fixture");
+        let source = FileSource::open(&path).expect("empty format source");
+        let probe =
+            gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
+                .expect("empty format probe");
+        assert_eq!(probe.format, expected_format);
+        let host = cx.new(|cx| DocumentHost::new(path, probe, source, cx));
+        host.update(cx, |host, _cx| {
+            assert_eq!(host.source_text_for_test(), "");
+            assert!(host.document.is_some());
+            assert_eq!(host.line_count(), 1);
+        });
+    }
 }
 
 #[test]
@@ -258,4 +448,36 @@ fn paged_recovery_contract_keeps_the_large_journal_path() {
             .and_then(|extension| extension.to_str()),
         Some("large-journal")
     );
+}
+
+/// Keep the pre-install handoff Resident-only so Paged undo/redo commands can
+/// never be silently coalesced while their ordered worker is unavailable.
+#[test]
+fn pending_recovery_does_not_coalesce_paged_commands() {
+    let temp = tempfile::tempdir().expect("paged pending recovery tempdir");
+    let path = temp.path().join("pending-paged.txt");
+    fs::write(&path, "paged source").expect("paged pending recovery fixture");
+    let source = FileSource::open(&path).expect("paged pending recovery source");
+    let mut probe =
+        gmark_paged_document::probe_file(&path, gmark_paged_document::ProbeOptions::default())
+            .expect("paged pending recovery probe");
+    probe.strategy = OpenStrategy::Paged;
+    let identity = source.identity().expect("paged pending recovery identity");
+    let index = LineIndex::build(&source).expect("paged pending recovery index");
+    let piece = PieceDocument::open(source, index).expect("paged pending recovery document");
+    let document =
+        build_paged_session(&probe, piece, identity).expect("paged pending recovery session");
+    let snapshot = document.save_snapshot();
+    assert!(snapshot.source_format.is_none());
+
+    let mut coordinator = DocumentCoordinator::new(SearchCancellation::default());
+    assert!(!coordinator.stage_pending_recovery(
+        snapshot,
+        RecoveryRecord {
+            action: RecoveryAction::Undo,
+            selection: None,
+            view_id: DocumentViewId::source(),
+        },
+    ));
+    assert!(coordinator.pending_recovery_record.is_none());
 }
