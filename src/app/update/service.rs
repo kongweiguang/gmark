@@ -2,7 +2,6 @@
 
 //! Update check, download, and install orchestration service.
 
-use super::install;
 use super::*;
 
 pub(crate) struct UpdateService {
@@ -20,14 +19,14 @@ pub(crate) struct UpdateService {
 impl UpdateService {
     pub(super) fn new(updates_root: PathBuf, auto_check_enabled: bool) -> Self {
         cleanup_update_cache(&updates_root);
-        let state = restored_startup_state(&updates_root).unwrap_or_else(|| {
-            update_v2::restore_ready_release(&updates_root, env!("CARGO_PKG_VERSION"))
-                .map(|(release, artifact_path)| UpdateState::Ready {
-                    release,
-                    artifact_path,
-                })
-                .unwrap_or_default()
-        });
+        // 原因：旧 helper 的终态只描述已退役安装器，迁移后继续展示会让一次历史
+        // error 32 永久覆盖当前 Velopack 状态；仅恢复仍通过签名与哈希复验的下载。
+        let state = update_v2::restore_ready_release(&updates_root, env!("CARGO_PKG_VERSION"))
+            .map(|(release, artifact_path)| UpdateState::Ready {
+                release,
+                artifact_path,
+            })
+            .unwrap_or_default();
         Self {
             state,
             updates_root,
@@ -301,8 +300,8 @@ impl UpdateService {
         self.refresh(cx);
     }
 
-    /// Creates and launches exactly one helper after `QuitCoordinator` has
-    /// approved every window, so a veto never leaves a lock or helper behind.
+    /// 在普通退出确认全部通过后才把更新交给 Velopack，确保“继续编辑”或保存失败
+    /// 不会启动外部安装进程，同时不再由应用复制安装器事务状态。
     pub(super) fn prepare_install(&mut self, cx: &mut Context<Self>) -> bool {
         if !matches!(self.state, UpdateState::Ready { .. }) {
             return false;
@@ -317,176 +316,18 @@ impl UpdateService {
         let Some((release, artifact_path)) = payload else {
             return false;
         };
-        match self.write_apply_plan(&release, &artifact_path) {
-            Ok(prepared) => {
-                let mut command = Command::new(&prepared.helper.path);
-                command.arg("--apply-plan").arg(&prepared.plan_path);
-                command.env(
-                    UPDATE_ACK_CAPABILITY_ENV,
-                    &prepared.acknowledgement_capability,
-                );
-                #[cfg(not(target_os = "windows"))]
-                if let Some(agent) = &prepared.agent {
-                    command.env("GMARK_UPDATE_AGENT_PATH", &agent.path);
-                }
-                command.env(
-                    "GMARK_UPDATE_TRANSACTION_ID",
-                    prepared.plan_v2.transaction_id.hyphenated().to_string(),
-                );
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt as _;
-
-                    // helper 是纯后台事务进程；Windows Terminal 不应为它创建可见黑框。
-                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                    command.creation_flags(CREATE_NO_WINDOW);
-                }
-                let helper_guard = match verify_staged_helper_for_launch(&prepared.helper) {
-                    Ok(guard) => guard,
-                    Err(message) => {
-                        self.abort_prepared_install(&prepared);
-                        self.state = UpdateState::Failed {
-                            release: Some(release.clone()),
-                            message: self.format_handoff_failure(
-                                &release,
-                                &message,
-                                Some(&prepared.plan_v2),
-                            ),
-                            retryable: true,
-                        };
-                        self.refresh(cx);
-                        return false;
-                    }
-                };
-                #[cfg(not(target_os = "windows"))]
-                let agent_guard = match prepared.agent.as_ref() {
-                    Some(agent) => match verify_staged_helper_for_launch(agent) {
-                        Ok(guard) => Some(guard),
-                        Err(message) => {
-                            drop(helper_guard);
-                            self.abort_prepared_install(&prepared);
-                            self.state = UpdateState::Failed {
-                                release: Some(release.clone()),
-                                message: self.format_handoff_failure(
-                                    &release,
-                                    &message,
-                                    Some(&prepared.plan_v2),
-                                ),
-                                retryable: true,
-                            };
-                            self.refresh(cx);
-                            return false;
-                        }
-                    },
-                    None => {
-                        drop(helper_guard);
-                        self.abort_prepared_install(&prepared);
-                        self.state = UpdateState::Failed {
-                            release: Some(release.clone()),
-                            message: self.format_handoff_failure(
-                                &release,
-                                "update feedback agent was not staged",
-                                Some(&prepared.plan_v2),
-                            ),
-                            retryable: true,
-                        };
-                        self.refresh(cx);
-                        return false;
-                    }
-                };
-                match command.spawn() {
-                    Ok(_) => {
-                        drop(helper_guard);
-                        #[cfg(not(target_os = "windows"))]
-                        drop(agent_guard);
-                        // The process-static lifecycle lock intentionally
-                        // remains registered until process exit; the helper is
-                        // now the only owner able to proceed after that exit.
-                        true
-                    }
-                    Err(error) => {
-                        drop(helper_guard);
-                        #[cfg(not(target_os = "windows"))]
-                        drop(agent_guard);
-                        self.abort_prepared_install(&prepared);
-                        self.state = UpdateState::Failed {
-                            release: Some(release.clone()),
-                            message: self.format_handoff_failure(
-                                &release,
-                                &format!("failed to start update helper: {error}"),
-                                Some(&prepared.plan_v2),
-                            ),
-                            retryable: true,
-                        };
-                        self.refresh(cx);
-                        false
-                    }
-                }
-            }
+        match super::velopack::prepare_install(&release, &artifact_path) {
+            Ok(()) => true,
             Err(message) => {
                 self.state = UpdateState::Failed {
                     release: Some(release.clone()),
-                    message: self.format_handoff_failure(&release, &message, None),
+                    message: format!("{message}；可手动下载安装：{}", release.release_url),
                     retryable: true,
                 };
                 self.refresh(cx);
                 false
             }
         }
-    }
-
-    pub(super) fn write_apply_plan(
-        &self,
-        release: &UpdateRelease,
-        artifact_path: &std::path::Path,
-    ) -> Result<PreparedInstall, String> {
-        if !self.available {
-            return Err("update cache root is unavailable".to_owned());
-        }
-        install::prepare_apply_plan(&self.updates_root, release, artifact_path)
-    }
-
-    fn abort_prepared_install(&mut self, prepared: &PreparedInstall) {
-        if let Some(transaction_dir) = prepared.plan_v2.transaction_dir() {
-            cleanup_failed_prepare(
-                prepared.plan_v2.transaction_id,
-                transaction_dir,
-                Some(&prepared.acknowledgement_capability),
-            );
-        } else {
-            let _ = release_lifecycle_lock(prepared.plan_v2.transaction_id);
-        }
-    }
-
-    /// Adds copyable recovery destinations to handoff failures because the
-    /// helper may never get far enough to persist its own terminal result.
-    fn format_handoff_failure(
-        &self,
-        release: &UpdateRelease,
-        detail: &str,
-        plan: Option<&gmark_update_core::ApplyPlanV2>,
-    ) -> String {
-        let manual_url = if release.artifact_url.is_empty() {
-            "https://github.com/kongweiguang/gmark/releases"
-        } else {
-            release.artifact_url.as_str()
-        };
-        let (helper_log, installer_log) = plan
-            .map(|plan| {
-                (
-                    plan.helper_log_path.display().to_string(),
-                    plan.installer_log_path.display().to_string(),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    "<transaction>/helper.log".to_owned(),
-                    "<transaction>/installer.log".to_owned(),
-                )
-            });
-        format!(
-            "{detail}; manual download: {manual_url}; helper log: {helper_log}; installer log: {installer_log}"
-        )
     }
 
     pub(super) fn apply_worker_event(&mut self, event: WorkerEvent, cx: &mut Context<Self>) {

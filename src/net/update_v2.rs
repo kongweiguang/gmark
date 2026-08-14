@@ -29,9 +29,9 @@ use semver::Version;
 pub(crate) use gmark_update_core::{ArtifactFormat, DownloadControl, DownloadEvent, SystemTrust};
 
 pub(crate) const GITHUB_UPDATE_V2_MANIFEST_URL: &str =
-    "https://github.com/kongweiguang/gmark/releases/latest/download/update-manifest-v2.json";
+    "https://github.com/kongweiguang/gmark/releases/latest/download/update-manifest-velopack.json";
 pub(crate) const GITEE_UPDATE_V2_MANIFEST_URL: &str =
-    "https://raw.giteeusercontent.com/kongweiguang/gmark/raw/release/update-manifest-v2.json";
+    "https://raw.giteeusercontent.com/kongweiguang/gmark/raw/release/update-manifest-velopack.json";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(12);

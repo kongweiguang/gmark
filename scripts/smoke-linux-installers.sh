@@ -26,12 +26,8 @@ cp "$APPIMAGE" "$TEMPORARY/gmark.AppImage"
 chmod +x "$TEMPORARY/gmark.AppImage"
 (cd "$TEMPORARY" && ./gmark.AppImage --appimage-extract >/dev/null)
 version="$($TEMPORARY/squashfs-root/AppRun --version)"
-[[ -x "$TEMPORARY/squashfs-root/usr/lib/gmark/gmark-update-helper" ]] || {
-    echo "AppImage update helper is missing" >&2
-    exit 1
-}
-[[ -x "$TEMPORARY/squashfs-root/usr/lib/gmark/gmark-update-agent" ]] || {
-    echo "AppImage update agent is missing" >&2
+find "$TEMPORARY/squashfs-root" -type f -name sq.version -print -quit | grep -q . || {
+    echo "AppImage Velopack manifest is missing" >&2
     exit 1
 }
 [[ "$version" =~ (^|[[:space:]])$EXPECTED([[:space:]]|$) ]] || {
@@ -41,8 +37,6 @@ version="$($TEMPORARY/squashfs-root/AppRun --version)"
 
 sudo dpkg -i "$DEB"
 version="$(/usr/bin/gmark --version)"
-[[ -x /usr/lib/gmark/gmark-update-helper ]] || { echo "Debian update helper is missing" >&2; exit 1; }
-[[ -x /usr/lib/gmark/gmark-update-agent ]] || { echo "Debian update agent is missing" >&2; exit 1; }
 [[ "$version" =~ (^|[[:space:]])$EXPECTED([[:space:]]|$) ]] || {
     echo "Debian package version mismatch: $version" >&2
     exit 1

@@ -2,7 +2,7 @@
 
 [package]
 name = "gmark"
-version = "0.2.1"
+version = "0.2.2-rc.1"
 edition = "2024"
 rust-version = "1.95"
 authors = ["kongweiguang"]
@@ -166,6 +166,7 @@ trash = "5.2.6"
 chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 url = "2"
+velopack = { version = "=1.2.0", features = ["public-utils"] }
 pulldown-cmark = "0.13"
 cssparser = "0.37"
 ammonia = "=4.1.3"

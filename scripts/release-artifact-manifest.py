@@ -29,6 +29,30 @@ ARTIFACT_SUFFIXES = {
     "macos-aarch64": ("macos", "aarch64", "unsigned-dmg", "macos-aarch64.dmg"),
     "linux-x86_64": ("linux", "x86_64", "appimage", "linux-x86_64.AppImage"),
     "linux-x86_64-deb": ("linux", "x86_64", "deb", "linux-x86_64.deb"),
+    "windows-x86_64-update": (
+        "windows",
+        "x86_64",
+        "velopack-nupkg",
+        "windows-x86_64-full.nupkg",
+    ),
+    "macos-x86_64-update": (
+        "macos",
+        "x86_64",
+        "velopack-nupkg",
+        "macos-x86_64-full.nupkg",
+    ),
+    "macos-aarch64-update": (
+        "macos",
+        "aarch64",
+        "velopack-nupkg",
+        "macos-aarch64-full.nupkg",
+    ),
+    "linux-x86_64-update": (
+        "linux",
+        "x86_64",
+        "velopack-nupkg",
+        "linux-x86_64-full.nupkg",
+    ),
 }
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")

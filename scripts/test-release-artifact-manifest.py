@@ -24,6 +24,10 @@ SUFFIXES = (
     "macos-aarch64.dmg",
     "linux-x86_64.AppImage",
     "linux-x86_64.deb",
+    "windows-x86_64-full.nupkg",
+    "macos-x86_64-full.nupkg",
+    "macos-aarch64-full.nupkg",
+    "linux-x86_64-full.nupkg",
 )
 
 
@@ -115,6 +119,10 @@ def main() -> None:
             "macos-aarch64",
             "linux-x86_64",
             "linux-x86_64-deb",
+            "windows-x86_64-update",
+            "macos-x86_64-update",
+            "macos-aarch64-update",
+            "linux-x86_64-update",
         ]
         assert [entry["package_format"] for entry in payload["artifacts"]] == [
             "inno-setup-exe",
@@ -122,6 +130,10 @@ def main() -> None:
             "unsigned-dmg",
             "appimage",
             "deb",
+            "velopack-nupkg",
+            "velopack-nupkg",
+            "velopack-nupkg",
+            "velopack-nupkg",
         ]
         assert all(entry["size"] > 0 and len(entry["sha256"]) == 64 for entry in payload["artifacts"])
 

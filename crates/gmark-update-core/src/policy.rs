@@ -70,6 +70,9 @@ pub enum ArtifactFormat {
     WindowsSetupExe,
     MacosAppTarGz,
     LinuxAppImage,
+    WindowsVelopackNupkg,
+    MacosVelopackNupkg,
+    LinuxVelopackNupkg,
 }
 
 impl ArtifactFormat {
@@ -79,6 +82,9 @@ impl ArtifactFormat {
             Self::WindowsSetupExe => "windows-setup-exe",
             Self::MacosAppTarGz => "macos-app-tar-gz",
             Self::LinuxAppImage => "linux-app-image",
+            Self::WindowsVelopackNupkg => "windows-velopack-nupkg",
+            Self::MacosVelopackNupkg => "macos-velopack-nupkg",
+            Self::LinuxVelopackNupkg => "linux-velopack-nupkg",
         }
     }
 
@@ -88,6 +94,9 @@ impl ArtifactFormat {
             "windows-setup-exe" => Some(Self::WindowsSetupExe),
             "macos-app-tar-gz" => Some(Self::MacosAppTarGz),
             "linux-app-image" => Some(Self::LinuxAppImage),
+            "windows-velopack-nupkg" => Some(Self::WindowsVelopackNupkg),
+            "macos-velopack-nupkg" => Some(Self::MacosVelopackNupkg),
+            "linux-velopack-nupkg" => Some(Self::LinuxVelopackNupkg),
             _ => None,
         }
     }
@@ -176,8 +185,11 @@ pub fn validate_platform_format(format: ArtifactFormat, platform: &Platform) -> 
     let valid = matches!(
         (platform.os.as_str(), format),
         ("windows", ArtifactFormat::WindowsSetupExe)
+            | ("windows", ArtifactFormat::WindowsVelopackNupkg)
             | ("macos", ArtifactFormat::MacosAppTarGz)
+            | ("macos", ArtifactFormat::MacosVelopackNupkg)
             | ("linux", ArtifactFormat::LinuxAppImage)
+            | ("linux", ArtifactFormat::LinuxVelopackNupkg)
     );
     if valid {
         Ok(())

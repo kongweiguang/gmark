@@ -5,7 +5,6 @@
 //! 多窗口共享一个权威状态与一个后台 worker；UI 只能发送命令，网络、缓存和状态转换
 //! 都集中在这里，避免两个窗口同时下载或启动两次安装事务。
 
-use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{
     fs,
@@ -192,6 +191,7 @@ mod coordinator;
 mod install;
 mod service;
 mod state;
+mod velopack;
 
 pub(crate) use coordinator::UpdateCoordinator;
 use install::*;

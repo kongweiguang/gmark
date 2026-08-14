@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # @author kongweiguang
-# Create a portable AppImage and a native Debian installer from one release binary.
+# Build a Velopack-managed AppImage plus a package-manager-owned Debian package.
 
 set -euo pipefail
 
@@ -20,50 +20,55 @@ OUT="$2"
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STAGE="$ROOT/dist/linux-package"
-APPDIR="$STAGE/gmark.AppDir"
+OUT="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
+STAGE="$OUT/linux-velopack-stage"
+INPUT="$STAGE/input"
+VPK_OUTPUT="$STAGE/vpk"
 DEBROOT="$STAGE/deb"
-mkdir -p "$OUT"
+VPK="${VPK_PATH:-vpk}"
+
+# The stage path is fixed beneath the resolved output root so cleanup cannot follow caller-controlled traversal.
 rm -rf "$STAGE"
+mkdir -p "$INPUT" "$VPK_OUTPUT"
+install -Dm755 "$ROOT/target/release/gmark" "$INPUT/gmark"
+install -Dm644 "$ROOT/README.md" "$INPUT/README.md"
+install -Dm644 "$ROOT/LICENSE" "$INPUT/LICENSE"
 
-install -Dm755 "$ROOT/target/release/gmark" "$APPDIR/usr/bin/gmark"
-install -Dm755 "$ROOT/target/release/gmark-update-helper" \
-    "$APPDIR/usr/lib/gmark/gmark-update-helper"
-install -Dm755 "$ROOT/target/release/gmark-update-agent" \
-    "$APPDIR/usr/lib/gmark/gmark-update-agent"
-install -Dm644 "$ROOT/resources/linux/com.kongweiguang.gmark.desktop" \
-    "$APPDIR/usr/share/applications/com.kongweiguang.gmark.desktop"
-install -Dm644 "$ROOT/resources/linux/icons/hicolor/256x256/apps/com.kongweiguang.gmark.png" \
-    "$APPDIR/usr/share/icons/hicolor/256x256/apps/com.kongweiguang.gmark.png"
-install -Dm644 "$ROOT/resources/linux/icons/hicolor/512x512/apps/com.kongweiguang.gmark.png" \
-    "$APPDIR/usr/share/icons/hicolor/512x512/apps/com.kongweiguang.gmark.png"
-ln -s usr/bin/gmark "$APPDIR/AppRun"
-ln -s usr/share/applications/com.kongweiguang.gmark.desktop "$APPDIR/gmark.desktop"
-ln -s usr/share/icons/hicolor/512x512/apps/com.kongweiguang.gmark.png "$APPDIR/com.kongweiguang.gmark.png"
-for legal in README.md LICENSE; do
-    install -Dm644 "$ROOT/$legal" "$APPDIR/usr/share/doc/gmark/$legal"
-done
+"$VPK" pack \
+    --packId GMark \
+    --packVersion "$VERSION" \
+    --packDir "$INPUT" \
+    --mainExe gmark \
+    --packTitle GMark \
+    --packAuthors kongweiguang \
+    --runtime linux-x64 \
+    --channel linux-x64 \
+    --outputDir "$VPK_OUTPUT" \
+    --icon "$ROOT/resources/linux/icons/hicolor/512x512/apps/com.kongweiguang.gmark.png" \
+    --delta None \
+    --yes true \
+    --skip-updates true
 
-APPIMAGETOOL="$STAGE/appimagetool.AppImage"
-APPIMAGETOOL_SHA256="a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0"
-curl --fail --location --retry 3 \
-    https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
-    --output "$APPIMAGETOOL"
-echo "$APPIMAGETOOL_SHA256  $APPIMAGETOOL" | sha256sum --check --status || {
-    echo "appimagetool checksum mismatch" >&2
+APPIMAGE="$VPK_OUTPUT/GMark-linux-x64.AppImage"
+NUPKG="$VPK_OUTPUT/GMark-$VERSION-linux-x64-full.nupkg"
+[[ -f "$APPIMAGE" && -f "$NUPKG" ]] || {
+    echo "Velopack did not create the Linux AppImage and full package" >&2
     exit 1
 }
-chmod +x "$APPIMAGETOOL"
-ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" \
-    "$OUT/gmark-v$VERSION-linux-x86_64.AppImage"
-chmod +x "$OUT/gmark-v$VERSION-linux-x86_64.AppImage"
+install -Dm755 "$APPIMAGE" "$OUT/gmark-v$VERSION-linux-x86_64.AppImage"
+install -Dm644 "$NUPKG" "$OUT/gmark-v$VERSION-linux-x86_64-full.nupkg"
 
+# DEB remains package-manager-owned; embedding Velopack there would bypass dpkg's database and file ownership.
 install -Dm755 "$ROOT/target/release/gmark" "$DEBROOT/usr/bin/gmark"
-install -Dm755 "$ROOT/target/release/gmark-update-helper" \
-    "$DEBROOT/usr/lib/gmark/gmark-update-helper"
-install -Dm755 "$ROOT/target/release/gmark-update-agent" \
-    "$DEBROOT/usr/lib/gmark/gmark-update-agent"
-cp -a "$APPDIR/usr/share/." "$DEBROOT/usr/share/"
+install -Dm644 "$ROOT/resources/linux/com.kongweiguang.gmark.desktop" \
+    "$DEBROOT/usr/share/applications/com.kongweiguang.gmark.desktop"
+install -Dm644 "$ROOT/resources/linux/icons/hicolor/256x256/apps/com.kongweiguang.gmark.png" \
+    "$DEBROOT/usr/share/icons/hicolor/256x256/apps/com.kongweiguang.gmark.png"
+install -Dm644 "$ROOT/resources/linux/icons/hicolor/512x512/apps/com.kongweiguang.gmark.png" \
+    "$DEBROOT/usr/share/icons/hicolor/512x512/apps/com.kongweiguang.gmark.png"
+for legal in README.md LICENSE; do
+    install -Dm644 "$ROOT/$legal" "$DEBROOT/usr/share/doc/gmark/$legal"
+done
 mkdir -p "$DEBROOT/DEBIAN"
 cat > "$DEBROOT/DEBIAN/control" <<EOF
 Package: gmark

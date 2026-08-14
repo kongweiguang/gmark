@@ -31,6 +31,13 @@ V2_ARTIFACTS = {
     "linux-x86_64": ("linux-x86_64.AppImage", "linux-app-image", "linux"),
 }
 
+VELOPACK_ARTIFACTS = {
+    "windows-x86_64": ("windows-x86_64-full.nupkg", "windows-velopack-nupkg", "windows"),
+    "macos-x86_64": ("macos-x86_64-full.nupkg", "macos-velopack-nupkg", "macos"),
+    "macos-aarch64": ("macos-aarch64-full.nupkg", "macos-velopack-nupkg", "macos"),
+    "linux-x86_64": ("linux-x86_64-full.nupkg", "linux-velopack-nupkg", "linux"),
+}
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -49,6 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--public-key-base64", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--v2-output", type=Path)
+    parser.add_argument("--velopack-output", type=Path)
     parser.add_argument("--notes", default="")
     parser.add_argument("--rollout-percent", type=int, default=100)
     parser.add_argument("--paused", action="store_true")
@@ -138,11 +146,57 @@ def require_artifact(dist: Path, release_tag: str, suffix: str) -> tuple[Path, s
     return path, filename
 
 
+def v2_artifacts(
+    definitions: dict[str, tuple[str, str, str]],
+    args: argparse.Namespace,
+) -> dict[str, dict[str, object]]:
+    """Build one signed artifact set so compatibility and Velopack feeds cannot mix formats."""
+    release_download = f"https://github.com/kongweiguang/gmark/releases/download/{args.release_tag}"
+    artifacts: dict[str, dict[str, object]] = {}
+    for artifact_id, (suffix, package_format, platform) in definitions.items():
+        path, filename = require_artifact(args.dist, args.release_tag, suffix)
+        system_trust = {
+            "windows": args.windows_system_trust,
+            "macos": args.macos_system_trust,
+            "linux": "not-applicable",
+        }[platform]
+        artifacts[artifact_id] = {
+            "url": f"{release_download}/{filename}",
+            "size": path.stat().st_size,
+            "sha256": sha256_file(path),
+            "format": package_format,
+            "system_trust": system_trust,
+        }
+    return artifacts
+
+
+def write_v2_manifest(
+    path: Path,
+    definitions: dict[str, tuple[str, str, str]],
+    args: argparse.Namespace,
+    public_key: bytes,
+    published_at: str,
+) -> None:
+    """Sign each endpoint independently so legacy clients never consume Velopack packages."""
+    payload = {
+        "schema_version": 2,
+        "channel": "stable",
+        "version": args.version,
+        "published_at": published_at,
+        "notes": args.notes,
+        "paused": args.paused,
+        "rollout_percent": args.rollout_percent,
+        "release_url": f"https://github.com/kongweiguang/gmark/releases/tag/{args.release_tag}",
+        "artifacts": v2_artifacts(definitions, args),
+    }
+    write_envelope(path, signed_envelope(payload, args, public_key))
+
+
 def main() -> None:
     args = parse_args()
     if args.release_tag != f"v{args.version}":
         raise SystemExit("release tag must exactly match v<version>")
-    if args.v2_output and "-" in args.version:
+    if (args.v2_output or args.velopack_output) and "-" in args.version:
         raise SystemExit("automatic updater manifests currently support stable SemVer only")
     if not 0 <= args.rollout_percent <= 100:
         raise SystemExit("rollout percent must be between 0 and 100")
@@ -169,33 +223,13 @@ def main() -> None:
     write_envelope(args.output, signed_envelope(legacy_payload, args, public_key))
 
     if args.v2_output:
-        v2_artifacts: dict[str, dict[str, object]] = {}
-        for artifact_id, (suffix, package_format, platform) in V2_ARTIFACTS.items():
-            path, filename = require_artifact(args.dist, args.release_tag, suffix)
-            system_trust = {
-                "windows": args.windows_system_trust,
-                "macos": args.macos_system_trust,
-                "linux": "not-applicable",
-            }[platform]
-            v2_artifacts[artifact_id] = {
-                "url": f"{release_download}/{filename}",
-                "size": path.stat().st_size,
-                "sha256": sha256_file(path),
-                "format": package_format,
-                "system_trust": system_trust,
-            }
-        v2_payload = {
-            "schema_version": 2,
-            "channel": "stable",
-            "version": args.version,
-            "published_at": published_at,
-            "notes": args.notes,
-            "paused": args.paused,
-            "rollout_percent": args.rollout_percent,
-            "release_url": f"https://github.com/kongweiguang/gmark/releases/tag/{args.release_tag}",
-            "artifacts": v2_artifacts,
-        }
-        write_envelope(args.v2_output, signed_envelope(v2_payload, args, public_key))
+        write_v2_manifest(
+            args.v2_output, V2_ARTIFACTS, args, public_key, published_at
+        )
+    if args.velopack_output:
+        write_v2_manifest(
+            args.velopack_output, VELOPACK_ARTIFACTS, args, public_key, published_at
+        )
 
 
 if __name__ == "__main__":

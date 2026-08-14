@@ -125,16 +125,17 @@ impl UpdateCoordinator {
             let Some(path) = std::env::var_os("APPIMAGE").map(PathBuf::from) else {
                 return false;
             };
-            return std::fs::symlink_metadata(path)
-                .map(|metadata| {
-                    metadata.file_type().is_file()
-                        && !metadata.file_type().is_symlink()
-                        && !metadata.permissions().readonly()
-                })
-                .unwrap_or(false);
+            return super::velopack::is_managed_install()
+                && std::fs::symlink_metadata(path)
+                    .map(|metadata| {
+                        metadata.file_type().is_file()
+                            && !metadata.file_type().is_symlink()
+                            && !metadata.permissions().readonly()
+                    })
+                    .unwrap_or(false);
         }
         #[cfg(not(target_os = "linux"))]
-        true
+        super::velopack::is_managed_install()
     }
 
     pub(crate) fn check(origin: CheckOrigin, cx: &mut App) {

@@ -156,15 +156,19 @@ jobs:
           if ($key.Length -ne 32) { throw 'Ed25519 public key must be 32 bytes' }
           "GMARK_UPDATE_PUBLIC_KEY_BASE64=$env:UPDATE_PUBLIC_KEY_BASE64" >> $env:GITHUB_ENV
       - run: cargo build --release --locked
-      - name: Stage payload
+      - name: Install pinned Velopack CLI
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/payload | Out-Null
-          Copy-Item target/release/gmark.exe dist/payload/gmark.exe
-          Copy-Item target/release/gmark-update-helper.exe dist/payload/gmark-update-helper.exe
-          Copy-Item target/release/gmark-update-agent.exe dist/payload/gmark-update-agent.exe
-          Copy-Item assets/icon/gmark.ico dist/payload/gmark.ico
-          Copy-Item README.md,LICENSE dist/payload/
+          dotnet tool install --tool-path "$env:RUNNER_TEMP/velopack" vpk --version 1.2.0
+      - name: Build Velopack layout and signed-feed package
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          pwsh -NoProfile -File scripts/package-windows-velopack.ps1 `
+            -Version $env:PACKAGE_VERSION `
+            -OutputDirectory dist `
+            -VpkPath "$env:RUNNER_TEMP/velopack/vpk.exe"
       - name: Install pinned Inno Setup
         shell: pwsh
         run: choco install innosetup --version=6.7.1 -y --no-progress
@@ -175,8 +179,11 @@ jobs:
         run: |
           $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'ISCC.exe is missing' }
+          # PE file versions are numeric even when the user-facing package version is SemVer prerelease.
+          $fileVersion = $env:PACKAGE_VERSION.Split('-')[0]
           $arguments = @(
             "/DMyAppVersion=$env:PACKAGE_VERSION"
+            "/DMyAppFileVersion=$fileVersion"
             "/DSourceDir=$([IO.Path]::GetFullPath('dist/payload'))"
             "/DOutputDir=$([IO.Path]::GetFullPath('dist'))"
             'resources/windows/gmark.iss'
@@ -189,7 +196,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: gmark-windows-x86_64-installer
-          path: dist/gmark-v${{ needs.validate.outputs.version }}-windows-x86_64-setup.exe
+          path: |
+            dist/gmark-v${{ needs.validate.outputs.version }}-windows-x86_64-setup.exe
+            dist/gmark-v${{ needs.validate.outputs.version }}-windows-x86_64-full.nupkg
           if-no-files-found: error
 
   linux:
@@ -223,7 +232,11 @@ jobs:
           test "$(printf '%s' "$UPDATE_PUBLIC_KEY_BASE64" | base64 --decode | wc -c)" -eq 32
           echo "GMARK_UPDATE_PUBLIC_KEY_BASE64=$UPDATE_PUBLIC_KEY_BASE64" >> "$GITHUB_ENV"
       - run: cargo build --release --locked
+      - name: Install pinned Velopack CLI
+        run: dotnet tool install --tool-path "$RUNNER_TEMP/velopack" vpk --version 1.2.0
       - name: Build installable packages
+        env:
+          VPK_PATH: ${{ runner.temp }}/velopack/vpk
         run: bash scripts/package-linux-installers.sh "${{ needs.validate.outputs.version }}" dist
       - name: Install lifecycle smoke
         run: sudo -n true && bash scripts/smoke-linux-installers.sh "dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.AppImage" "dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.deb" "${{ needs.validate.outputs.version }}"
@@ -233,6 +246,7 @@ jobs:
           path: |
             dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.AppImage
             dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64.deb
+            dist/gmark-v${{ needs.validate.outputs.version }}-linux-x86_64-full.nupkg
           if-no-files-found: error
 
   macos:
@@ -269,7 +283,11 @@ jobs:
           test "$(printf '%s' "$UPDATE_PUBLIC_KEY_BASE64" | base64 --decode | wc -c)" -eq 32
           echo "GMARK_UPDATE_PUBLIC_KEY_BASE64=$UPDATE_PUBLIC_KEY_BASE64" >> "$GITHUB_ENV"
       - run: cargo build --release --locked
+      - name: Install pinned Velopack CLI
+        run: dotnet tool install --tool-path "$RUNNER_TEMP/velopack" vpk --version 1.2.0
       - name: Build unsigned installable DMG
+        env:
+          VPK_PATH: ${{ runner.temp }}/velopack/vpk
         run: bash scripts/package-macos-dmg.sh "${{ needs.validate.outputs.version }}" "${{ matrix.arch }}" "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg" "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.app.tar.gz"
       - name: Mount and verify DMG
         run: bash scripts/smoke-macos-dmg.sh "dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg" "${{ needs.validate.outputs.version }}"
@@ -279,6 +297,7 @@ jobs:
           path: |
             dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.dmg
             dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.app.tar.gz
+            dist/gmark-v${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}-full.nupkg
           if-no-files-found: error
 
   release:
@@ -318,6 +337,10 @@ jobs:
             "gmark-v$VERSION-macos-x86_64.app.tar.gz"
             "gmark-v$VERSION-linux-x86_64.AppImage"
             "gmark-v$VERSION-linux-x86_64.deb"
+            "gmark-v$VERSION-windows-x86_64-full.nupkg"
+            "gmark-v$VERSION-macos-aarch64-full.nupkg"
+            "gmark-v$VERSION-macos-x86_64-full.nupkg"
+            "gmark-v$VERSION-linux-x86_64-full.nupkg"
           )
           for file in "${expected[@]}"; do test -f "dist/$file"; done
           (cd dist && sha256sum "${expected[@]}" > checksums-gmark-installers.txt)
@@ -347,7 +370,7 @@ jobs:
             # The updater reads signed notes, so GitHub detail must not collapse to the title.
             manifest_notes="$RELEASE_NOTES"
             if [[ -z "$manifest_notes" ]]; then manifest_notes="$RELEASE_TITLE"; fi
-            update+=(--v2-output dist/update-manifest-v2.json --notes "$manifest_notes")
+            update+=(--v2-output dist/update-manifest-v2.json --velopack-output dist/update-manifest-velopack.json --notes "$manifest_notes")
           fi
           release=(create "${common[@]}" --channel "$RELEASE_CHANNEL" --private-key "$private_key" --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" --output dist/release-artifacts.json --rollout-percent "$ROLLOUT_PERCENT")
           if [[ "$PAUSED" == true ]]; then update+=(--paused); release+=(--paused); fi
@@ -355,6 +378,7 @@ jobs:
           python scripts/verify-update-manifest.py --manifest dist/update-manifest.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --expected-rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
           if [[ "$RELEASE_CHANNEL" == stable ]]; then
             python scripts/verify-update-manifest-v2.py --manifest dist/update-manifest-v2.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --expected-rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
+            python scripts/verify-update-manifest-v2.py --manifest dist/update-manifest-velopack.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --expected-rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED" --velopack
           fi
           python scripts/release-artifact-manifest.py "${release[@]}"
           python scripts/release-artifact-manifest.py verify --manifest dist/release-artifacts.json --public-key-base64 "$UPDATE_PUBLIC_KEY_BASE64" "${common[@]}" --channel "$RELEASE_CHANNEL" --rollout-percent "$ROLLOUT_PERCENT" --expect-paused "$PAUSED"
@@ -400,7 +424,8 @@ jobs:
           Windows installers are currently unsigned and may trigger SmartScreen.
           Clients older than the updater-v2 repair cannot be fixed retroactively: after choosing
           update, close gmark normally when prompted, or run the downloaded system installer once.
-          Automatic restart/install is fully supported from the repaired version onward.
+          Versions using the Velopack layout install and restart through its maintained lifecycle;
+          Gmark still verifies the signed release pointer, size, and SHA-256 before handoff.
           gmark is open source under GPL-3.0-or-later.
           EOF
           if [[ -n "$USER_NOTES" ]]; then printf '\n%s\n' "$USER_NOTES" >> "$notes"; fi

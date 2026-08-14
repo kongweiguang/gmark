@@ -638,7 +638,7 @@ impl UpdateLabels {
                 ok: "好",
                 copy_close: "复制并关闭",
                 unsigned_warning: "\n此版本暂未经过系统代码签名，Windows SmartScreen 或 macOS Gatekeeper 可能要求确认。",
-                package_manager_guidance: "\n当前安装不是可写 AppImage，请使用系统包管理器更新 DEB，或从发布页手动下载。",
+                package_manager_guidance: "\n当前安装不受应用内更新器管理；请使用系统包管理器，或从发布页下载安装包完成一次迁移。",
                 open_release: "打开发布页",
             }
         } else {
@@ -663,7 +663,7 @@ impl UpdateLabels {
                 ok: "OK",
                 copy_close: "Copy & Close",
                 unsigned_warning: "\nThis release is not yet code-signed. Windows SmartScreen or macOS Gatekeeper may ask for confirmation.",
-                package_manager_guidance: "\nThis installation is not a writable AppImage. Update DEB with your package manager or download manually from the release page.",
+                package_manager_guidance: "\nThis installation is not managed by the in-app updater. Use your system package manager or install once from the release page to migrate.",
                 open_release: "Open Release Page",
             }
         }

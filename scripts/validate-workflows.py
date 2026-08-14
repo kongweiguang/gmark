@@ -166,16 +166,35 @@ def validate_release_contract(
         or not isinstance(manifest_script, str)
         or "--output dist/update-manifest.json" not in manifest_script
         or "--v2-output dist/update-manifest-v2.json" not in manifest_script
+        or "--velopack-output dist/update-manifest-velopack.json" not in manifest_script
         or "verify-update-manifest.py --manifest dist/update-manifest.json" not in manifest_script
         or "verify-update-manifest-v2.py --manifest dist/update-manifest-v2.json" not in manifest_script
+        or "verify-update-manifest-v2.py --manifest dist/update-manifest-velopack.json" not in manifest_script
+        or "--velopack" not in manifest_script
         or 'manifest_notes="$RELEASE_NOTES"' not in manifest_script
         or 'manifest_notes="$RELEASE_TITLE"' not in manifest_script
         or '--notes "$manifest_notes"' not in manifest_script
     ):
         fail(
             path,
-            "stable releases must retain verified legacy and v2 manifests with release-note fallback",
+            "stable releases must retain verified legacy, compatibility-v2, and Velopack manifests with release-note fallback",
         )
+
+    release_artifacts = release_scripts
+    required_update_assets = (
+        "windows-x86_64-full.nupkg",
+        "macos-x86_64-full.nupkg",
+        "macos-aarch64-full.nupkg",
+        "linux-x86_64-full.nupkg",
+    )
+    if any(asset not in release_artifacts for asset in required_update_assets):
+        fail(path, "release verification must require every platform Velopack update package")
+
+    for platform in ("windows", "linux", "macos"):
+        job = jobs.get(platform)
+        job_scripts = joined_run_scripts(job.get("steps") if isinstance(job, dict) else None)
+        if "vpk --version 1.2.0" not in job_scripts:
+            fail(path, f"{platform} packaging must pin Velopack CLI 1.2.0 to the Rust runtime version")
 
     if isinstance(steps, list):
         manifest_index = steps.index(manifest_step) if manifest_step in steps else -1

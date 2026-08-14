@@ -22,6 +22,13 @@ ARTIFACTS = {
     "linux-x86_64": ("linux-x86_64.AppImage", "linux-app-image"),
 }
 
+VELOPACK_ARTIFACTS = {
+    "windows-x86_64": ("windows-x86_64-full.nupkg", "windows-velopack-nupkg"),
+    "macos-x86_64": ("macos-x86_64-full.nupkg", "macos-velopack-nupkg"),
+    "macos-aarch64": ("macos-aarch64-full.nupkg", "macos-velopack-nupkg"),
+    "linux-x86_64": ("linux-x86_64-full.nupkg", "linux-velopack-nupkg"),
+}
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"v2 update manifest: {message}")
@@ -50,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dist", type=Path, required=True)
     parser.add_argument("--expected-rollout-percent", type=int, required=True)
     parser.add_argument("--expect-paused", choices=("true", "false"), required=True)
+    parser.add_argument("--velopack", action="store_true")
     return parser.parse_args()
 
 
@@ -78,6 +86,8 @@ def verify_signature(payload: bytes, signature: bytes, key: bytes) -> None:
 
 def main() -> None:
     args = parse_args()
+    # 原因：两个端点共享 schema 和签名算法，但必须验证互斥的安装包格式集合。
+    artifacts_definition = VELOPACK_ARTIFACTS if args.velopack else ARTIFACTS
     envelope = exact_object(
         json.loads(args.manifest.read_text(encoding="utf-8")),
         {"schema_version", "algorithm", "payload", "signature"},
@@ -108,9 +118,9 @@ def main() -> None:
         fail("rollout percent mismatch")
     if payload["paused"] != (args.expect_paused == "true"):
         fail("paused state mismatch")
-    artifacts = exact_object(payload["artifacts"], set(ARTIFACTS), "artifacts")
+    artifacts = exact_object(payload["artifacts"], set(artifacts_definition), "artifacts")
     release_base = f"https://github.com/kongweiguang/gmark/releases/download/{args.release_tag}"
-    for artifact_id, (suffix, package_format) in ARTIFACTS.items():
+    for artifact_id, (suffix, package_format) in artifacts_definition.items():
         entry = exact_object(
             artifacts[artifact_id],
             {"url", "size", "sha256", "format", "system_trust"},
