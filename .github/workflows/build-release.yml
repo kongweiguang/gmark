@@ -283,6 +283,10 @@ jobs:
           test "$(printf '%s' "$UPDATE_PUBLIC_KEY_BASE64" | base64 --decode | wc -c)" -eq 32
           echo "GMARK_UPDATE_PUBLIC_KEY_BASE64=$UPDATE_PUBLIC_KEY_BASE64" >> "$GITHUB_ENV"
       - run: cargo build --release --locked
+      - name: Install pinned .NET runtime for Velopack
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
       - name: Install pinned Velopack CLI
         run: dotnet tool install --tool-path "$RUNNER_TEMP/velopack" vpk --version 1.2.0
       - name: Build unsigned installable DMG
