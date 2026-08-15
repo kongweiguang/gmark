@@ -247,8 +247,12 @@ impl Editor {
                                         .id("workspace-delete-target")
                                         .debug_selector(|| "workspace-delete-target".to_owned())
                                         .w_full()
+                                        // 单行路径使用确定的 BorderBox 高度，避免 Windows 2× DPI
+                                        // 字体测量产生半逻辑像素并溢出滚动正文边界。
+                                        .h(px(40.0))
                                         .px(px(10.0))
-                                        .py(px(8.0))
+                                        .flex()
+                                        .items_center()
                                         .rounded(px(6.0))
                                         .border(px(d.dialog_border_width))
                                         .border_color(c.dialog_border)

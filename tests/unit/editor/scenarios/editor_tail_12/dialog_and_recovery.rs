@@ -16,8 +16,11 @@ fn assert_standard_dialog_actions(
     let first = visual.debug_bounds(button_selectors[0]).unwrap();
     let top_gap = f32::from(first.top()) - f32::from(actions.top());
     let bottom_gap = f32::from(panel.bottom()) - f32::from(first.bottom());
+    // Windows runner 的字体度量与设备像素舍入会产生数个逻辑像素差异；4 px 仍会
+    // 拦截旧实现额外 20 px 的底部空白，避免把平台度量差异误判成布局回归。
+    let padding_rounding_tolerance = 4.0;
     assert!(
-        (top_gap - bottom_gap).abs() <= 2.0,
+        (top_gap - bottom_gap).abs() <= padding_rounding_tolerance,
         "{panel_selector} action padding should be symmetric: top={top_gap}, bottom={bottom_gap}"
     );
 
