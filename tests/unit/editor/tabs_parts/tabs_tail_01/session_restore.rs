@@ -1,5 +1,7 @@
 // @author kongweiguang
 
+/// Keeps the restore callback free of filesystem I/O; the background scanner
+/// is responsible for replacing an 8.3 alias with its canonical path later.
 #[gpui::test]
 async fn restoring_workspace_session_installs_order_pin_active_and_root(
     cx: &mut gpui::TestAppContext,
@@ -7,7 +9,6 @@ async fn restoring_workspace_session_installs_order_pin_active_and_root(
     init_test_app(cx);
     let root = std::env::temp_dir().join(format!("gmark-tab-restore-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
-    let canonical_root = dunce::canonicalize(&root).unwrap();
     let first_path = root.join("first.md");
     let second_path = root.join("second.md");
     let legacy_path = root.join("legacy.md");
@@ -120,7 +121,7 @@ async fn restoring_workspace_session_installs_order_pin_active_and_root(
         assert!(legacy.show_encoding_conversion_dialog);
         assert_eq!(
             editor.explicit_workspace_root().as_deref(),
-            Some(canonical_root.as_path())
+            Some(root.as_path())
         );
 
         let persisted = editor
@@ -131,7 +132,7 @@ async fn restoring_workspace_session_installs_order_pin_active_and_root(
         assert_eq!(persisted_pane.active_tab, Some(persisted_pane.tabs[1].id));
         assert_eq!(
             persisted.workspace_root.as_deref(),
-            Some(canonical_root.as_path())
+            Some(root.as_path())
         );
         assert_eq!(persisted.workspace_docked_open, Some(false));
         assert_eq!(persisted.split_pane_ratio, Some(0.62));

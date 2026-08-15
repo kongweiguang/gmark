@@ -28,6 +28,8 @@
         });
     }
 
+    /// Uses the scanner's canonical path spelling so keyboard selection tests
+    /// exercise the same identity that production tree nodes expose.
     #[gpui::test]
     async fn workspace_keyboard_keeps_long_tree_selection_in_scroll_viewport(
         cx: &mut gpui::TestAppContext,
@@ -41,15 +43,16 @@
         }
         let tree = scan_workspace_dir(&root).unwrap();
         let root_id = tree.id.clone();
-        let last_path = root.join("note-47.md");
+        let canonical_root = dunce::canonicalize(&root).unwrap();
+        let last_path = canonical_root.join("note-47.md");
         let (editor, visual) = cx.add_window_view(|_window, cx| {
             super::Editor::from_markdown(cx, "document".to_owned(), None)
         });
         editor.update(visual, |editor, _cx| {
             editor.workspace.is_open = true;
             editor.workspace.active_tab = WorkspaceTab::Files;
-            editor.workspace.root = Some(root.clone());
-            editor.workspace.explicit_root = Some(root.clone());
+            editor.workspace.root = Some(canonical_root.clone());
+            editor.workspace.explicit_root = Some(canonical_root.clone());
             editor.workspace.file_tree = Some(tree.clone());
             editor.workspace.expanded.insert(root_id.clone());
             editor.workspace.keyboard_zone = WorkspaceKeyboardZone::Body;

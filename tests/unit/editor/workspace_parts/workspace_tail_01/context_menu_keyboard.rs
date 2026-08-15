@@ -101,6 +101,8 @@
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Keeps the fixture's root spelling aligned with the canonical tree that
+    /// production scanning publishes, including Windows 8.3 temp paths.
     #[gpui::test]
     async fn workspace_new_file_and_folder_confirm_once_and_keep_tree_selection(
         cx: &mut gpui::TestAppContext,
@@ -111,6 +113,7 @@
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&root).unwrap();
+        let root = dunce::canonicalize(&root).unwrap();
         let existing = root.join("existing.md");
         fs::write(&existing, "# existing\n").unwrap();
         let tree = scan_workspace_dir(&root).unwrap();

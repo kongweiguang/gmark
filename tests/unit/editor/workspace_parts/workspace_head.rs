@@ -110,12 +110,16 @@
         fs::write(root.join("note.md"), "note").expect("write markdown");
         fs::write(root.join("nested").join("deep.md"), "deep").expect("write nested markdown");
         fs::write(root.join("nested").join("data.txt"), "text").expect("write text");
+        let canonical_root = dunce::canonicalize(&root).expect("canonical root");
 
         let cancelled = AtomicBool::new(false);
         let result = scan_workspace(&root, &[], &cancelled).expect("scan workspace");
         assert_eq!(
             result.quick_open_paths,
-            vec![root.join("nested").join("deep.md"), root.join("note.md")]
+            vec![
+                canonical_root.join("nested").join("deep.md"),
+                canonical_root.join("note.md")
+            ]
         );
 
         cancelled.store(true, std::sync::atomic::Ordering::Release);
@@ -226,6 +230,7 @@
         fs::create_dir_all(&root).expect("create recovered root");
         let recovered = root.join("recovered.md");
         fs::write(&recovered, "recovered").expect("write recovered file");
+        let canonical_recovered = dunce::canonicalize(&recovered).expect("canonical recovered");
         editor.update(visual, |editor, cx| {
             editor.set_explicit_workspace_root(root.clone(), cx);
             match &editor.workspace.file_scan_state {
@@ -245,7 +250,10 @@
             ));
             assert!(editor.workspace.file_scan_task.is_none());
             assert!(editor.workspace.file_tree.is_some());
-            assert_eq!(editor.workspace.quick_open_paths, vec![recovered.clone()]);
+            assert_eq!(
+                editor.workspace.quick_open_paths,
+                vec![canonical_recovered.clone()]
+            );
         });
 
         let _ = fs::remove_dir_all(root);

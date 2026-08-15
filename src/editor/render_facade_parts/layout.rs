@@ -231,7 +231,7 @@ pub(in crate::editor) fn dialog_content(id: &'static str, theme: &Theme) -> Stat
         .flex_1()
         // 自动高度弹窗里 flex 子项不能收缩到 0，否则正文会被操作区分隔线盖住。
         // 复杂弹窗仍可在 90% 窗口高度内滚动，简单确认弹窗则保留稳定阅读高度。
-        .min_h(px(72.0))
+        .min_h(px(92.0))
         .overflow_y_scroll()
         .scrollbar_width(px(0.0))
         .flex()
@@ -295,7 +295,10 @@ pub(in crate::editor) fn dialog_body(label: String, theme: &Theme) -> Div {
         .child(label)
 }
 
-/// 操作区通过固有高度同时保留按钮上下留白，避免 GPUI 自动高度吞掉底部空间。
+/// 操作区只把分隔线到按钮的留白纳入自身高度，并为可滚动正文保留底部间距。
+///
+/// 这样做是因为 GPUI 的 `min_h` 已经包含边框和 padding；若把上下两份留白都写进
+/// `min_h`，再叠加 `pt` 会让 2× DPI 下按钮下方多出一整份 padding。
 pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
     let c = &theme.colors;
     let d = &theme.dimensions;
@@ -303,16 +306,17 @@ pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
     div()
         .w_full()
         .flex_none()
-        // 显式给出完整首行高度，避免 GPUI 自动高度挤压横向定高按钮。
+        // min-height 包含上方 padding，面板自身的下方 padding 会补齐另一侧留白。
         .min_h(px(d.dialog_button_height
-            + top_padding * 2.0
+            + top_padding
             + d.dialog_border_width))
         .flex()
         .flex_wrap()
         .justify_end()
         .gap(px(d.dialog_button_gap))
-        // 分隔线到按钮与按钮到面板底边共用 dialog padding，形成对称留白。
+        // 滚动正文会占用面板内容盒的剩余高度，底部 margin 必须显式补回对称留白。
         .pt(px(top_padding))
+        .mb(px(top_padding + d.dialog_border_width))
         .border_t(px(d.dialog_border_width))
         .border_color(c.workbench.border_subtle)
 }
@@ -320,9 +324,12 @@ pub(in crate::editor) fn dialog_actions(theme: &Theme) -> Div {
 /// 短固定正文不会像滚动正文一样压缩面板底部 padding，因此只让操作区预留顶部留白。
 pub(in crate::editor) fn compact_dialog_actions(theme: &Theme) -> Div {
     let d = &theme.dimensions;
-    dialog_actions(theme).min_h(px(d.dialog_button_height
-        + d.dialog_padding
-        + d.dialog_border_width))
+    dialog_actions(theme)
+        // 固定正文会保留面板自身的底部 padding，必须清除标准滚动布局的补偿 margin。
+        .mb(px(0.0))
+        .min_h(px(d.dialog_button_height
+            + d.dialog_padding
+            + d.dialog_border_width))
 }
 
 /// 统一按钮的命中高度和层级颜色，让不同模态业务共享可预测的操作几何。

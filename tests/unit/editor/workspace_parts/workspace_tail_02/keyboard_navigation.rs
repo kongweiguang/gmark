@@ -178,6 +178,8 @@
         });
     }
 
+    /// Keeps keyboard selection aligned with the scanner's canonical Windows
+    /// paths instead of comparing an 8.3 alias with a long-path tree node.
     #[gpui::test]
     async fn workspace_files_keyboard_navigation_expands_selects_and_returns_focus(
         cx: &mut gpui::TestAppContext,
@@ -192,6 +194,9 @@
         fs::write(&current, "current").unwrap();
         fs::write(&child, "child").unwrap();
         let tree = scan_workspace_dir(&root).unwrap();
+        let canonical_root = dunce::canonicalize(&root).unwrap();
+        let canonical_nested = canonical_root.join("nested");
+        let canonical_child = canonical_nested.join("child.md");
         let (editor, visual) = cx.add_window_view(move |_window, cx| {
             super::Editor::from_markdown(cx, "current".to_owned(), None)
         });
@@ -200,8 +205,8 @@
             editor.update(cx, |editor, cx| {
                 editor.workspace.is_open = true;
                 editor.workspace.active_tab = WorkspaceTab::Files;
-                editor.workspace.root = Some(root.clone());
-                editor.workspace.explicit_root = Some(root.clone());
+                editor.workspace.root = Some(canonical_root.clone());
+                editor.workspace.explicit_root = Some(canonical_root.clone());
                 editor.workspace.file_tree = Some(tree.clone());
                 editor.workspace.expanded.clear();
                 editor.workspace.selected = None;
@@ -230,7 +235,7 @@
         editor.update(visual, |editor, _cx| {
             assert_eq!(
                 editor.workspace.selected,
-                Some(WorkspaceSelection::File(child.clone()))
+                Some(WorkspaceSelection::File(canonical_child.clone()))
             );
             assert_eq!(editor.workspace.keyboard_zone, WorkspaceKeyboardZone::Body);
         });
@@ -241,7 +246,7 @@
         editor.update(visual, |editor, _cx| {
             assert_eq!(
                 editor.workspace.selected,
-                Some(WorkspaceSelection::File(nested.clone()))
+                Some(WorkspaceSelection::File(canonical_nested.clone()))
             );
         });
         editor.update_in(visual, |editor, window, cx| {
